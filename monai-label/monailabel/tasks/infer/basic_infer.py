@@ -38,8 +38,8 @@ from monailabel.utils.others.generic import device_list, device_map, name_to_dev
 
 from sam2.build_sam import build_sam2_video_predictor
 
-from mmdet.apis import DetInferencer
-from mmdet.evaluation import get_classes
+#from mmdet.apis import DetInferencer
+#from mmdet.evaluation import get_classes
 from mmcv.visualization import imshow_bboxes
 
 import requests
@@ -68,12 +68,38 @@ config.save_pretrained("code/bert-base-uncased")
 model.save_pretrained("code/bert-base-uncased")
 tokenizer.save_pretrained("code/bert-base-uncased")
 
+from huggingface_hub import snapshot_download
+
+REPO_ID = "nnInteractive/nnInteractive"
+MODEL_NAME = "nnInteractive_v1.0"  # Updated models may be available in the future
+DOWNLOAD_DIR = "/code/checkpoints"  # Specify the download directory
+
+download_path = snapshot_download(
+    repo_id=REPO_ID,
+    allow_patterns=[f"{MODEL_NAME}/*"],
+    local_dir=DOWNLOAD_DIR
+)
+from nnInteractive.inference.inference_session import nnInteractiveInferenceSession
+
+session = nnInteractiveInferenceSession(
+    device=torch.device("cuda:0"),  # Set inference device
+    use_torch_compile=False,  # Experimental: Not tested yet
+    verbose=False,
+    torch_n_threads=os.cpu_count(),  # Use available CPU cores
+    do_autozoom=True,  # Enables AutoZoom for better patching
+    use_pinned_memory=True,  # Optimizes GPU memory transfers
+)
+
+model_path = os.path.join(DOWNLOAD_DIR, MODEL_NAME)
+session.initialize_from_trained_model_folder(model_path)
+
 # Choose to use a config
 config_path = '/code/dino_configs/dino.py'
 # Setup a checkpoint file to load
-checkpoint = '/code/checkpoints/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth'
+checkpoint = '/code/checkpoints/best_coco_bbox_mAP_epoch_11_dilated_b_l_k_curr_teach_7+5.pth'
+#checkpoint = '/code/checkpoints/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth'
 # Initialize the DetInferencer
-inferencer = DetInferencer(model=config_path, weights=checkpoint, palette='random')
+#inferencer = DetInferencer(model=config_path, weights=checkpoint, palette='random')
 
 predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
 
@@ -343,6 +369,117 @@ class BasicInferTask(InferTask):
 
         start = time.time()
         result_json = {}
+        nnInter = True
+
+        if nnInter:
+            dicom_dir = data['image'].split('.nii.gz')[0]
+
+            reader = sitk.ImageSeriesReader()
+            dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
+            dcm_img_sample = dcmread(dicom_filenames[0], stop_before_pixels=True)
+            dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
+            
+            instanceNumber = None
+            instanceNumber2 = None
+
+            if 0x00200013 in dcm_img_sample.keys():
+                instanceNumber = dcm_img_sample[0x00200013].value
+            logger.info(f"Prompt First InstanceNumber: {instanceNumber}")
+            if 0x00200013 in dcm_img_sample_2.keys():
+                instanceNumber2 = dcm_img_sample_2[0x00200013].value
+            logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
+
+            # --- Load Input Image (Example with SimpleITK) ---
+            img = sitk.ReadImage(data['image'])
+            img_np = sitk.GetArrayFromImage(img)[None]  # Ensure shape (1, x, y, z)
+            logger.info(f"img shape {img_np.shape}")
+            #img = np.random.rand(1, 3, 128, 160).astype(np.float32)
+            # Validate input dimensions
+            if img_np.ndim != 4:
+                raise ValueError("Input image must be 4D with shape (1, x, y, z)")
+            
+            session.set_image(img_np)
+
+            # --- Define Output Buffer ---
+            target_tensor = torch.zeros(img_np.shape[1:], dtype=torch.uint8)  # Must be 3D (x, y, z)
+            session.set_target_buffer(target_tensor)
+
+            # --- Interacting with the Model ---
+            # Interactions can be freely chained and mixed in any order. Each interaction refines the segmentation.
+            # The model updates the segmentation mask in the target buffer after every interaction.
+
+            # Example: Add a point interaction
+            # POINT_COORDINATES should be a tuple (x, y, z) specifying the point location.
+            logger.info(f"pos_points: {data['pos_points']}")
+            logger.info(f"pos_point type: {type(data['pos_points'])}")
+
+            for point in data['pos_points']:
+                if instanceNumber > instanceNumber2:
+                    point[2]=img_np.shape[1]-1-point[2]            
+                session.add_point_interaction(tuple(point[::-1]), include_interaction=True)
+
+            for point in data['neg_points']:
+                if instanceNumber > instanceNumber2:
+                    point[2]=img_np.shape[1]-1-point[2]            
+                session.add_point_interaction(tuple(point[::-1]), include_interaction=False)
+
+
+            # Example: Add a bounding box interaction
+            # BBOX_COORDINATES must be specified as [[x1, x2], [y1, y2], [z1, z2]] (half-open intervals).
+            # Note: nnInteractive pre-trained models currently only support **2D bounding boxes**.
+            # This means that **one dimension must be [d, d+1]** to indicate a single slice.
+
+            # Example of a 2D bounding box in the axial plane (XY slice at depth Z)
+            # BBOX_COORDINATES = [[30, 80], [40, 100], [10, 11]]  # X: 30-80, Y: 40-100, Z: slice 10
+
+            #session.add_bbox_interaction(BBOX_COORDINATES, include_interaction=True)
+
+            # Example: Add a scribble interaction
+            # - A 3D image of the same shape as img where one slice (any axis-aligned orientation) contains a hand-drawn scribble.
+            # - Background must be 0, and scribble must be 1.
+            # - Use session.preferred_scribble_thickness for optimal results.
+            #session.add_scribble_interaction(SCRIBBLE_IMAGE, include_interaction=True)
+
+            # Example: Add a lasso interaction
+            # - Similarly to scribble a 3D image with a single slice containing a **closed contour** representing the selection.
+            #session.add_lasso_interaction(LASSO_IMAGE, include_interaction=True)
+
+            # You can combine any number of interactions as needed. 
+            # The model refines the segmentation result incrementally with each new interaction.
+
+            # --- Retrieve Results ---
+            # The target buffer holds the segmentation result.
+            results = session.target_buffer.clone()
+            # OR (equivalent)
+            #results = target_tensor.clone()
+
+            # Cloning is required because the buffer will be **reused** for the next object.
+            # Alternatively, set a new target buffer for each object:
+            session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+
+            # --- Start a New Object Segmentation ---
+            session.reset_interactions()  # Clears the target buffer and resets interactions
+
+            # Now you can start segmenting the next object in the image.
+
+            # --- Set a New Image ---
+            # Setting a new image also requires setting a new matching target buffer
+            #session.set_image(NEW_IMAGE)
+            #session.set_target_buffer(torch.zeros(NEW_IMAGE.shape[1:], dtype=torch.uint8))
+
+            # Enjoy!
+            pred = results.numpy()
+
+            pred_itk = sitk.GetImageFromArray(pred)
+            pred_itk.CopyInformation(img)
+            
+            sitk.WriteImage(pred_itk, '/code/sam.nii.gz')
+
+            
+            logger.info(f"Prompt info: {result_json}")
+            # result_json contains prompt information
+
+            return '/code/sam.nii.gz', result_json
 
         
         if "pos_points" in data:
@@ -383,10 +520,12 @@ class BasicInferTask(InferTask):
 
                 # Check for cats and remote controls
                 # VERY important: text queries need to be lowercased + end with a dot
-                if "texts" in data:
+                if len(data['texts'])==1 and data['texts'][0]!='':
                     #model_id = "IDEA-Research/grounding-dino-tiny"
                     #processor = AutoProcessor.from_pretrained(model_id)
                     #model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+                    #logger.info(f"text length: {len(data['texts'])}")
+
                     text = data["texts"]#]"a organ. a bone. a heart"
                     logger.info(f"text prompt: {text}")
 
