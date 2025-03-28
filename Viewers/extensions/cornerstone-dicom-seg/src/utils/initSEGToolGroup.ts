@@ -1,7 +1,9 @@
-function createSEGToolGroupAndAddTools(ToolGroupService, customizationService, toolGroupId) {
-  const { tools } = customizationService.get('cornerstone.overlayViewportTools') ?? {};
+import initCornerstoneTools from '../../../cornerstone/src/initCornerstoneTools';
 
-  return ToolGroupService.createToolGroupAndAddTools(toolGroupId, tools);
+function createSEGToolGroupAndAddTools(ToolGroupService, customizationService, toolGroupId) {
+  //const { tools } = customizationService.get('cornerstone.overlayViewportTools') ?? {};
+
+  return initCornerstoneTools()//ToolGroupService.createToolGroupAndAddTools(toolGroupId, tools);
 }
 
 export default createSEGToolGroupAndAddTools;
