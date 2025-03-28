@@ -597,6 +597,11 @@ const commandsModule = ({
         });
         return response;
       }
+      const segs = servicesManager.services.segmentationService.getSegmentations()
+      //remove old segmentationsFromViewport
+      for (let seg of segs) {
+        commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
+      }
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
@@ -674,7 +679,7 @@ const commandsModule = ({
             });
             let currentDate = utils.formatDate(Date.now(), 'YYYYMMDD')
             displaySetService.activeDisplaySets = displaySetService.activeDisplaySets.filter(e => {
-              return (e.SeriesDescription != 'SAM2_' + currentDisplaySets.SeriesDescription) || (e.SeriesDate != currentDate);
+              return (!e.SeriesDescription.includes('nnInteractive_' + currentDisplaySets.SeriesDescription)) || (e.SeriesDate != currentDate);
             })
 
             let studyInstanceUID = currentDisplaySets.StudyInstanceUID
@@ -686,7 +691,7 @@ const commandsModule = ({
 
               const displaySets = displaySetService.activeDisplaySets;
               const currentDisplaySet = displaySets.filter(e => {
-                return (e.SeriesDescription == 'SAM2_' + currentDisplaySets.SeriesDescription) && (e.SeriesDate == currentDate);
+                return (e.SeriesDescription.includes('nnInteractive_' + currentDisplaySets.SeriesDescription)) && (e.SeriesDate == currentDate);
               })[0];
               let updatedViewports = hangingProtocolService.getViewportsRequireUpdate(activeViewportId, currentDisplaySet.displaySetInstanceUID, true)
               viewportGridService.setDisplaySetsForViewports(updatedViewports)
