@@ -152,7 +152,7 @@ def nifti_to_dicom_seg(series_dir, label, prompt_json, file_ext="*", use_itk=Tru
     #model_name = info.get("model_name", "Totalsegmentor")
     if "sam" in label:
         label_names = ["sam_label"]
-        image_series_desc = "SAM2_"+ image_series_desc
+        image_series_desc = "nnInteractive_"+ image_series_desc#"SAM2_"+ image_series_desc
     else:
         label_names = np.load('/code/labelname.npy').tolist()
         image_series_desc = "Total_"+ image_series_desc

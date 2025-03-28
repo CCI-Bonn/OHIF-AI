@@ -15,6 +15,7 @@ import os
 import pathlib
 import shutil
 import tempfile
+import time
 from enum import Enum
 from datetime import date
 from typing import Optional
@@ -200,9 +201,9 @@ def run_inference(
         #elif p.get("label_info") is None:
         #    raise HTTPException(status_code=404, detail="Parameters for DICOM SEG inference cannot be empty!")
         # Transform image uri to id (similar to _to_id in local datastore)
-        image_uri = instance.datastore().get_image_uri(image)
-        suffixes = [".nii", ".nii.gz", ".nrrd"]
-        image_path = [image_uri.replace(suffix, "") for suffix in suffixes if image_uri.endswith(suffix)][0]
+        image_path = instance.datastore().get_image_uri(image)
+        #suffixes = [".nii", ".nii.gz", ".nrrd"]
+        #image_path = [image_uri.replace(suffix, "") for suffix in suffixes if image_uri.endswith(suffix)][0]
         res_img = result.get("file") if result.get("file") else result.get("label")
         
         image_files = glob('{}/*'.format(image_path))
@@ -210,7 +211,7 @@ def run_inference(
         image_series_desc=""
         if 0x0008103e in dcm_img_sample.keys():
             image_series_desc = dcm_img_sample[0x0008103e].value
-        image_series_desc = "SAM2_"+ image_series_desc
+        image_series_desc = "nnInteractive_"+ image_series_desc
         existing_instances = instance.datastore()._client.search_for_series(search_filters={"SeriesDate": date.today().strftime("%Y%m%d"), "SeriesDescription": image_series_desc})
         old_response = 0
         if len(existing_instances)>0:
