@@ -1,56 +1,43 @@
-import { vec2 } from 'gl-matrix';
-import { getEnabledElement, VolumeViewport, utilities as csUtils, } from '@cornerstonejs/core';
+import { vec2, vec3 } from 'gl-matrix';
+import { getEnabledElement, VolumeViewport, utilities as csUtils, getEnabledElementByViewportId, } from '@cornerstonejs/core';
 import { AnnotationTool } from '../base';
 import { addAnnotation, getAnnotations, removeAnnotation, } from '../../stateManagement/annotation/annotationState';
 import { triggerAnnotationCompleted, triggerAnnotationModified, } from '../../stateManagement/annotation/helpers/state';
 import { getCalibratedProbeUnitsAndValue } from '../../utilities/getCalibratedUnits';
 import { drawHandles as drawHandlesSvg, drawTextBox as drawTextBoxSvg, } from '../../drawingSvg';
-import { state } from '../../store';
-import { Events } from '../../enums';
+import { state } from '../../store/state';
+import { ChangeTypes, Events } from '../../enums';
 import { getViewportIdsWithToolToRender } from '../../utilities/viewportFilters';
-import { roundNumber } from '../../utilities';
 import { resetElementCursor, hideElementCursor, } from '../../cursors/elementCursor';
 import triggerAnnotationRenderForViewportIds from '../../utilities/triggerAnnotationRenderForViewportIds';
-import { getModalityUnit, } from '../../utilities/getModalityUnit';
+import { getPixelValueUnits } from '../../utilities/getPixelValueUnits';
 import { isViewportPreScaled } from '../../utilities/viewport/isViewportPreScaled';
 const { transformWorldToIndex } = csUtils;
 class ProbeTool extends AnnotationTool {
-    constructor(toolProps = {}, defaultToolProps = {
+    static { this.toolName = 'Probe'; }
+    static { this.probeDefaults = {
         supportedInteractionTypes: ['Mouse', 'Touch'],
         configuration: {
             shadow: true,
             preventHandleOutsideImage: false,
             getTextLines: defaultGetTextLines,
+            handleRadius: '6',
         },
-    }) {
-        super(toolProps, defaultToolProps);
+    }; }
+    constructor(toolProps = {}, defaultToolProps) {
+        super(toolProps, AnnotationTool.mergeDefaultProps(ProbeTool.probeDefaults, defaultToolProps));
         this.addNewAnnotation = (evt) => {
             const eventDetail = evt.detail;
             const { currentPoints, element } = eventDetail;
             const worldPos = currentPoints.world;
             const enabledElement = getEnabledElement(element);
-            const { viewport, renderingEngine } = enabledElement;
+            const { viewport } = enabledElement;
             this.isDrawing = true;
-            const camera = viewport.getCamera();
-            const { viewPlaneNormal, viewUp } = camera;
-            const referencedImageId = this.getReferencedImageId(viewport, worldPos, viewPlaneNormal, viewUp);
-            const FrameOfReferenceUID = viewport.getFrameOfReferenceUID();
-            const annotation = {
-                invalidated: true,
-                highlighted: true,
-                metadata: {
-                    toolName: this.getToolName(),
-                    viewPlaneNormal: [...viewPlaneNormal],
-                    viewUp: [...viewUp],
-                    FrameOfReferenceUID,
-                    referencedImageId,
-                },
+            const annotation = (this.constructor).createAnnotationForViewport(viewport, {
                 data: {
-                    label: '',
                     handles: { points: [[...worldPos]] },
-                    cachedStats: {},
                 },
-            };
+            });
             addAnnotation(annotation, element);
             const viewportIdsToRender = getViewportIdsWithToolToRender(element, this.getToolName());
             this.editData = {
@@ -61,7 +48,27 @@ class ProbeTool extends AnnotationTool {
             this._activateModify(element);
             hideElementCursor(element);
             evt.preventDefault();
-            triggerAnnotationRenderForViewportIds(renderingEngine, viewportIdsToRender);
+            triggerAnnotationRenderForViewportIds(viewportIdsToRender);
+            return annotation;
+        };
+        this._addNewAnnotationFromIndex = (element, idxPos) => {
+            const enabledElement = getEnabledElement(element);
+            const { viewport } = enabledElement;
+            const worldPos = viewport.getImageData().imageData.indexToWorld(idxPos)
+            this.isDrawing = true;
+            const annotation = (this.constructor).createAnnotationForViewport(viewport, {
+                data: {
+                    handles: { points: [[...worldPos]] },
+                },
+            });
+            addAnnotation(annotation, element);
+            const viewportIdsToRender = getViewportIdsWithToolToRender(element, this.getToolName());
+            this.editData = {
+                annotation,
+                newAnnotation: true,
+                viewportIdsToRender,
+            };
+            triggerAnnotationRenderForViewportIds(viewportIdsToRender);
             return annotation;
         };
         this._endCallback = (evt) => {
@@ -75,13 +82,17 @@ class ProbeTool extends AnnotationTool {
             };
             this._deactivateModify(element);
             resetElementCursor(element);
+            if (newAnnotation) {
+                this.createMemo(element, annotation, { newAnnotation });
+            }
             this.editData = null;
             this.isDrawing = false;
+            this.doneEditMemo();
             if (this.isHandleOutsideImage &&
                 this.configuration.preventHandleOutsideImage) {
                 removeAnnotation(annotation.annotationUID);
             }
-            triggerAnnotationRenderForViewportIds(renderingEngine, viewportIdsToRender);
+            triggerAnnotationRenderForViewportIds(viewportIdsToRender);
             if (newAnnotation) {
                 triggerAnnotationCompleted(annotation);
             }
@@ -91,13 +102,12 @@ class ProbeTool extends AnnotationTool {
             const eventDetail = evt.detail;
             const { currentPoints, element } = eventDetail;
             const worldPos = currentPoints.world;
-            const { annotation, viewportIdsToRender } = this.editData;
+            const { annotation, viewportIdsToRender, newAnnotation } = this.editData;
             const { data } = annotation;
+            this.createMemo(element, annotation, { newAnnotation });
             data.handles.points[0] = [...worldPos];
             annotation.invalidated = true;
-            const enabledElement = getEnabledElement(element);
-            const { renderingEngine } = enabledElement;
-            triggerAnnotationRenderForViewportIds(renderingEngine, viewportIdsToRender);
+            triggerAnnotationRenderForViewportIds(viewportIdsToRender);
         };
         this.cancel = (element) => {
             if (this.isDrawing) {
@@ -108,8 +118,7 @@ class ProbeTool extends AnnotationTool {
                 const { data } = annotation;
                 annotation.highlighted = false;
                 data.handles.activeHandleIndex = null;
-                const { renderingEngine } = getEnabledElement(element);
-                triggerAnnotationRenderForViewportIds(renderingEngine, viewportIdsToRender);
+                triggerAnnotationRenderForViewportIds(viewportIdsToRender);
                 if (newAnnotation) {
                     triggerAnnotationCompleted(annotation);
                 }
@@ -161,18 +170,21 @@ class ProbeTool extends AnnotationTool {
                 const point = data.handles.points[0];
                 const canvasCoordinates = viewport.worldToCanvas(point);
                 styleSpecifier.annotationUID = annotationUID;
-                const { color } = this.getAnnotationStyle({ annotation, styleSpecifier });
+                const { color, lineWidth } = this.getAnnotationStyle({
+                    annotation,
+                    styleSpecifier,
+                });
                 if (!data.cachedStats) {
                     data.cachedStats = {};
                 }
                 if (!data.cachedStats[targetId] ||
-                    data.cachedStats[targetId].value == null) {
+                    data.cachedStats[targetId].value === null) {
                     data.cachedStats[targetId] = {
                         Modality: null,
                         index: null,
                         value: null,
                     };
-                    this._calculateCachedStats(annotation, renderingEngine, enabledElement);
+                    this._calculateCachedStats(annotation, renderingEngine, enabledElement, ChangeTypes.StatsUpdated);
                 }
                 else if (annotation.invalidated) {
                     this._calculateCachedStats(annotation, renderingEngine, enabledElement);
@@ -199,7 +211,7 @@ class ProbeTool extends AnnotationTool {
                     return renderStatus;
                 }
                 const handleGroupUID = '0';
-                drawHandlesSvg(svgDrawingHelper, annotationUID, handleGroupUID, [canvasCoordinates], { color });
+                drawHandlesSvg(svgDrawingHelper, annotationUID, handleGroupUID, [canvasCoordinates], { color, lineWidth, handleRadius: this.configuration.handleRadius });
                 renderStatus = true;
                 const options = this.getLinkedTextBoxStyle(styleSpecifier, annotation);
                 if (!options.visibility) {
@@ -218,10 +230,48 @@ class ProbeTool extends AnnotationTool {
             return renderStatus;
         };
     }
-    isPointNearTool() {
-        return false;
+    isPointNearTool(element, annotation, canvasCoords, proximity) {
+        const enabledElement = getEnabledElement(element);
+        const { viewport } = enabledElement;
+        const { data } = annotation;
+        const point = data.handles.points[0];
+        const annotationCanvasCoordinate = viewport.worldToCanvas(point);
+        return vec2.distance(canvasCoords, annotationCanvasCoordinate) < proximity;
     }
     toolSelectedCallback() { }
+    static { this.hydrate = (viewportId, points, options) => {
+        const enabledElement = getEnabledElementByViewportId(viewportId);
+        if (!enabledElement) {
+            return;
+        }
+        const { viewport } = enabledElement;
+        const FrameOfReferenceUID = viewport.getFrameOfReferenceUID();
+        const { viewPlaneNormal, viewUp } = viewport.getCamera();
+        const instance = new this();
+        const referencedImageId = instance.getReferencedImageId(viewport, points[0], viewPlaneNormal, viewUp);
+        const annotation = {
+            annotationUID: options?.annotationUID || csUtils.uuidv4(),
+            data: {
+                handles: {
+                    points,
+                },
+            },
+            highlighted: false,
+            autoGenerated: false,
+            invalidated: false,
+            isLocked: false,
+            isVisible: true,
+            metadata: {
+                toolName: instance.getToolName(),
+                viewPlaneNormal,
+                FrameOfReferenceUID,
+                referencedImageId,
+                ...options,
+            },
+        };
+        addAnnotation(annotation, viewport.element);
+        triggerAnnotationRenderForViewportIds([viewport.id]);
+    }; }
     getHandleNearImagePoint(element, annotation, canvasCoords, proximity) {
         const enabledElement = getEnabledElement(element);
         const { viewport } = enabledElement;
@@ -244,12 +294,10 @@ class ProbeTool extends AnnotationTool {
         };
         this._activateModify(element);
         hideElementCursor(element);
-        const enabledElement = getEnabledElement(element);
-        const { renderingEngine } = enabledElement;
-        triggerAnnotationRenderForViewportIds(renderingEngine, viewportIdsToRender);
+        triggerAnnotationRenderForViewportIds(viewportIdsToRender);
         evt.preventDefault();
     }
-    _calculateCachedStats(annotation, renderingEngine, enabledElement) {
+    _calculateCachedStats(annotation, renderingEngine, enabledElement, changeType = ChangeTypes.StatsUpdated) {
         const data = annotation.data;
         const { renderingEngineId, viewport } = enabledElement;
         const { element } = viewport;
@@ -258,61 +306,44 @@ class ProbeTool extends AnnotationTool {
         const targetIds = Object.keys(cachedStats);
         for (let i = 0; i < targetIds.length; i++) {
             const targetId = targetIds[i];
-            const modalityUnitOptions = {
+            const pixelUnitsOptions = {
                 isPreScaled: isViewportPreScaled(viewport, targetId),
                 isSuvScaled: this.isSuvScaled(viewport, targetId, annotation.metadata.referencedImageId),
             };
-            const image = this.getTargetIdImage(targetId, renderingEngine);
+            const image = this.getTargetImageData(targetId);
             if (!image) {
                 continue;
             }
-            const { dimensions, imageData, metadata } = image;
-            const scalarData = 'getScalarData' in image ? image.getScalarData() : image.scalarData;
+            const { dimensions, imageData, metadata, voxelManager } = image;
             const modality = metadata.Modality;
-            const index = transformWorldToIndex(imageData, worldPos);
-            index[0] = Math.round(index[0]);
-            index[1] = Math.round(index[1]);
-            index[2] = Math.round(index[2]);
-            //index[2] = services.measurementService.getMeasurements().filter((u) => {return u.uid === annotation.annotationUID})[0].displayText[0].split("I: ")[1].slice(0,-1)
-
-            const samplesPerPixel = scalarData.length / dimensions[2] / dimensions[1] / dimensions[0];
-            if (csUtils.indexWithinDimensions(index, dimensions)) {
+            let ijk = transformWorldToIndex(imageData, worldPos);
+            ijk = vec3.round(ijk, ijk);
+            if (csUtils.indexWithinDimensions(ijk, dimensions)) {
                 this.isHandleOutsideImage = false;
-                const yMultiple = dimensions[0] * samplesPerPixel;
-                const zMultiple = dimensions[0] * dimensions[1] * samplesPerPixel;
-                const baseIndex = index[2] * zMultiple +
-                    index[1] * yMultiple +
-                    index[0] * samplesPerPixel;
-                let value = samplesPerPixel > 2
-                    ? [
-                        scalarData[baseIndex],
-                        scalarData[baseIndex + 1],
-                        scalarData[baseIndex + 2],
-                    ]
-                    : scalarData[baseIndex];
+                let value = voxelManager.getAtIJKPoint(ijk);
                 if (targetId.startsWith('imageId:')) {
                     const imageId = targetId.split('imageId:')[1];
                     const imageURI = csUtils.imageIdToURI(imageId);
-                    const viewports = csUtils.getViewportsWithImageURI(imageURI, renderingEngineId);
+                    const viewports = csUtils.getViewportsWithImageURI(imageURI);
                     const viewport = viewports[0];
-                    index[2] = viewport.getCurrentImageIdIndex();
+                    ijk[2] = viewport.getCurrentImageIdIndex();
                 }
                 let modalityUnit;
                 if (modality === 'US') {
                     const calibratedResults = getCalibratedProbeUnitsAndValue(image, [
-                        index,
+                        ijk,
                     ]);
                     const hasEnhancedRegionValues = calibratedResults.values.every((value) => value !== null);
-                    value = hasEnhancedRegionValues ? calibratedResults.values : value;
+                    value = (hasEnhancedRegionValues ? calibratedResults.values : value);
                     modalityUnit = hasEnhancedRegionValues
                         ? calibratedResults.units
                         : 'raw';
                 }
                 else {
-                    modalityUnit = getModalityUnit(modality, annotation.metadata.referencedImageId, modalityUnitOptions);
+                    modalityUnit = getPixelValueUnits(modality, annotation.metadata.referencedImageId, pixelUnitsOptions);
                 }
                 cachedStats[targetId] = {
-                    index,
+                    index: ijk,
                     value,
                     Modality: modality,
                     modalityUnit,
@@ -321,12 +352,12 @@ class ProbeTool extends AnnotationTool {
             else {
                 this.isHandleOutsideImage = true;
                 cachedStats[targetId] = {
-                    index,
+                    index: ijk,
                     Modality: modality,
                 };
             }
             annotation.invalidated = false;
-            triggerAnnotationModified(annotation, element);
+            triggerAnnotationModified(annotation, element, changeType);
         }
         return cachedStats;
     }
@@ -334,21 +365,19 @@ class ProbeTool extends AnnotationTool {
 function defaultGetTextLines(data, targetId) {
     const cachedVolumeStats = data.cachedStats[targetId];
     const { index, value, modalityUnit } = cachedVolumeStats;
-    if (value === undefined) {
+    if (value === undefined || !index) {
         return;
     }
     const textLines = [];
     textLines.push(`(${index[0]}, ${index[1]}, ${index[2]})`);
     if (value instanceof Array && modalityUnit instanceof Array) {
         for (let i = 0; i < value.length; i++) {
-            textLines.push(`${roundNumber(value[i])} ${modalityUnit[i]}`);
+            textLines.push(`${csUtils.roundNumber(value[i])} ${modalityUnit[i]}`);
         }
     }
     else {
-        textLines.push(`${roundNumber(value)} ${modalityUnit}`);
+        textLines.push(`${csUtils.roundNumber(value)} ${modalityUnit}`);
     }
     return textLines;
 }
-ProbeTool.toolName = 'Probe';
 export default ProbeTool;
-//# sourceMappingURL=ProbeTool.js.map

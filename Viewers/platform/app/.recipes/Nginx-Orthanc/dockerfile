@@ -21,6 +21,10 @@ RUN yarn install
 # To change color of negative point
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/AnnotationTool.js
 
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/RectangleROITool.js
+
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
 #RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/ProbeTool.js
 #RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
 
@@ -39,8 +43,12 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/An
 # To change color of negative point
 COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/
 
+COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+
 #COPY ./backup/cjs/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/
-#COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+
+COPY ./backup/esm/SegmentationRenderingEngine.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/
 
 #COPY ./backup/cjs/sortImageIdsAndGetSpacing.js /usr/src/app/node_modules/@cornerstonejs/core/dist/cjs/utilities/
 #COPY ./backup/esm/sortImageIdsAndGetSpacing.js /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/
