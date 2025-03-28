@@ -36,37 +36,37 @@ from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
 
-from sam2.build_sam import build_sam2_video_predictor
+#from sam2.build_sam import build_sam2_video_predictor
 
 #from mmdet.apis import DetInferencer
 #from mmdet.evaluation import get_classes
-from mmcv.visualization import imshow_bboxes
+#from mmcv.visualization import imshow_bboxes
 
 import requests
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection 
+#from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection 
 
-sam2_checkpoint = "/code/checkpoints/sam2_hiera_large.pt"
-model_cfg = "sam2_hiera_l.yaml"
+#sam2_checkpoint = "/code/checkpoints/sam2_hiera_large.pt"
+#model_cfg = "sam2_hiera_l.yaml"
 
-from transformers import BertConfig, BertModel
-from transformers import AutoTokenizer
+#from transformers import BertConfig, BertModel
+#from transformers import AutoTokenizer
 
-import nltk
-nltk.download('punkt', download_dir='/root/nltk_data')
-nltk.download('punkt_tab', download_dir='/root/nltk_data')
-nltk.download('averaged_perceptron_tagger_eng', download_dir='/root/nltk_data')
-nltk.download('averaged_perceptron_tagger', download_dir='/root/nltk_data')
+#import nltk
+#nltk.download('punkt', download_dir='/root/nltk_data')
+#nltk.download('punkt_tab', download_dir='/root/nltk_data')
+#nltk.download('averaged_perceptron_tagger_eng', download_dir='/root/nltk_data')
+#nltk.download('averaged_perceptron_tagger', download_dir='/root/nltk_data')
 
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
-config = BertConfig.from_pretrained("bert-base-uncased")
-model = BertModel.from_pretrained("bert-base-uncased", add_pooling_layer=False, config=config)
-tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-
-config.save_pretrained("code/bert-base-uncased")
-model.save_pretrained("code/bert-base-uncased")
-tokenizer.save_pretrained("code/bert-base-uncased")
+#os.environ["QT_QPA_PLATFORM"] = "offscreen"
+#
+#config = BertConfig.from_pretrained("bert-base-uncased")
+#model = BertModel.from_pretrained("bert-base-uncased", add_pooling_layer=False, config=config)
+#tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+#
+#config.save_pretrained("code/bert-base-uncased")
+#model.save_pretrained("code/bert-base-uncased")
+#tokenizer.save_pretrained("code/bert-base-uncased")
 
 from huggingface_hub import snapshot_download
 
@@ -101,7 +101,7 @@ checkpoint = '/code/checkpoints/best_coco_bbox_mAP_epoch_11_dilated_b_l_k_curr_t
 # Initialize the DetInferencer
 #inferencer = DetInferencer(model=config_path, weights=checkpoint, palette='random')
 
-predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
+#predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
 
 logger = logging.getLogger(__name__)
 
@@ -390,8 +390,18 @@ class BasicInferTask(InferTask):
             logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
 
             # --- Load Input Image (Example with SimpleITK) ---
-            img = sitk.ReadImage(data['image'])
+            reader.SetFileNames(dicom_filenames)
+            #reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
+            img = reader.Execute()
+
+            rescale_slope = float(img.GetMetaData("0028|1053")) if img.HasMetaDataKey("0028|1053") else 1.0
+            rescale_intercept = float(img.GetMetaData("0028|1052")) if img.HasMetaDataKey("0028|1052") else 0.0
+
+            logger.info(f"rescale_slope: {rescale_slope}")
+            logger.info(f"rescale_intercept: {rescale_intercept}")
+            #img = sitk.ReadImage(data['image'])
             img_np = sitk.GetArrayFromImage(img)[None]  # Ensure shape (1, x, y, z)
+            img_np = img_np * rescale_slope + rescale_intercept
             logger.info(f"img shape {img_np.shape}")
             #img = np.random.rand(1, 3, 128, 160).astype(np.float32)
             # Validate input dimensions
@@ -410,9 +420,11 @@ class BasicInferTask(InferTask):
 
             # Example: Add a point interaction
             # POINT_COORDINATES should be a tuple (x, y, z) specifying the point location.
-            logger.info(f"pos_points: {data['pos_points']}")
-            logger.info(f"pos_point type: {type(data['pos_points'])}")
-
+            logger.info(f"neg_points: {data['neg_points']}")
+            logger.info(f"neg_point type: {type(data['neg_points'])}")
+            result_json["pos_points"]=copy.deepcopy(data["pos_points"])
+            result_json["neg_points"]=copy.deepcopy(data["neg_points"])
+            
             for point in data['pos_points']:
                 if instanceNumber > instanceNumber2:
                     point[2]=img_np.shape[1]-1-point[2]            
@@ -423,6 +435,16 @@ class BasicInferTask(InferTask):
                     point[2]=img_np.shape[1]-1-point[2]            
                 session.add_point_interaction(tuple(point[::-1]), include_interaction=False)
 
+            if len(data['boxes'])!=0:
+                result_json["boxes"]=copy.deepcopy(data["boxes"])
+                logger.info(f"prompt boxes: {data['boxes']}")
+                for box in data['boxes']:
+                    if instanceNumber > instanceNumber2:
+                        box[0][2]=img_np.shape[1]-1-box[0][2]
+                        box[1][2]=img_np.shape[1]-1-box[1][2]
+                    box[0]=box[0][::-1]
+                    box[1]=box[1][::-1]            
+                    session.add_bbox_interaction([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], include_interaction=True)
 
             # Example: Add a bounding box interaction
             # BBOX_COORDINATES must be specified as [[x1, x2], [y1, y2], [z1, z2]] (half-open intervals).
