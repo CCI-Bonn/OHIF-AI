@@ -29,10 +29,12 @@ const initMeasurementService = (
     Angle,
     CobbAngle,
     RectangleROI,
+    RectangleROI2,
     PlanarFreehandROI,
     SplineROI,
     LivewireContour,
     Probe,
+    Probe2,
     UltrasoundDirectional,
   } = measurementServiceMappingsFactory(
     measurementService,
@@ -124,6 +126,14 @@ const initMeasurementService = (
 
   measurementService.addMapping(
     csTools3DVer1MeasurementSource,
+    'RectangleROI2',
+    RectangleROI2.matchingCriteria,
+    RectangleROI2.toAnnotation,
+    RectangleROI2.toMeasurement
+  );
+
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
     'PlanarFreehandROI',
     PlanarFreehandROI.matchingCriteria,
     PlanarFreehandROI.toAnnotation,
@@ -162,6 +172,14 @@ const initMeasurementService = (
     Probe.matchingCriteria,
     Probe.toAnnotation,
     Probe.toMeasurement
+  );
+
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
+    'Probe2',
+    Probe2.matchingCriteria,
+    Probe2.toAnnotation,
+    Probe2.toMeasurement
   );
 
   measurementService.addMapping(
