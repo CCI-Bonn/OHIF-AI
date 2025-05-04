@@ -56,7 +56,7 @@ class ProbeTool extends AnnotationTool {
             const { viewport } = enabledElement;
             const worldPos = viewport.getImageData().imageData.indexToWorld(idxPos)
             this.isDrawing = true;
-            const annotation = (this.constructor).createAnnotationForViewport(viewport, {
+            const annotation = (this.constructor).createAnnotation({ metadata: viewport.getViewReference({sliceIndex: idxPos[2]}) }, {
                 data: {
                     handles: { points: [[...worldPos]] },
                 },
@@ -156,7 +156,7 @@ class ProbeTool extends AnnotationTool {
             if (!annotations?.length) {
                 return renderStatus;
             }
-            const targetId = this.getTargetId(viewport);
+            let targetId = this.getTargetId(viewport);
             const renderingEngine = viewport.getRenderingEngine();
             const styleSpecifier = {
                 toolGroupId: this.toolGroupId,
@@ -176,6 +176,9 @@ class ProbeTool extends AnnotationTool {
                 });
                 if (!data.cachedStats) {
                     data.cachedStats = {};
+                }
+                if (targetId != `imageId:${annotation.metadata.referencedImageId}`){
+                    targetId = `imageId:${annotation.metadata.referencedImageId}`
                 }
                 if (!data.cachedStats[targetId] ||
                     data.cachedStats[targetId].value === null) {

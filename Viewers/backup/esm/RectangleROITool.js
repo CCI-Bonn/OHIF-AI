@@ -86,7 +86,7 @@ class RectangleROITool extends AnnotationTool {
             const bl = viewport.getImageData().imageData.indexToWorld([idxPos[0][0],idxPos[1][1],idxPos[0][2]])
             const br = viewport.getImageData().imageData.indexToWorld(idxPos[1])
             
-            const annotation = (this.constructor).createAnnotationForViewport(viewport, {
+            const annotation = (this.constructor).createAnnotation({ metadata: viewport.getViewReference({sliceIndex: idxPos[0][2]}) }, {
                 data: {
                     handles: {
                         points: [
@@ -492,14 +492,22 @@ class RectangleROITool extends AnnotationTool {
                     continue;
                 }
                 const { dimensions, imageData, metadata, voxelManager } = image;
+                
+                let sliceIndex = 0
+                if (targetId.startsWith('imageId:')) {
+                    sliceIndex = viewport.getCurrentImageIdIndex();
+                    dimensions[2]= sliceIndex+1
+                }
+
                 const pos1Index = transformWorldToIndex(imageData, worldPos1);
+
                 pos1Index[0] = Math.floor(pos1Index[0]);
                 pos1Index[1] = Math.floor(pos1Index[1]);
                 pos1Index[2] = Math.floor(pos1Index[2]);
                 const pos2Index = transformWorldToIndex(imageData, worldPos2);
                 pos2Index[0] = Math.floor(pos2Index[0]);
                 pos2Index[1] = Math.floor(pos2Index[1]);
-                pos2Index[2] = Math.floor(pos2Index[2]);
+                pos2Index[2] = Math.floor(pos1Index[2]);
                 if (this._isInsideVolume(pos1Index, pos2Index, dimensions)) {
                     this.isHandleOutsideImage = false;
                     const iMin = Math.min(pos1Index[0], pos2Index[0]);
@@ -522,10 +530,13 @@ class RectangleROITool extends AnnotationTool {
                         isSuvScaled: this.isSuvScaled(viewport, targetId, annotation.metadata.referencedImageId),
                     };
                     const modalityUnit = getPixelValueUnits(metadata.Modality, annotation.metadata.referencedImageId, pixelUnitsOptions);
-                    const pointsInShape = voxelManager.forEach(this.configuration.statsCalculator.statsCallback, {
+                    let pointsInShape = voxelManager.forEach(this.configuration.statsCalculator.statsCallback, {
                         boundsIJK,
                         imageData,
                         returnPoints: this.configuration.storePointData,
+                    });
+                    pointsInShape.forEach(element => {
+                        element.pointIJK[2]=sliceIndex                        
                     });
                     const stats = this.configuration.statsCalculator.getStatistics();
                     cachedStats[targetId] = {
