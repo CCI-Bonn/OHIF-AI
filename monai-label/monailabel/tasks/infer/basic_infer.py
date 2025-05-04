@@ -35,7 +35,7 @@ from monailabel.interfaces.utils.transform import dump_data, run_transforms
 from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
-
+from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline
 #from sam2.build_sam import build_sam2_video_predictor
 
 #from mmdet.apis import DetInferencer
@@ -445,6 +445,44 @@ class BasicInferTask(InferTask):
                     box[0]=box[0][::-1]
                     box[1]=box[1][::-1]            
                     session.add_bbox_interaction([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], include_interaction=True)
+
+            if len(data['lassos'])!=0:
+                result_json["lassos"]=copy.deepcopy(data["lassos"])
+                logger.info(f"prompt lassos: {data['lassos']}")
+                for lasso in data['lassos']:
+                    lasso = get_scanline_filled_points_3d(clean_and_densify_polyline(lasso))
+                    lassoMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
+                    filled_indices = np.asarray(lasso)
+                    if instanceNumber > instanceNumber2:
+                        filled_indices[:, 2]=img_np.shape[1]-1 - filled_indices[:, 2]
+                    x, y, z = filled_indices[:, 0], filled_indices[:, 1], filled_indices[:, 2]
+                    valid = (
+                        (x >= 0) & (x < img_np.shape[3]) &
+                        (y >= 0) & (y < img_np.shape[2]) &
+                        (z >= 0) & (z < img_np.shape[1])
+                    )
+                    # Apply only valid indices
+                    lassoMask[z[valid], y[valid], x[valid]] = 1                
+                    session.add_lasso_interaction(lassoMask, include_interaction=True)
+            
+            if len(data['scribbles'])!=0:
+                result_json["scribbles"]=copy.deepcopy(data["scribbles"])
+                logger.info(f"prompt scribbles: {data['scribbles']}")
+                for scribble in data['scribbles']:
+                    scribble = clean_and_densify_polyline(scribble)
+                    scribbleMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
+                    filled_indices = np.asarray(scribble)
+                    if instanceNumber > instanceNumber2:
+                        filled_indices[:, 2]=img_np.shape[1]-1 - filled_indices[:, 2]
+                    x, y, z = filled_indices[:, 0], filled_indices[:, 1], filled_indices[:, 2]
+                    valid = (
+                        (x >= 0) & (x < img_np.shape[3]) &
+                        (y >= 0) & (y < img_np.shape[2]) &
+                        (z >= 0) & (z < img_np.shape[1])
+                    )
+                    # Apply only valid indices
+                    scribbleMask[z[valid], y[valid], x[valid]] = 1                
+                    session.add_scribble_interaction(scribbleMask, include_interaction=True)
 
             # Example: Add a bounding box interaction
             # BBOX_COORDINATES must be specified as [[x1, x2], [y1, y2], [z1, z2]] (half-open intervals).

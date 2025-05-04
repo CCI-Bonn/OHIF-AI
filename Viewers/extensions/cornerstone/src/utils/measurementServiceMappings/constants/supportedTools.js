@@ -12,6 +12,8 @@ const supportedTools = [
   'RectangleROI2',
   'PlanarFreehandROI',
   'SplineROI',
+  'PlanarFreehandROI2',
+  'SplineROI2',
   'LivewireContour',
   'UltrasoundDirectionalTool',
   'SCOORD3DPoint',

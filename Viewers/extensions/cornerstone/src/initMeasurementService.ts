@@ -31,7 +31,9 @@ const initMeasurementService = (
     RectangleROI,
     RectangleROI2,
     PlanarFreehandROI,
+    PlanarFreehandROI2,
     SplineROI,
+    SplineROI2,
     LivewireContour,
     Probe,
     Probe2,
@@ -139,6 +141,13 @@ const initMeasurementService = (
     PlanarFreehandROI.toAnnotation,
     PlanarFreehandROI.toMeasurement
   );
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
+    'PlanarFreehandROI2',
+    PlanarFreehandROI2.matchingCriteria,
+    PlanarFreehandROI2.toAnnotation,
+    PlanarFreehandROI2.toMeasurement
+  );
 
   measurementService.addMapping(
     csTools3DVer1MeasurementSource,
@@ -146,6 +155,14 @@ const initMeasurementService = (
     SplineROI.matchingCriteria,
     SplineROI.toAnnotation,
     SplineROI.toMeasurement
+  );
+
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
+    'SplineROI2',
+    SplineROI2.matchingCriteria,
+    SplineROI2.toAnnotation,
+    SplineROI2.toMeasurement
   );
 
   // On the UI side, the Calibration Line tool will work almost the same as the

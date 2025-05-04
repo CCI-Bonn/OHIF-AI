@@ -47,6 +47,12 @@ Probe2Tool.toolName = 'Probe2';
 class RectangleROI2Tool extends RectangleROITool {}
 RectangleROI2Tool.toolName = 'RectangleROI2';
 
+class SplineROI2Tool extends SplineROITool {}
+SplineROI2Tool.toolName = 'SplineROI2';
+
+class PlanarFreehandROI2Tool extends PlanarFreehandROITool {}
+PlanarFreehandROI2Tool.toolName = 'PlanarFreehandROI2';
+
 export default function initCornerstoneTools(configuration = {}) {
   CrosshairsTool.isAnnotation = false;
   ReferenceLinesTool.isAnnotation = false;
@@ -87,7 +93,9 @@ export default function initCornerstoneTools(configuration = {}) {
   addTool(AdvancedMagnifyTool);
   addTool(UltrasoundDirectionalTool);
   addTool(PlanarFreehandROITool);
+  addTool(PlanarFreehandROI2Tool);
   addTool(SplineROITool);
+  addTool(SplineROI2Tool);
   addTool(LivewireContourTool);
   addTool(OrientationMarkerTool);
   addTool(WindowLevelRegionTool);
@@ -142,8 +150,10 @@ const toolNames = {
   AdvancedMagnify: AdvancedMagnifyTool.toolName,
   UltrasoundDirectional: UltrasoundDirectionalTool.toolName,
   SplineROI: SplineROITool.toolName,
+  SplineROI2: SplineROI2Tool.toolName,
   LivewireContour: LivewireContourTool.toolName,
   PlanarFreehandROI: PlanarFreehandROITool.toolName,
+  PlanarFreehandROI2: PlanarFreehandROI2Tool.toolName, 
   OrientationMarker: OrientationMarkerTool.toolName,
   WindowLevelRegion: WindowLevelRegionTool.toolName,
   PlanarFreehandContourSegmentation: PlanarFreehandContourSegmentationTool.toolName,

@@ -615,30 +615,50 @@ const commandsModule = ({
       })[0];
 
       //const prompts = Array.from(measurementService.measurements).filter((e)=>{return e[1].data!==undefined}).map((e)=>{return Object.values(e[1].data)[0].index})
-      const pos_points = Array.from(measurementService.measurements)
+      const pos_points = measurementService.getMeasurements()
         .filter(e => {
-          return e[1].toolName === 'Probe';
+          return e.toolName === 'Probe';
         })
         .map(e => {
-          return Object.values(e[1].data)[0].index;
+          return Object.values(e.data)[0].index;
         });
-      const neg_points = Array.from(measurementService.measurements)
+      const neg_points = measurementService.getMeasurements()
         .filter(e => {
-          return e[1].toolName === 'Probe2';
+          return e.toolName === 'Probe2';
         })
         .map(e => {
-          return Object.values(e[1].data)[0].index;
+          return Object.values(e.data)[0].index;
         });
 
-      const bd_boxes = Array.from(measurementService.measurements)
-        .filter(e => { return e[1].toolName === 'RectangleROI2' })
-        .map(e => { return Object.values(e[1].data)[0].pointsInShape })
+      const bd_boxes = measurementService.getMeasurements()
+        .filter(e => { 
+          return e.toolName === 'RectangleROI2' 
+        })
+        .map(e => { 
+          return Object.values(e.data)[0].pointsInShape 
+        })
 
       let box_prompts = bd_boxes.map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
 
-      const text_prompts = Array.from(services.measurementService.measurements)
-      .filter(e => { return e[1].toolName === 'Probe' })
-      .map(e => { return e[1].label })
+      const lassos = measurementService.getMeasurements()
+        .filter(e => { 
+          return e.toolName === 'SplineROI2' 
+        })
+        .map(e => { 
+          return Object.values(e.data)[0].boundary 
+      })
+
+      const scribbles = measurementService.getMeasurements()
+        .filter(e => { 
+          return e.toolName === 'PlanarFreehandROI2' 
+        })
+        .map(e => { 
+          return Object.values(e.data)[0].scribble 
+      })
+
+      const text_prompts = measurementService.getMeasurements()
+      .filter(e => { return e.toolName === 'Probe' })
+      .map(e => { return e.label })
 
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
@@ -652,7 +672,9 @@ const commandsModule = ({
         pos_points: pos_points,
         neg_points: neg_points,
         boxes: box_prompts,
-        texts: text_prompts
+        texts: text_prompts,
+        lassos: lassos,
+        scribbles: scribbles,
       };
 
       if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj!==undefined){

@@ -242,6 +242,30 @@ const toolbarButtons: Button[] = [
     }
   },
   {
+    id: 'PlanarFreehandROI2',
+    uiType: 'ohif.radioGroup',
+    props:{
+      type: 'tool',
+      icon: 'icon-tool-freehand-roi',
+      label: 'Scribble',
+      tooltip: 'Freehand ROI',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    }
+  },
+  {
+    id: 'SplineROI2',
+    uiType: 'ohif.radioGroup',
+    props:{
+      type: 'tool',
+      icon: 'icon-tool-spline-roi',
+      label: 'Lasso',
+      tooltip: 'Spline ROI',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    }
+  },
+  {
     id: 'sam2_one',
     uiType: 'ohif.radioGroup',
     props: {
@@ -258,7 +282,7 @@ const toolbarButtons: Button[] = [
     props: {
       type: 'tool',
       icon: 'sam-icon',
-      label: 'SAM2',
+      label: 'nnInteractive',
       tooltip: 'Semi segmentation',
       commands: 'sam2',
     },

@@ -23,6 +23,8 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/An
 
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/RectangleROITool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/SplineROITool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/PlanarFreehandROITool.js
 
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
 #RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/ProbeTool.js
@@ -44,6 +46,8 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManageme
 COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/
 
 COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/SplineROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/PlanarFreehandROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 
 #COPY ./backup/cjs/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/
 COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/

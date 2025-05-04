@@ -140,6 +140,9 @@ class SegmentationRenderingEngine {
                 let negPoints = prompts.neg_points
                 let boxes = prompts.boxes
 
+                let scribbles = prompts.scribbles
+                let lassos = prompts.lassos
+
                 if (posPoints!== undefined && posPoints.length !== 0){
                     const toolGroup = getToolGroupForViewport(viewport.id);
                     const posPointTool = toolGroup.getToolInstance('Probe')
@@ -168,6 +171,28 @@ class SegmentationRenderingEngine {
                     if (bboxTool!==undefined){
                         for (const box of boxes){
                             let annotation = bboxTool._addNewAnnotationFromIndex(element, box)
+                            setAnnotationSelected(annotation.annotationUID);
+                        }
+                    }
+                }
+
+                if (lassos!== undefined && lassos.length !== 0){
+                    const toolGroup = getToolGroupForViewport(viewport.id);
+                    const splineTool = toolGroup.getToolInstance('SplineROI2')
+                    if (splineTool!==undefined){
+                        for (const spline of lassos){
+                            let annotation = splineTool._addNewAnnotationFromIndex(element, spline)
+                            setAnnotationSelected(annotation.annotationUID);
+                        }
+                    }
+                }
+
+                if (scribbles!== undefined && scribbles.length !== 0){
+                    const toolGroup = getToolGroupForViewport(viewport.id);
+                    const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI2')
+                    if (freehandTool!==undefined){
+                        for (const polyline of scribbles){
+                            let annotation = freehandTool._addNewAnnotationFromIndex(element, polyline)
                             setAnnotationSelected(annotation.annotationUID);
                         }
                     }
