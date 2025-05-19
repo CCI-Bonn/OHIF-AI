@@ -580,23 +580,23 @@ const commandsModule = ({
         .finally(function () { });
     },
     async sam2() {
-      const response = await MonaiLabelClient.api_get('/monai/info/');
-      if (response.status === 200) {
-        uiNotificationService.show({
-          title: 'MONAI Label',
-          message: 'Connecting to MONAI Label',
-          type: 'info',
-          duration: 3000,
-        });
-      } else {
-        uiNotificationService.show({
-          title: 'MONAI Label',
-          message: 'Failed to connect to MONAI Label',
-          type: 'error',
-          duration: 3000,
-        });
-        return response;
-      }
+      //const response = await MonaiLabelClient.api_get('/monai/info/');
+      //if (response.status === 200) {
+      //  uiNotificationService.show({
+      //    title: 'MONAI Label',
+      //    message: 'Connecting to MONAI Label',
+      //    type: 'info',
+      //    duration: 3000,
+      //  });
+      //} else {
+      //  uiNotificationService.show({
+      //    title: 'MONAI Label',
+      //    message: 'Failed to connect to MONAI Label',
+      //    type: 'error',
+      //    duration: 3000,
+      //  });
+      //  return response;
+      //}
       const segs = servicesManager.services.segmentationService.getSegmentations()
       //remove old segmentationsFromViewport
       for (let seg of segs) {
@@ -604,6 +604,9 @@ const commandsModule = ({
       }
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
+
+      const { setViewportGridState } = useViewportGridStore.getState();
+      setViewportGridState('currentImageIdIndex', servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
 
       const displaySets = displaySetService.activeDisplaySets;
@@ -663,7 +666,7 @@ const commandsModule = ({
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
-        device: response.data.trainers.segmentation.config.device,
+      //  device: response.data.trainers.segmentation.config.device,
         result_extension: '.nii.gz',
         result_dtype: 'uint16',
         result_compress: false,

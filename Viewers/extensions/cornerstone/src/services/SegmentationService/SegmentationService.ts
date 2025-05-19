@@ -29,6 +29,7 @@ import { updateLabelmapSegmentationImageReferences } from '@cornerstonejs/tools/
 import { triggerSegmentationRepresentationModified } from '@cornerstonejs/tools/segmentation/triggerSegmentationEvents';
 import { convertStackToVolumeLabelmap } from '@cornerstonejs/tools/segmentation/helpers/convertStackToVolumeLabelmap';
 import { getLabelmapImageIds } from '@cornerstonejs/tools/segmentation';
+import { useViewportGridStore } from '../../../../../extensions/default/src/stores/useViewportGridStore';
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const CONTOUR = csToolsEnums.SegmentationRepresentations.Contour;
@@ -498,9 +499,17 @@ class SegmentationService extends PubSubService {
         firstSegmentedSliceImageId = derivedSegmentationImages[i].referencedImageId;
       }
     }
-
+    const currentImageIdIndex = Number(useViewportGridStore.getState().viewportGridState['currentImageIdIndex']);
+    if (Number.isInteger(currentImageIdIndex) &&
+      currentImageIdIndex >= 0 &&
+      currentImageIdIndex < segDisplaySet.images.length
+    ) {
+      segDisplaySet.firstSegmentedSliceImageId = segDisplaySet.images[currentImageIdIndex].imageId;
+    } else {
+      segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
+    }
     // assign the first non zero voxel image id to the segDisplaySet
-    segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
+    //segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
 
     this._broadcastEvent(EVENTS.SEGMENTATION_LOADING_COMPLETE, {
       segmentationId,
