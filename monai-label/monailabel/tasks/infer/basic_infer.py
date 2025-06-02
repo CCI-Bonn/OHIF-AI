@@ -433,16 +433,12 @@ class BasicInferTask(InferTask):
                     for key, lst in self._session_used_interactions.items():
                         lst.clear()
                     session.reset_interactions()
-                    target_tensor = torch.zeros(img_np.shape[1:], dtype=torch.uint8)  # Must be 3D (x, y, z)
-                    session.set_target_buffer(target_tensor)
                     logger.info("Only for first object")
                     self._session_used_interactions["objects"].append(1)         
             elif data['nextObj'] not in self._session_used_interactions["objects"]:
                 for key, lst in self._session_used_interactions.items():
                     lst.clear()
                 session.reset_interactions()
-                target_tensor = torch.zeros(img_np.shape[1:], dtype=torch.uint8)  # Must be 3D (x, y, z)
-                session.set_target_buffer(target_tensor)
                 logger.info("From second object")
                 self._session_used_interactions["objects"].append(data['nextObj'])
 
