@@ -170,6 +170,15 @@ class BasicInferTask(InferTask):
         self.train_mode = train_mode
         self.skip_writer = skip_writer
 
+        self._session_used_interactions = {
+            "pos_points": [],
+            "neg_points": [],
+            "boxes": [],
+            "lassos": [],
+            "scribbles": [],
+            "objects": [],
+        }
+
         self._networks: Dict = {}
 
         self._config.update(
@@ -401,18 +410,44 @@ class BasicInferTask(InferTask):
             logger.info(f"rescale_intercept: {rescale_intercept}")
             #img = sitk.ReadImage(data['image'])
             img_np = sitk.GetArrayFromImage(img)[None]  # Ensure shape (1, x, y, z)
-            img_np = img_np * rescale_slope + rescale_intercept
+            if rescale_slope != 1.0 or rescale_intercept != 0.0:
+                img_np = img_np * rescale_slope + rescale_intercept
             logger.info(f"img shape {img_np.shape}")
             #img = np.random.rand(1, 3, 128, 160).astype(np.float32)
             # Validate input dimensions
             if img_np.ndim != 4:
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
             
-            session.set_image(img_np)
+            if session.original_image_shape == None or not np.array_equal(img_np.shape,session.original_image_shape):
+                session.set_image(img_np)
+                session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+                logger.info("Only first time, no image at nnInter or iamge changed")
+                if 1 not in self._session_used_interactions["objects"]:
+                    for key, lst in self._session_used_interactions.items():
+                        lst.clear()
+                    session.reset_interactions()
+                    logger.info("Only for first object")
+                    self._session_used_interactions["objects"].append(1)
+            elif 'nextObj' not in data:
+                if 1 not in self._session_used_interactions["objects"]:
+                    for key, lst in self._session_used_interactions.items():
+                        lst.clear()
+                    session.reset_interactions()
+                    target_tensor = torch.zeros(img_np.shape[1:], dtype=torch.uint8)  # Must be 3D (x, y, z)
+                    session.set_target_buffer(target_tensor)
+                    logger.info("Only for first object")
+                    self._session_used_interactions["objects"].append(1)         
+            elif data['nextObj'] not in self._session_used_interactions["objects"]:
+                for key, lst in self._session_used_interactions.items():
+                    lst.clear()
+                session.reset_interactions()
+                target_tensor = torch.zeros(img_np.shape[1:], dtype=torch.uint8)  # Must be 3D (x, y, z)
+                session.set_target_buffer(target_tensor)
+                logger.info("From second object")
+                self._session_used_interactions["objects"].append(data['nextObj'])
+
 
             # --- Define Output Buffer ---
-            target_tensor = torch.zeros(img_np.shape[1:], dtype=torch.uint8)  # Must be 3D (x, y, z)
-            session.set_target_buffer(target_tensor)
 
             # --- Interacting with the Model ---
             # Interactions can be freely chained and mixed in any order. Each interaction refines the segmentation.
@@ -427,13 +462,19 @@ class BasicInferTask(InferTask):
             
             for point in data['pos_points']:
                 if instanceNumber > instanceNumber2:
-                    point[2]=img_np.shape[1]-1-point[2]            
-                session.add_point_interaction(tuple(point[::-1]), include_interaction=True)
-
+                    point[2]=img_np.shape[1]-1-point[2]
+                if not any(np.array_equal(point[::-1], x) for x in self._session_used_interactions["pos_points"]):
+                    session.add_point_interaction(tuple(point[::-1]), include_interaction=True)
+                    logger.info("Add pos points")
+                    self._session_used_interactions["pos_points"].append(point[::-1])            
+                
             for point in data['neg_points']:
                 if instanceNumber > instanceNumber2:
-                    point[2]=img_np.shape[1]-1-point[2]            
-                session.add_point_interaction(tuple(point[::-1]), include_interaction=False)
+                    point[2]=img_np.shape[1]-1-point[2]
+                if not any(np.array_equal(point[::-1],x) for x in self._session_used_interactions["neg_points"]):
+                    session.add_point_interaction(tuple(point[::-1]), include_interaction=False)
+                    logger.info("Add neg points")
+                    self._session_used_interactions["neg_points"].append(point[::-1])
 
             if len(data['boxes'])!=0:
                 result_json["boxes"]=copy.deepcopy(data["boxes"])
@@ -443,9 +484,12 @@ class BasicInferTask(InferTask):
                         box[0][2]=img_np.shape[1]-1-box[0][2]
                         box[1][2]=img_np.shape[1]-1-box[1][2]
                     box[0]=box[0][::-1]
-                    box[1]=box[1][::-1]            
-                    session.add_bbox_interaction([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], include_interaction=True)
-
+                    box[1]=box[1][::-1]
+                    if not any(np.array_equal([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], x) for x in self._session_used_interactions["boxes"]):
+                        session.add_bbox_interaction([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], include_interaction=True)
+                        logger.info("Add a box")
+                        self._session_used_interactions["boxes"].append([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]])            
+                    
             if len(data['lassos'])!=0:
                 result_json["lassos"]=copy.deepcopy(data["lassos"])
                 logger.info(f"prompt lassos: {data['lassos']}")
@@ -462,8 +506,12 @@ class BasicInferTask(InferTask):
                         (z >= 0) & (z < img_np.shape[1])
                     )
                     # Apply only valid indices
-                    lassoMask[z[valid], y[valid], x[valid]] = 1                
-                    session.add_lasso_interaction(lassoMask, include_interaction=True)
+                    lassoMask[z[valid], y[valid], x[valid]] = 1
+                    if not any(np.array_equal(lassoMask,x) for x in self._session_used_interactions["lassos"]):
+                        session.add_lasso_interaction(lassoMask, include_interaction=True)
+                        logger.info("Add a lasso")
+                        self._session_used_interactions["lassos"].append(lassoMask)                
+                    
             
             if len(data['scribbles'])!=0:
                 result_json["scribbles"]=copy.deepcopy(data["scribbles"])
@@ -481,8 +529,11 @@ class BasicInferTask(InferTask):
                         (z >= 0) & (z < img_np.shape[1])
                     )
                     # Apply only valid indices
-                    scribbleMask[z[valid], y[valid], x[valid]] = 1                
-                    session.add_scribble_interaction(scribbleMask, include_interaction=True)
+                    scribbleMask[z[valid], y[valid], x[valid]] = 1
+                    if not any(np.array_equal(scribbleMask,x) for x in self._session_used_interactions["scribbles"]):
+                        session.add_scribble_interaction(scribbleMask, include_interaction=True)
+                        logger.info("Add a scribble")
+                        self._session_used_interactions["scribbles"].append(scribbleMask)
 
             # Example: Add a bounding box interaction
             # BBOX_COORDINATES must be specified as [[x1, x2], [y1, y2], [z1, z2]] (half-open intervals).
@@ -515,10 +566,10 @@ class BasicInferTask(InferTask):
 
             # Cloning is required because the buffer will be **reused** for the next object.
             # Alternatively, set a new target buffer for each object:
-            session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+            #session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
 
             # --- Start a New Object Segmentation ---
-            session.reset_interactions()  # Clears the target buffer and resets interactions
+            #session.reset_interactions()  # Clears the target buffer and resets interactions
 
             # Now you can start segmenting the next object in the image.
 
