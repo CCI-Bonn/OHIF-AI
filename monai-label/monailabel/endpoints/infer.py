@@ -265,8 +265,12 @@ def run_inference(
             # Save the combined segmentation
             combined_segmentation.save_as(dicom_seg_file)
 
-        series_id = dicom_web_upload_dcm(dicom_seg_file, instance.datastore()._client)
-        result["dicom_seg"] = series_id
+        
+        #series_id = dicom_web_upload_dcm(dicom_seg_file, instance.datastore()._client)
+        #result["dicom_seg"] = series_id
+        final_seg_ds = dcmread(dicom_seg_file)
+        dicom_bytes = final_seg_ds.PixelData if hasattr(final_seg_ds, "PixelData") else open(dicom_seg_file, "rb").read()
+        result["dicom_seg"] = dicom_bytes
 
     return send_response(instance.datastore(), result, output, background_tasks)
 
