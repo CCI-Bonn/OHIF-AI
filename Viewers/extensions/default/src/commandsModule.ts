@@ -20,7 +20,8 @@ import { useToggleOneUpViewportGridStore } from './stores/useToggleOneUpViewport
 import { Enums as csToolsEnums, Types as cstTypes } from '@cornerstonejs/tools';
 import { getNextColorLUTIndex } from '@cornerstonejs/tools/segmentation/getNextColorLUTIndex';
 import { addColorLUT } from '@cornerstonejs/tools/segmentation/addColorLUT';
-import { cache, imageLoader, metaData, Types as csTypes } from '@cornerstonejs/core';
+import { cache, imageLoader, eventTarget,metaData, Types as csTypes } from '@cornerstonejs/core';
+import { adaptersSEG } from '@cornerstonejs/adapters';
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 //import { defaultRouteInit } from '@routes/Mode/defaultRouteInit'
@@ -715,144 +716,163 @@ const commandsModule = ({
               })[0];
 
             if (segDisplaySet.Modality==="SEG") {
-              let segmentationId = segDisplaySet.displaySetInstanceUID;
+
+
+              //let segmentationId = segDisplaySet.displaySetInstanceUID;
               const referencedDisplaySetInstanceUID = segDisplaySet.referencedDisplaySetInstanceUID;
               const referencedDisplaySet = servicesManager.services.displaySetService.getDisplaySetByUID(
                 referencedDisplaySetInstanceUID
               );
-
+//
               const images = referencedDisplaySet.instances;
-
+//
               if (!images.length) {
                 throw new Error('No instances were provided for the referenced display set of the SEG');
               }
 
               const imageIds = images.map(image => image.imageId);
 
-              const derivedSegmentationImages = await imageLoader.createAndCacheDerivedLabelmapImages(
-                imageIds as string[]
+              const results = await adaptersSEG.Cornerstone3D.Segmentation.generateToolState(
+                imageIds,
+                arrayBuffer,
+                metaData
               );
 
-              segDisplaySet.images = derivedSegmentationImages.map(image => ({
-                ...image,
-                ...metaData.get('instance', image.referencedImageId),
-              }));
+              Object.assign(segDisplaySet, results);
 
-              const segmentsInfo = segDisplaySet.instance.SegmentSequence;
-
-              const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
-              const colorLUT = [];
-
-              segmentsInfo.forEach((segmentInfo, index) => {
-                if (index === 0) {
-                  colorLUT.push([0, 0, 0, 0]);
-                  return;
-                }
-
-                const {
-                  SegmentedPropertyCategoryCodeSequence,
-                  SegmentNumber,
-                  SegmentLabel,
-                  SegmentAlgorithmType,
-                  SegmentAlgorithmName,
-                  SegmentedPropertyTypeCodeSequence,
-                  rgba,
-                } = segmentInfo;
-                if (rgba === undefined){
-                  colorLUT.push([255,0,0,0.5]);
-                }
-                else{
-                  colorLUT.push(rgba);
-                }
-                const segmentIndex = Number(SegmentNumber);
-
-                const centroid = segDisplaySet.centroids?.get(index);
-                const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
-                const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
-
-                segments[segmentIndex] = {
-                  segmentIndex,
-                  label: SegmentLabel || `Segment ${SegmentNumber}`,
-                  locked: false,
-                  active: false,
-                  cachedStats: {
-                    center: {
-                      image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
-                      world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
-                    },
-                    modifiedTime: segDisplaySet.SeriesDate,
-                    category: SegmentedPropertyCategoryCodeSequence
-                      ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
-                      : '',
-                    type: SegmentedPropertyTypeCodeSequence
-                      ? SegmentedPropertyTypeCodeSequence.CodeMeaning
-                      : '',
-                    algorithmType: SegmentAlgorithmType,
-                    algorithmName: SegmentAlgorithmName,
-                  },
-                };
+              servicesManager.services.segmentationService
+              .createSegmentationForSEGDisplaySet(segDisplaySet)
+              .then(() => {
+                segDisplaySet.loading = false;
+              })
+              .catch(error => {
+                segDisplaySet.loading = false;
               });
-
-              // get next color lut index
-              const colorLUTIndex = getNextColorLUTIndex();
-              addColorLUT(colorLUT, colorLUTIndex);
-              servicesManager.services.segmentationService._segmentationIdToColorLUTIndexMap.set(segmentationId, colorLUTIndex);
-
-              // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
-              const volumeScalarData = uint8;
-
-              // We should parse the segmentation as separate slices to support overlapping segments.
-              // This parsing should occur in the CornerstoneJS library adapters.
-              // For now, we use the volume returned from the library and chop it here.
-              let firstSegmentedSliceImageId = null;
-              for (let i = 0; i < derivedSegmentationImages.length; i++) {
-                const voxelManager = derivedSegmentationImages[i]
-                  .voxelManager as csTypes.IVoxelManager<number>;
-                const scalarData = voxelManager.getScalarData();
-                const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
-                scalarData.set(sliceData);
-                voxelManager.setScalarData(scalarData);
-
-                // Check if this slice has any non-zero voxels and we haven't found one yet
-                if (!firstSegmentedSliceImageId && sliceData.some(value => value !== 0)) {
-                  firstSegmentedSliceImageId = derivedSegmentationImages[i].referencedImageId;
-                }
-              }
-              const currentImageIdIndex = Number(useViewportGridStore.getState().viewportGridState['currentImageIdIndex']);
-              if (Number.isInteger(currentImageIdIndex) &&
-                currentImageIdIndex >= 0 &&
-                currentImageIdIndex < segDisplaySet.images.length
-              ) {
-                segDisplaySet.firstSegmentedSliceImageId = segDisplaySet.images[currentImageIdIndex].imageId;
-              } else {
-                segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
-              }
-              // assign the first non zero voxel image id to the segDisplaySet
-              //segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
-
-              servicesManager.services.segmentationService._broadcastEvent(servicesManager.services.segmentationService.EVENTS.SEGMENTATION_MODIFIED, {
-                segmentationId,
-              });
-
-              const seg: cstTypes.SegmentationPublicInput = {
-                segmentationId,
-                representation: {
-                  type: LABELMAP,
-                  data: {
-                    imageIds: derivedSegmentationImages.map(image => image.imageId),
-                    referencedVolumeId: servicesManager.services.segmentationService._getVolumeIdForDisplaySet(referencedDisplaySet),
-                    referencedImageIds: imageIds as string[],
-                  },
-                },
-                config: {
-                  label: segDisplaySet.SeriesDescription,
-                  segments,
-                },
-              };
-
-              segDisplaySet.isLoaded = true;
-
-              servicesManager.services.segmentationService.addOrUpdateSegmentation(seg);
+//
+              //const derivedSegmentationImages = await imageLoader.createAndCacheDerivedLabelmapImages(
+              //  imageIds as string[]
+              //);
+//
+              //segDisplaySet.images = derivedSegmentationImages.map(image => ({
+              //  ...image,
+              //  ...metaData.get('instance', image.referencedImageId),
+              //}));
+//
+              //const segmentsInfo = segDisplaySet.instance.SegmentSequence;
+//
+              //const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
+              //const colorLUT = [];
+//
+              //segmentsInfo.forEach((segmentInfo, index) => {
+              //  if (index === 0) {
+              //    colorLUT.push([0, 0, 0, 0]);
+              //    return;
+              //  }
+//
+              //  const {
+              //    SegmentedPropertyCategoryCodeSequence,
+              //    SegmentNumber,
+              //    SegmentLabel,
+              //    SegmentAlgorithmType,
+              //    SegmentAlgorithmName,
+              //    SegmentedPropertyTypeCodeSequence,
+              //    rgba,
+              //  } = segmentInfo;
+              //  if (rgba === undefined){
+              //    colorLUT.push([255,0,0,0.5]);
+              //  }
+              //  else{
+              //    colorLUT.push(rgba);
+              //  }
+              //  const segmentIndex = Number(SegmentNumber);
+//
+              //  const centroid = segDisplaySet.centroids?.get(index);
+              //  const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
+              //  const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
+//
+              //  segments[segmentIndex] = {
+              //    segmentIndex,
+              //    label: SegmentLabel || `Segment ${SegmentNumber}`,
+              //    locked: false,
+              //    active: false,
+              //    cachedStats: {
+              //      center: {
+              //        image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
+              //        world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
+              //      },
+              //      modifiedTime: segDisplaySet.SeriesDate,
+              //      category: SegmentedPropertyCategoryCodeSequence
+              //        ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
+              //        : '',
+              //      type: SegmentedPropertyTypeCodeSequence
+              //        ? SegmentedPropertyTypeCodeSequence.CodeMeaning
+              //        : '',
+              //      algorithmType: SegmentAlgorithmType,
+              //      algorithmName: SegmentAlgorithmName,
+              //    },
+              //  };
+              //});
+//
+              //// get next color lut index
+              //const colorLUTIndex = getNextColorLUTIndex();
+              //addColorLUT(colorLUT, colorLUTIndex);
+              //servicesManager.services.segmentationService._segmentationIdToColorLUTIndexMap.set(segmentationId, colorLUTIndex);
+//
+              //// now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
+              //const volumeScalarData = uint8;
+//
+              //// We should parse the segmentation as separate slices to support overlapping segments.
+              //// This parsing should occur in the CornerstoneJS library adapters.
+              //// For now, we use the volume returned from the library and chop it here.
+              //let firstSegmentedSliceImageId = null;
+              //for (let i = 0; i < derivedSegmentationImages.length; i++) {
+              //  const voxelManager = derivedSegmentationImages[i]
+              //    .voxelManager as csTypes.IVoxelManager<number>;
+              //  const scalarData = voxelManager.getScalarData();
+              //  const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
+              //  scalarData.set(sliceData);
+              //  voxelManager.setScalarData(scalarData);
+//
+              //  // Check if this slice has any non-zero voxels and we haven't found one yet
+              //  if (!firstSegmentedSliceImageId && sliceData.some(value => value !== 0)) {
+              //    firstSegmentedSliceImageId = derivedSegmentationImages[i].referencedImageId;
+              //  }
+              //}
+              //const currentImageIdIndex = Number(useViewportGridStore.getState().viewportGridState['currentImageIdIndex']);
+              //if (Number.isInteger(currentImageIdIndex) &&
+              //  currentImageIdIndex >= 0 &&
+              //  currentImageIdIndex < segDisplaySet.images.length
+              //) {
+              //  segDisplaySet.firstSegmentedSliceImageId = segDisplaySet.images[currentImageIdIndex].imageId;
+              //} else {
+              //  segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
+              //}
+              //// assign the first non zero voxel image id to the segDisplaySet
+              ////segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
+//
+              //servicesManager.services.segmentationService._broadcastEvent(servicesManager.services.segmentationService.EVENTS.SEGMENTATION_MODIFIED, {
+              //  segmentationId,
+              //});
+//
+              //const seg: cstTypes.SegmentationPublicInput = {
+              //  segmentationId,
+              //  representation: {
+              //    type: LABELMAP,
+              //    data: {
+              //      imageIds: derivedSegmentationImages.map(image => image.imageId),
+              //      referencedVolumeId: servicesManager.services.segmentationService._getVolumeIdForDisplaySet(referencedDisplaySet),
+              //      referencedImageIds: imageIds as string[],
+              //    },
+              //  },
+              //  config: {
+              //    label: segDisplaySet.SeriesDescription,
+              //    segments,
+              //  },
+              //};
+//
+              //segDisplaySet.isLoaded = true;
+//
+              //servicesManager.services.segmentationService.addOrUpdateSegmentation(seg);
 
             }
 
