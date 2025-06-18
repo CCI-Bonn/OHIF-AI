@@ -1462,7 +1462,7 @@ class SegmentationService extends PubSubService {
   ) {
     // Update does not work, no change
     //cstSegmentation.updateSegmentations([{ segmentationId, payload }]);
-    cstSegmentation.removeSegmentation([{ segmentationId }]);
+    cstSegmentation.removeSegmentation(segmentationId);
     cstSegmentation.addSegmentations([payload]);
   }
 
