@@ -796,7 +796,7 @@ const commandsModule = ({
               // get next color lut index
               const colorLUTIndex = getNextColorLUTIndex();
               addColorLUT(colorLUT, colorLUTIndex);
-              this._segmentationIdToColorLUTIndexMap.set(segmentationId, colorLUTIndex);
+              servicesManager.services.segmentationService._segmentationIdToColorLUTIndexMap.set(segmentationId, colorLUTIndex);
 
               // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
               const volumeScalarData = uint8;
@@ -840,7 +840,7 @@ const commandsModule = ({
                   type: LABELMAP,
                   data: {
                     imageIds: derivedSegmentationImages.map(image => image.imageId),
-                    referencedVolumeId: this._getVolumeIdForDisplaySet(referencedDisplaySet),
+                    referencedVolumeId: servicesManager.services.segmentationService._getVolumeIdForDisplaySet(referencedDisplaySet),
                     referencedImageIds: imageIds as string[],
                   },
                 },
@@ -852,7 +852,7 @@ const commandsModule = ({
 
               segDisplaySet.isLoaded = true;
 
-              this.addOrUpdateSegmentation(seg);
+              servicesManager.services.segmentationService.addOrUpdateSegmentation(seg);
 
             }
 
