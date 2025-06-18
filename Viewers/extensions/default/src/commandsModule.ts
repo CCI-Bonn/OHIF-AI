@@ -740,13 +740,16 @@ const commandsModule = ({
 
               Object.assign(segDisplaySet, results);
 
-              await servicesManager.services.segmentationService
+              const segmentationId = await servicesManager.services.segmentationService
               .createSegmentationForSEGDisplaySet(segDisplaySet)
               .then(() => {
                 segDisplaySet.loading = false;
               })
               .catch(error => {
                 segDisplaySet.loading = false;
+              });
+              await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
+                segmentationId,
               });
 //
               //const derivedSegmentationImages = await imageLoader.createAndCacheDerivedLabelmapImages(
