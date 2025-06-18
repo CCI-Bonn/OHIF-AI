@@ -740,7 +740,7 @@ const commandsModule = ({
 
               Object.assign(segDisplaySet, results);
 
-              servicesManager.services.segmentationService
+              await servicesManager.services.segmentationService
               .createSegmentationForSEGDisplaySet(segDisplaySet)
               .then(() => {
                 segDisplaySet.loading = false;
