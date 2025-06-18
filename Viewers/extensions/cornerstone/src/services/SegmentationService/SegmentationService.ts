@@ -422,7 +422,8 @@ class SegmentationService extends PubSubService {
       ...metaData.get('instance', image.referencedImageId),
     }));
 
-    const segmentsInfo = segDisplaySet.segMetadata.data;
+    // Filter out any unexpected undefined entries that may be present in the segmentation metadata array
+    const segmentsInfo = (segDisplaySet.segMetadata?.data ?? []).filter(Boolean);
 
     const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
     const colorLUT = [];
@@ -443,7 +444,13 @@ class SegmentationService extends PubSubService {
         rgba,
       } = segmentInfo;
 
-      colorLUT.push(rgba);
+      if (rgba === undefined){
+        colorLUT.push([255,0,0,0.5]);
+      }
+      else{
+        colorLUT.push(rgba);
+      }
+      //colorLUT.push(rgba);
 
       const segmentIndex = Number(SegmentNumber);
 
