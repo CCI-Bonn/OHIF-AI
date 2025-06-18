@@ -740,7 +740,7 @@ const commandsModule = ({
 
               Object.assign(segDisplaySet, results);
 
-              const segmentationId = await servicesManager.services.segmentationService
+              wait servicesManager.services.segmentationService
               .createSegmentationForSEGDisplaySet(segDisplaySet)
               .then(() => {
                 segDisplaySet.loading = false;
@@ -749,9 +749,9 @@ const commandsModule = ({
                 segDisplaySet.loading = false;
               });
               await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-                segmentationId,
+                segmentationId: segDisplaySet.displaySetInstanceUID,
               });
-//
+
               //const derivedSegmentationImages = await imageLoader.createAndCacheDerivedLabelmapImages(
               //  imageIds as string[]
               //);
