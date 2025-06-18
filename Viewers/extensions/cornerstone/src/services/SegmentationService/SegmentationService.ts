@@ -1460,7 +1460,10 @@ class SegmentationService extends PubSubService {
     segmentationId: string,
     payload: Partial<cstTypes.Segmentation>
   ) {
-    cstSegmentation.updateSegmentations([{ segmentationId, payload }]);
+    // Update does not work, no change
+    //cstSegmentation.updateSegmentations([{ segmentationId, payload }]);
+    cstSegmentation.removeSegmentation([{ segmentationId }]);
+    cstSegmentation.addSegmentations([payload]);
   }
 
   private _toOHIFSegmentationRepresentation(
