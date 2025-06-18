@@ -695,7 +695,7 @@ class SegmentationService extends PubSubService {
     data: cstTypes.SegmentationPublicInput | Partial<cstTypes.Segmentation>
   ) {
     const segmentationId = data.segmentationId;
-    const existingSegmentation = undefined;//cstSegmentation.state.getSegmentation(segmentationId);
+    const existingSegmentation = cstSegmentation.state.getSegmentation(segmentationId);
 
     if (existingSegmentation) {
       // Update the existing segmentation
