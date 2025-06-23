@@ -598,6 +598,9 @@ class BasicInferTask(InferTask):
                 # Flatten arrays
                 pred_flat = pred_mask.flatten()
                 gt_flat = gt_mask.flatten()
+
+                logger.info(f"Pred: {pred_flat.sum()}")
+                logger.info(f"GT: {gt_flat.sum()}")
                 
                 # Calculate intersection and union
                 intersection = (pred_flat * gt_flat).sum()
@@ -608,6 +611,12 @@ class BasicInferTask(InferTask):
             # Calculate Dice for each class/label if multi-class, or overall if binary
             if len(np.unique(pred)) > 2 or len(np.unique(gt)) > 2:
                 # Multi-class case - calculate Dice for each class
+                logger.info(f"Pred shape: {pred.shape}")
+                logger.info(f"GT shape: {gt.shape}")
+
+                logger.info(f"label number Pred: {len(np.unique(pred))}")
+                logger.info(f"label count GT: {len(np.unique(gt))}")
+
                 unique_labels = np.unique(np.concatenate([pred.flatten(), gt.flatten()]))
                 unique_labels = unique_labels[unique_labels > 0]  # exclude background
                 
