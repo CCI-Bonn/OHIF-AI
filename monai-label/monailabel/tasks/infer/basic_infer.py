@@ -581,11 +581,14 @@ class BasicInferTask(InferTask):
             pred_itk = sitk.GetImageFromArray(pred)
             pred_itk.CopyInformation(img)
             
-            nifti_img = nib.load('/code/data/100101A_BraTS-seg.nii.gz')
-            gt = nifti_img.get_fdata()
-
-            #gt_itk = sitk.ReadImage('/code/data/100101A_BraTS-seg.nii.gz')
-            #gt = sitk.GetArrayFromImage(gt_itk)
+            #nifti_img = nib.load('/code/data/100101A_BraTS-seg.nii.gz')
+            #gt = nifti_img.get_fdata()
+            #affine = nifti_img.affine
+            #logger.info(f"Affine matrix:\n {affine}")
+    
+            gt_itk = sitk.ReadImage('/code/data/100101A_BraTS-seg.nii.gz')
+            gt_itk.CopyInformation(img)
+            gt = sitk.GetArrayFromImage(gt_itk)
             
 
             # Calculate Dice coefficient between prediction and ground truth
