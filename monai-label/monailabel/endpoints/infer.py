@@ -213,7 +213,7 @@ def run_inference(
         image_series_desc = "nnInteractive_"+ image_series_desc
         existing_instances = instance.datastore()._client.search_for_series(search_filters={"SeriesDate": date.today().strftime("%Y%m%d"), "SeriesDescription": image_series_desc})
         old_response = 0
-        if len(existing_instances)>0:
+        if len(existing_instances)>500:
             res = instance.datastore()._client._http_post("http://ohif_orthanc:1026/pacs/tools/find",'{{"Level":"Series","Query":{{"SeriesInstanceUID":"{seriesID}"}}, "Expand":true}}'.format(seriesID=existing_instances[0]['0020000E']['Value'][0]), headers={'Content-Type': 'text/plain'})
             if res.status_code == 200:
                 del_series_id = json.loads(res.content)[0]['ID']
@@ -266,7 +266,7 @@ def run_inference(
             combined_segmentation.save_as(dicom_seg_file)
 
         
-        #series_id = dicom_web_upload_dcm(dicom_seg_file, instance.datastore()._client)
+        series_id = dicom_web_upload_dcm(dicom_seg_file, instance.datastore()._client)
         #result["dicom_seg"] = series_id
         final_seg_ds = dcmread(dicom_seg_file)
         #dicom_bytes = final_seg_ds.PixelData if hasattr(final_seg_ds, "PixelData") else open(dicom_seg_file, "rb").read()
