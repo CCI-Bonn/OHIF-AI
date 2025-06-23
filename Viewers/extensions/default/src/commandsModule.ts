@@ -714,7 +714,7 @@ const commandsModule = ({
             const uint8 = new Uint8Array(arrayBuffer);
             
             let segDisplaySet = servicesManager.services.displaySetService.getActiveDisplaySets().filter(e => {
-                return (e.SeriesDescription.includes('nnInteractive_' + currentDisplaySets.SeriesDescription)) && (e.SeriesDate == '20250602');
+                return (e.SeriesDescription.includes('nnInteractive_' + currentDisplaySets.SeriesDescription)) && (e.SeriesDate == '20250623');
               })[0];
 
             if (segDisplaySet.Modality==="SEG") {
