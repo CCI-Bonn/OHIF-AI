@@ -679,9 +679,31 @@ class BasicInferTask(InferTask):
                     
                     logger.info(f"Label {int(label)} - Pred voxels: {len(pred_indices[0])}, GT voxels: {len(gt_indices[0])}")
                     if len(pred_indices[0]) > 0:
-                        logger.info(f"  Pred sample indices (first 10): {list(zip(pred_indices[0][:10], pred_indices[1][:10], pred_indices[2][:10]))}")
+                        # Show coordinate ranges
+                        logger.info(f"  Pred coordinate ranges - Z: [{pred_indices[0].min()}-{pred_indices[0].max()}], Y: [{pred_indices[1].min()}-{pred_indices[1].max()}], X: [{pred_indices[2].min()}-{pred_indices[2].max()}]")
+                        
+                        # Filter for Z=74 specifically and get first 10
+                        z_74_mask = pred_indices[0] == 74
+                        if np.any(z_74_mask):
+                            z_74_indices = (pred_indices[0][z_74_mask][:10], pred_indices[1][z_74_mask][:10], pred_indices[2][z_74_mask][:10])
+                            logger.info(f"  Pred coordinates at Z=74 (first 10): {list(zip(z_74_indices[0], z_74_indices[1], z_74_indices[2]))}")
+                        else:
+                            logger.info(f"  No pred voxels found at Z=74")
+                        
+                        logger.info(f"  Pred sample coordinates (first 10 found, starting Z={pred_indices[0][0]}): {list(zip(pred_indices[0][:10], pred_indices[1][:10], pred_indices[2][:10]))}")
                     if len(gt_indices[0]) > 0:
-                        logger.info(f"  GT sample indices (first 10): {list(zip(gt_indices[0][:10], gt_indices[1][:10], gt_indices[2][:10]))}")
+                        # Show coordinate ranges  
+                        logger.info(f"  GT coordinate ranges - Z: [{gt_indices[0].min()}-{gt_indices[0].max()}], Y: [{gt_indices[1].min()}-{gt_indices[1].max()}], X: [{gt_indices[2].min()}-{gt_indices[2].max()}]")
+                        
+                        # Filter for Z=74 specifically and get first 10
+                        z_74_mask_gt = gt_indices[0] == 74
+                        if np.any(z_74_mask_gt):
+                            z_74_indices_gt = (gt_indices[0][z_74_mask_gt][:10], gt_indices[1][z_74_mask_gt][:10], gt_indices[2][z_74_mask_gt][:10])
+                            logger.info(f"  GT coordinates at Z=74 (first 10): {list(zip(z_74_indices_gt[0], z_74_indices_gt[1], z_74_indices_gt[2]))}")
+                        else:
+                            logger.info(f"  No GT voxels found at Z=74")
+                        
+                        logger.info(f"  GT sample coordinates (first 10 found, starting Z={gt_indices[0][0]}): {list(zip(gt_indices[0][:10], gt_indices[1][:10], gt_indices[2][:10]))}")
                     
                     dice_score = calculate_dice(pred_binary, gt_binary)
                     dice_scores[f'class_{int(label)}'] = dice_score
