@@ -633,6 +633,10 @@ class BasicInferTask(InferTask):
                 for label in unique_labels:
                     pred_binary = (pred == label).astype(np.float32)
                     gt_binary = (gt == label).astype(np.float32)
+
+                    logger.info(f"Pred binary sum: {pred_binary.sum()}")
+                    logger.info(f"GT binary sum: {gt_binary.sum()}")
+                    
                     dice_score = calculate_dice(pred_binary, gt_binary)
                     dice_scores[f'class_{int(label)}'] = dice_score
                     logger.info(f"Dice score for class {int(label)}: {dice_score:.4f}")
