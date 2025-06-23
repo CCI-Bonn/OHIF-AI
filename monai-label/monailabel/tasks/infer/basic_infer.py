@@ -618,33 +618,42 @@ class BasicInferTask(InferTask):
             # Calculate Dice for each class/label if multi-class, or overall if binary
             if len(np.unique(pred)) > 2 or len(np.unique(gt)) > 2:
                 # Multi-class case - calculate Dice for each class
-                logger.info(f"Pred shape: {pred.shape}")
-                logger.info(f"GT shape: {gt.shape}")
-                # Temp fix for GT shape
-                gt = np.transpose(gt, (0, 2, 1))  
-
-                logger.info(f"label number Pred: {len(np.unique(pred))}")
-                logger.info(f"label count GT: {len(np.unique(gt))}")
-
                 unique_labels = np.unique(np.concatenate([pred.flatten(), gt.flatten()]))
                 unique_labels = unique_labels[unique_labels > 0]  # exclude background
                 
-                dice_scores = {}
+                # Count occurrences of each label and get top 5
+                label_counts = {}
                 for label in unique_labels:
+                    pred_count = np.sum(pred == label)
+                    gt_count = np.sum(gt == label)
+                    label_counts[label] = pred_count + gt_count
+                
+                # Sort by frequency and take top 5
+                top_labels = sorted(label_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                logger.info(f"Processing top 5 most frequent labels: {[int(label) for label, _ in top_labels]}")
+                
+                dice_scores = {}
+                for label, count in top_labels:
                     pred_binary = (pred == label).astype(np.float32)
                     gt_binary = (gt == label).astype(np.float32)
-
-                    logger.info(f"Pred binary sum: {pred_binary.sum()}")
-                    logger.info(f"GT binary sum: {gt_binary.sum()}")
+                    
+                    # Log indices containing this label value
+                    pred_indices = np.where(pred == label)
+                    gt_indices = np.where(gt == label)
+                    
+                    logger.info(f"Label {int(label)} - Pred voxels: {len(pred_indices[0])}, GT voxels: {len(gt_indices[0])}")
+                    if len(pred_indices[0]) > 0:
+                        logger.info(f"  Pred sample indices (first 10): {list(zip(pred_indices[0][:10], pred_indices[1][:10], pred_indices[2][:10]))}")
+                    if len(gt_indices[0]) > 0:
+                        logger.info(f"  GT sample indices (first 10): {list(zip(gt_indices[0][:10], gt_indices[1][:10], gt_indices[2][:10]))}")
                     
                     dice_score = calculate_dice(pred_binary, gt_binary)
                     dice_scores[f'class_{int(label)}'] = dice_score
                     logger.info(f"Dice score for class {int(label)}: {dice_score:.4f}")
                 
-                # Calculate mean Dice across all classes
+                # Calculate mean Dice across processed classes
                 mean_dice = np.mean(list(dice_scores.values()))
-                logger.info(f"Mean Dice score: {mean_dice:.4f}")
-                
+                logger.info(f"Mean Dice score (top 5 classes): {mean_dice:.4f}")
             else:
                 # Binary case
                 pred_binary = (pred > 0).astype(np.float32)
