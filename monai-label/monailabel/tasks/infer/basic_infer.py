@@ -590,6 +590,11 @@ class BasicInferTask(InferTask):
             gt_itk.CopyInformation(img)
             gt = sitk.GetArrayFromImage(gt_itk)
             
+            # Create a copy of pred for Dice calculation and flip Z axis if needed
+            pred_for_dice = pred.copy()
+            if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
+                logger.info(f"Flipping Z axis of prediction for Dice calculation: instanceNumber ({instanceNumber}) > instanceNumber2 ({instanceNumber2})")
+                pred_for_dice = np.flip(pred_for_dice, axis=0)  # Flip along Z axis (first dimension)
 
             # Calculate Dice coefficient between prediction and ground truth
             def calculate_dice(pred_mask, gt_mask, smooth=1e-6):
@@ -652,15 +657,15 @@ class BasicInferTask(InferTask):
                 return dice_score
             
             # Calculate Dice for each class/label if multi-class, or overall if binary
-            if len(np.unique(pred)) > 2 or len(np.unique(gt)) > 2:
+            if len(np.unique(pred_for_dice)) > 2 or len(np.unique(gt)) > 2:
                 # Multi-class case - calculate Dice for each class
-                unique_labels = np.unique(np.concatenate([pred.flatten(), gt.flatten()]))
+                unique_labels = np.unique(np.concatenate([pred_for_dice.flatten(), gt.flatten()]))
                 unique_labels = unique_labels[unique_labels > 0]  # exclude background
                 
                 # Count occurrences of each label and get top 5
                 label_counts = {}
                 for label in unique_labels:
-                    pred_count = np.sum(pred == label)
+                    pred_count = np.sum(pred_for_dice == label)
                     gt_count = np.sum(gt == label)
                     label_counts[label] = pred_count + gt_count
                 
@@ -670,11 +675,11 @@ class BasicInferTask(InferTask):
                 
                 dice_scores = {}
                 for label, count in top_labels:
-                    pred_binary = (pred == label).astype(np.float32)
+                    pred_binary = (pred_for_dice == label).astype(np.float32)
                     gt_binary = (gt == label).astype(np.float32)
                     
                     # Log indices containing this label value
-                    pred_indices = np.where(pred == label)
+                    pred_indices = np.where(pred_for_dice == label)
                     gt_indices = np.where(gt == label)
                     
                     logger.info(f"Label {int(label)} - Pred voxels: {len(pred_indices[0])}, GT voxels: {len(gt_indices[0])}")
@@ -714,7 +719,7 @@ class BasicInferTask(InferTask):
                 logger.info(f"Mean Dice score (top 5 classes): {mean_dice:.4f}")
             else:
                 # Binary case
-                pred_binary = (pred > 0).astype(np.float32)
+                pred_binary = (pred_for_dice > 0).astype(np.float32)
                 gt_binary = (gt > 0).astype(np.float32)
                 dice_score = calculate_dice(pred_binary, gt_binary)
                 logger.info(f"Dice score: {dice_score:.4f}")
