@@ -597,6 +597,17 @@ class BasicInferTask(InferTask):
             if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
                 logger.info(f"Flipping Z axis of prediction for Dice calculation: instanceNumber ({instanceNumber}) > instanceNumber2 ({instanceNumber2})")
                 pred_for_dice = np.flip(pred_for_dice, axis=0)  # Flip along Z axis (first dimension)
+            
+            # Merge all labels to binary (non-zero vs zero)
+            pred_for_dice_binary = (pred_for_dice > 0).astype(np.float32)
+            gt_binary = (gt > 0).astype(np.float32)
+            
+            logger.info(f"Binary pred non-zero voxels: {np.sum(pred_for_dice_binary)}")
+            logger.info(f"Binary GT non-zero voxels: {np.sum(gt_binary)}")
+            
+            # Calculate binary Dice score
+            dice_score = calculate_dice(pred_for_dice_binary, gt_binary)
+            logger.info(f"Binary Dice score (all labels merged): {dice_score:.4f}")
 
             # Calculate Dice coefficient between prediction and ground truth
             def calculate_dice(pred_mask, gt_mask, smooth=1e-6):
