@@ -605,10 +605,7 @@ class BasicInferTask(InferTask):
             logger.info(f"Binary pred non-zero voxels: {np.sum(pred_for_dice_binary)}")
             logger.info(f"Binary GT non-zero voxels: {np.sum(gt_binary)}")
             
-            # Calculate binary Dice score
-            dice_score = calculate_dice(pred_for_dice_binary, gt_binary)
-            logger.info(f"Binary Dice score (all labels merged): {dice_score:.4f}")
-
+            
             # Calculate Dice coefficient between prediction and ground truth
             def calculate_dice(pred_mask, gt_mask, smooth=1e-6):
                 """
@@ -669,6 +666,10 @@ class BasicInferTask(InferTask):
                 
                 return dice_score
             
+            # Calculate binary Dice score
+            dice_score = calculate_dice(pred_for_dice_binary, gt_binary)
+            logger.info(f"Binary Dice score (all labels merged): {dice_score:.4f}")
+
             # Calculate Dice for each class/label if multi-class, or overall if binary
             if len(np.unique(pred_for_dice)) > 2 or len(np.unique(gt)) > 2:
                 # Multi-class case - calculate Dice for each class
