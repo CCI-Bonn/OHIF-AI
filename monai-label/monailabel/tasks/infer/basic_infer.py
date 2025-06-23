@@ -580,7 +580,58 @@ class BasicInferTask(InferTask):
             pred_itk = sitk.GetImageFromArray(pred)
             pred_itk.CopyInformation(img)
             
+            gt_itk = sitk.ReadImage('/code/data/100101A_BraTS-seg.nii.gz')
+            gt = sitk.GetArrayFromImage(gt_itk)
+            
+            
+            # Calculate Dice coefficient between prediction and ground truth
+            def calculate_dice(pred_mask, gt_mask, smooth=1e-6):
+                """
+                Calculate Dice coefficient between two binary masks
+                Args:
+                    pred_mask: prediction mask (numpy array)
+                    gt_mask: ground truth mask (numpy array)
+                    smooth: smoothing factor to avoid division by zero
+                Returns:
+                    dice_score: float between 0 and 1
+                """
+                # Flatten arrays
+                pred_flat = pred_mask.flatten()
+                gt_flat = gt_mask.flatten()
+                
+                # Calculate intersection and union
+                intersection = (pred_flat * gt_flat).sum()
+                dice_score = (2.0 * intersection + smooth) / (pred_flat.sum() + gt_flat.sum() + smooth)
+                
+                return dice_score
+            
+            # Calculate Dice for each class/label if multi-class, or overall if binary
+            if len(np.unique(pred)) > 2 or len(np.unique(gt)) > 2:
+                # Multi-class case - calculate Dice for each class
+                unique_labels = np.unique(np.concatenate([pred.flatten(), gt.flatten()]))
+                unique_labels = unique_labels[unique_labels > 0]  # exclude background
+                
+                dice_scores = {}
+                for label in unique_labels:
+                    pred_binary = (pred == label).astype(np.float32)
+                    gt_binary = (gt == label).astype(np.float32)
+                    dice_score = calculate_dice(pred_binary, gt_binary)
+                    dice_scores[f'class_{int(label)}'] = dice_score
+                    print(f"Dice score for class {int(label)}: {dice_score:.4f}")
+                
+                # Calculate mean Dice across all classes
+                mean_dice = np.mean(list(dice_scores.values()))
+                print(f"Mean Dice score: {mean_dice:.4f}")
+                
+            else:
+                # Binary case
+                pred_binary = (pred > 0).astype(np.float32)
+                gt_binary = (gt > 0).astype(np.float32)
+                dice_score = calculate_dice(pred_binary, gt_binary)
+                print(f"Dice score: {dice_score:.4f}")
+
             sitk.WriteImage(pred_itk, '/code/sam.nii.gz')
+
 
             
             logger.info(f"Prompt info: {result_json}")

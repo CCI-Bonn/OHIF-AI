@@ -603,6 +603,8 @@ const commandsModule = ({
       //  });
       //  return response;
       //}
+      const start = Date.now();
+      
       const segs = servicesManager.services.segmentationService.getSegmentations()
       //remove old segmentationsFromViewport
       for (let seg of segs) {
@@ -901,6 +903,8 @@ const commandsModule = ({
             //  viewportGridService.setDisplaySetsForViewports(updatedViewports)
             //})
           }
+          const end = Date.now();
+          console.log(`Time taken: ${(end - start)/1000} Seconds`);
           return response;
         })
         .catch(function (error) {
