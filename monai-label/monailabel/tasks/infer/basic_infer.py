@@ -592,6 +592,8 @@ class BasicInferTask(InferTask):
             
             # Create a copy of pred for Dice calculation and flip Z axis if needed
             pred_for_dice = pred.copy()
+
+            pred_for_dice = np.transpose(pred_for_dice, (0, 2, 1))
             if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
                 logger.info(f"Flipping Z axis of prediction for Dice calculation: instanceNumber ({instanceNumber}) > instanceNumber2 ({instanceNumber2})")
                 pred_for_dice = np.flip(pred_for_dice, axis=0)  # Flip along Z axis (first dimension)
