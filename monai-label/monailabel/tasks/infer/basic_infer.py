@@ -611,6 +611,9 @@ class BasicInferTask(InferTask):
                 
                 # Calculate intersection and union
                 intersection = (pred_flat * gt_flat).sum()
+
+                logger.info(f"Intersection: {intersection}")
+                logger.info(f"Intersection indices: {np.where(pred_mask == gt_mask)}")
                 dice_score = (2.0 * intersection + smooth) / (pred_flat.sum() + gt_flat.sum() + smooth)
                 
                 return dice_score
