@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from glob import glob as glob
 import SimpleITK as sitk
 import numpy as np
+import nibabel as nib
 
 import torch
 from monai.data import decollate_batch
