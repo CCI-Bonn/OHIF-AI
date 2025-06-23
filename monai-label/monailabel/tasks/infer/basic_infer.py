@@ -620,6 +620,8 @@ class BasicInferTask(InferTask):
                 # Multi-class case - calculate Dice for each class
                 logger.info(f"Pred shape: {pred.shape}")
                 logger.info(f"GT shape: {gt.shape}")
+                # Temp fix for GT shape
+                gt = np.transpose(gt, (0, 2, 1))  
 
                 logger.info(f"label number Pred: {len(np.unique(pred))}")
                 logger.info(f"label count GT: {len(np.unique(gt))}")
