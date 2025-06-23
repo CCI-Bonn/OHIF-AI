@@ -583,7 +583,7 @@ class BasicInferTask(InferTask):
             gt_itk = sitk.ReadImage('/code/data/100101A_BraTS-seg.nii.gz')
             gt = sitk.GetArrayFromImage(gt_itk)
             
-            
+
             # Calculate Dice coefficient between prediction and ground truth
             def calculate_dice(pred_mask, gt_mask, smooth=1e-6):
                 """
@@ -617,18 +617,18 @@ class BasicInferTask(InferTask):
                     gt_binary = (gt == label).astype(np.float32)
                     dice_score = calculate_dice(pred_binary, gt_binary)
                     dice_scores[f'class_{int(label)}'] = dice_score
-                    print(f"Dice score for class {int(label)}: {dice_score:.4f}")
+                    logger.info(f"Dice score for class {int(label)}: {dice_score:.4f}")
                 
                 # Calculate mean Dice across all classes
                 mean_dice = np.mean(list(dice_scores.values()))
-                print(f"Mean Dice score: {mean_dice:.4f}")
+                logger.info(f"Mean Dice score: {mean_dice:.4f}")
                 
             else:
                 # Binary case
                 pred_binary = (pred > 0).astype(np.float32)
                 gt_binary = (gt > 0).astype(np.float32)
                 dice_score = calculate_dice(pred_binary, gt_binary)
-                print(f"Dice score: {dice_score:.4f}")
+                logger.info(f"Dice score: {dice_score:.4f}")
 
             sitk.WriteImage(pred_itk, '/code/sam.nii.gz')
 
