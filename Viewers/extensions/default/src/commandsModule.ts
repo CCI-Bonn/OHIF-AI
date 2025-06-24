@@ -653,7 +653,7 @@ const commandsModule = ({
 
       const lassos = measurementService.getMeasurements()
         .filter(e => { 
-          return e.toolName === 'SplineROI2' 
+          return e.toolName === 'PlanarFreehandROI2' 
         })
         .map(e => { 
           return Object.values(e.data)[0].boundary 
