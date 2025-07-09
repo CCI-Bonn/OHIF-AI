@@ -3,6 +3,7 @@ import { utils, Types } from '@ohif/core';
 import { ContextMenuController, defaultContextMenu } from './CustomizableContextMenu';
 import DicomTagBrowser from './DicomTagBrowser/DicomTagBrowser';
 import reuseCachedLayouts from './utils/reuseCachedLayouts';
+import { createReportDialogPrompt } from '@ohif/extension-default';
 import findViewportsByPosition, {
   findOrCreateViewport as layoutFindOrCreate,
 } from './findViewportsByPosition';
@@ -17,10 +18,10 @@ import { useToggleHangingProtocolStore } from './stores/useToggleHangingProtocol
 import { useViewportsByPositionStore } from './stores/useViewportsByPositionStore';
 import { useToggleOneUpViewportGridStore } from './stores/useToggleOneUpViewportGridStore';
 
-import { Enums as csToolsEnums, Types as cstTypes } from '@cornerstonejs/tools';
+import { Enums as csToolsEnums, Types as cstTypes, segmentation as csToolsSegmentation } from '@cornerstonejs/tools';
 import { getNextColorLUTIndex } from '@cornerstonejs/tools/segmentation/getNextColorLUTIndex';
 import { addColorLUT } from '@cornerstonejs/tools/segmentation/addColorLUT';
-import { cache, imageLoader, eventTarget,metaData, Types as csTypes } from '@cornerstonejs/core';
+import { cache, imageLoader, eventTarget,metaData, Types as csTypes, utilities as csUtils } from '@cornerstonejs/core';
 import { adaptersSEG } from '@cornerstonejs/adapters';
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
@@ -53,6 +54,7 @@ const commandsModule = ({
     uiNotificationService,
     viewportGridService,
     displaySetService,
+    uiDialogService,
   } = servicesManager.services;
 
   // Define a context menu controller for use with any context menus
@@ -603,6 +605,16 @@ const commandsModule = ({
       //  });
       //  return response;
       //}
+
+      const promptResult = await createReportDialogPrompt(uiDialogService, {
+        extensionManager,
+      });
+      if (promptResult.action !== 1 && !promptResult.value) {
+        return;
+      }
+      const { value } = promptResult;
+      const user_name = value;
+      console.log(value);
       const start = Date.now();
       
       const segs = servicesManager.services.segmentationService.getSegmentations()
@@ -656,16 +668,18 @@ const commandsModule = ({
           return e.toolName === 'PlanarFreehandROI2' 
         })
         .map(e => { 
-          return Object.values(e.data)[0].boundary 
+          return Object.values(e.data)[0]?.boundary 
       })
+      .filter(Boolean)
 
       const scribbles = measurementService.getMeasurements()
         .filter(e => { 
           return e.toolName === 'PlanarFreehandROI2' 
         })
         .map(e => { 
-          return Object.values(e.data)[0].scribble 
+          return Object.values(e.data)[0]?.scribble 
       })
+      .filter(Boolean)
 
       const text_prompts = measurementService.getMeasurements()
       .filter(e => { return e.toolName === 'Probe' })
@@ -686,6 +700,7 @@ const commandsModule = ({
         texts: text_prompts,
         lassos: lassos,
         scribbles: scribbles,
+        user_name: user_name
       };
 
       if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj!==undefined){
@@ -711,8 +726,116 @@ const commandsModule = ({
               duration: 2000,
             });
             const arrayBuffer = response.data
-            const uint8 = new Uint8Array(arrayBuffer);
+            //const uint8 = new Uint8Array(arrayBuffer);
+
+            let segmentationId = `${csUtils.uuidv4()}`
+            let imageIds = currentDisplaySets.imageIds
+
+            const results = await adaptersSEG.Cornerstone3D.Segmentation.generateToolState(
+              imageIds,
+              arrayBuffer,
+              metaData
+            );
             
+            const derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+            const segImageIds = derivedImages.map(image => image.imageId);
+
+          const labelmapBufferArray = results.labelmapBufferArray  
+          // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
+          const volumeScalarData = new Uint8Array(labelmapBufferArray[0]);
+
+          // We should parse the segmentation as separate slices to support overlapping segments.
+          // This parsing should occur in the CornerstoneJS library adapters.
+          for (let i = 0; i < derivedImages.length; i++) {
+            const voxelManager = derivedImages[i]
+              .voxelManager as csTypes.IVoxelManager<number>;
+            const scalarData = voxelManager.getScalarData();
+            const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
+            scalarData.set(sliceData);
+            voxelManager.setScalarData(scalarData);
+          }
+
+          const segmentsInfo = results.segMetadata.data;
+
+          const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
+          const colorLUT = [];
+
+          segmentsInfo.forEach((segmentInfo, index) => {
+            if (index === 0) {
+              colorLUT.push([0, 0, 0, 0]);
+              return;
+            }
+
+            const {
+              SegmentedPropertyCategoryCodeSequence,
+              SegmentNumber,
+              SegmentLabel,
+              SegmentAlgorithmType,
+              SegmentAlgorithmName,
+              SegmentDescription,
+              SegmentedPropertyTypeCodeSequence,
+              rgba,
+            } = segmentInfo;
+
+            colorLUT.push(rgba);
+
+            const segmentIndex = Number(SegmentNumber);
+
+            const centroid = results.centroids?.get(index);
+            const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
+            const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
+
+            segments[segmentIndex] = {
+              segmentIndex,
+              label: SegmentLabel || `Segment ${SegmentNumber}`,
+              locked: false,
+              active: false,
+              cachedStats: {
+                center: {
+                  image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
+                  world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
+                },
+                modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
+                category: SegmentedPropertyCategoryCodeSequence
+                  ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
+                  : '',
+                type: SegmentedPropertyTypeCodeSequence
+                  ? SegmentedPropertyTypeCodeSequence.CodeMeaning
+                  : '',
+                algorithmType: SegmentAlgorithmType,
+                algorithmName: SegmentAlgorithmName,
+                description: SegmentDescription,
+              },
+            };
+          });
+
+            csToolsSegmentation.addSegmentations([
+              {
+                  segmentationId,
+                  representation: {
+                      type: LABELMAP,
+                      data: {
+                        imageIds: segImageIds,
+                        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
+                        referencedImageIds: imageIds,
+
+                      }
+                  },
+                  config: {
+                    cachedStats: results.segMetadata,
+                    label: currentDisplaySets.SeriesDescription,
+                    segments,
+                  },
+              }
+          ]);
+          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
+            segmentationId: segmentationId,
+          });
+
+          const end = Date.now();
+          console.log(`Time taken: ${(end - start)/1000} Seconds`);
+          return response;
+          
             let segDisplaySet = servicesManager.services.displaySetService.getActiveDisplaySets().filter(e => {
                 return (e.SeriesDescription.includes('nnInteractive_' + currentDisplaySets.SeriesDescription)) && (e.SeriesDate == '20250623');
               })[0];

@@ -113,19 +113,19 @@ function modeFactory({ modeConfiguration }) {
         'Capture',
         'Layout',
         'Crosshairs',
-        'Probe',
-        'Probe2',
-        'RectangleROI2',
-        'SplineROI2',
-        'PlanarFreehandROI2',
-        //'sam2_one',
-        'sam2',
-        'saveAndNextObj',
-        'jumpToSegment',
-        'toggleCurrentSegment',
+        //'Probe',
+        //'Probe2',
+        //'RectangleROI2',
+        ////'SplineROI2',
+        //'PlanarFreehandROI2',
+        ////'sam2_one',
+        //'sam2',
+        //'saveAndNextObj',
+        //'jumpToSegment',
+        //'toggleCurrentSegment',
         'MoreTools',
       ]);
-
+      toolbarService.createButtonSection('aiToolbox', ['Probe','Probe2','RectangleROI2','PlanarFreehandROI2','sam2','saveAndNextObj','jumpToSegment','toggleCurrentSegment']);
       toolbarService.createButtonSection('segmentationToolbox', ['BrushTools', 'Shapes']);
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.
@@ -136,15 +136,15 @@ function modeFactory({ modeConfiguration }) {
             sourceEvents: [segmentationService.EVENTS.SEGMENTATION_ADDED],
           },
         ]),
-        ...panelService.addActivatePanelTriggers(tracked.measurements, [
-          {
-            sourcePubSubService: measurementService,
-            sourceEvents: [
-              measurementService.EVENTS.MEASUREMENT_ADDED,
-              measurementService.EVENTS.RAW_MEASUREMENT_ADDED,
-            ],
-          },
-        ]),
+        //...panelService.addActivatePanelTriggers(tracked.measurements, [
+        //  {
+        //    sourcePubSubService: measurementService,
+        //    sourceEvents: [
+        //      measurementService.EVENTS.MEASUREMENT_ADDED,
+        //      measurementService.EVENTS.RAW_MEASUREMENT_ADDED,
+        //    ],
+        //  },
+        //]),
       ];
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
@@ -194,7 +194,7 @@ function modeFactory({ modeConfiguration }) {
             id: ohif.layout,
             props: {
               leftPanels: [tracked.thumbnailList],
-              rightPanels: [cornerstone.segmentation, tracked.measurements],
+              rightPanels: [cornerstone.segmentation],//, tracked.measurements],
               rightPanelClosed: true,
               viewports: [
                 {

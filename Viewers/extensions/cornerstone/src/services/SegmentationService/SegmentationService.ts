@@ -423,7 +423,7 @@ class SegmentationService extends PubSubService {
     }));
 
     // Filter out any unexpected undefined entries that may be present in the segmentation metadata array
-    const segmentsInfo = (segDisplaySet.segMetadata?.data ?? []).filter(Boolean);
+    const segmentsInfo = (segDisplaySet.segMetadata?.data ?? [])//.filter(Boolean);
 
     const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
     const colorLUT = [];
@@ -513,7 +513,7 @@ class SegmentationService extends PubSubService {
     ) {
       segDisplaySet.firstSegmentedSliceImageId = segDisplaySet.images[currentImageIdIndex].imageId;
     } else {
-      segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
+    segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
     }
     // assign the first non zero voxel image id to the segDisplaySet
     //segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;

@@ -35,6 +35,16 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
   const wrappedPanelSegmentationWithTools = ({ configuration }) => {
     return (
       <>
+       <Toolbox
+          commandsManager={commandsManager}
+          servicesManager={servicesManager}
+          extensionManager={extensionManager}
+          buttonSectionId="aiToolbox"
+          title="AI Tools"
+          configuration={{
+            ...configuration,
+          }}
+        />
         <Toolbox
           commandsManager={commandsManager}
           servicesManager={servicesManager}

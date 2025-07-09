@@ -25,9 +25,11 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotat
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/RectangleROITool.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/SplineROITool.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/PlanarFreehandROITool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/renderMethods.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/drawLoop.js
 
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
+RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 #RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/ProbeTool.js
 #RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
 
@@ -49,13 +51,14 @@ COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/too
 COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 COPY ./backup/esm/SplineROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 COPY ./backup/esm/PlanarFreehandROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/renderMethods.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
 COPY ./backup/esm/drawLoop.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
 
 #COPY ./backup/cjs/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/
 COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 
 COPY ./backup/esm/SegmentationRenderingEngine.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/
-
+COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 #COPY ./backup/cjs/sortImageIdsAndGetSpacing.js /usr/src/app/node_modules/@cornerstonejs/core/dist/cjs/utilities/
 #COPY ./backup/esm/sortImageIdsAndGetSpacing.js /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/
 
