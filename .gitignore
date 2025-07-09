@@ -4,6 +4,10 @@ Viewers/platform/app/node_modules
 Viewers/platform/cli/node_modules
 Viewers/platform/core/node_modules
 Viewers/addOns/externals/devDependencies/node_modules
+
+# Secrets
+Viewers/platform/app/.recipes/Nginx-Orthanc/config/.htpasswd
+
 # Output
 Viewers/build
 Viewers/dist
