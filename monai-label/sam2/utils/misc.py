@@ -336,7 +336,7 @@ def load_medical_slices(
     #else:
     #    raise NotImplementedError("Only JPEG frames are supported at this moment")
 
-    img = sitk.ReadImage(video_path)
+    img = video_path if isinstance(video_path, sitk.Image) else sitk.ReadImage(video_path)
     img_z = img.GetSize()[2]
     img_y = img.GetSize()[1]
     img_x = img.GetSize()[0]
@@ -360,21 +360,21 @@ def load_medical_slices(
 
     #img_npy = img_npy.resize((512, 512))
 
-    file_name = video_path.split('/')[-1]
-
-    frame_names = []
-
-    for i in range(img_z):
-        frame_names.append(f"{file_name}_{i}")
-    #frame_names = [
-    #    p
-    #    for p in os.listdir(jpg_folder)
-    #    if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
-    #]
-    #frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
-    num_frames = len(frame_names)
-    if num_frames == 0:
-        raise RuntimeError(f"no images found in {jpg_folder}")
+    #file_name = video_path.split('/')[-1]
+#
+    #frame_names = []
+#
+    #for i in range(img_z):
+    #    frame_names.append(f"{file_name}_{i}")
+    ##frame_names = [
+    ##    p
+    ##    for p in os.listdir(jpg_folder)
+    ##    if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
+    ##]
+    ##frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
+    #num_frames = len(frame_names)
+    #if num_frames == 0:
+    #    raise RuntimeError(f"no images found in {jpg_folder}")
     #For CT normalization percentile (0.5, 99.5)
     img_npy = img_npy.astype(float)
     percentile_00_5,percentile_99_5 = np.percentile(img_npy, np.array((0.5, 99.5)))

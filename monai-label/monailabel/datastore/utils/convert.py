@@ -129,30 +129,59 @@ def binary_to_image(reference_image, label, dtype=np.uint8, file_ext=".nii.gz"):
     return output_file
 
 
-def nifti_to_dicom_seg(series_dir, label, prompt_json, file_ext="*", use_itk=True) -> str:
+def nifti_to_dicom_seg(series_dir, label, final_result_json, file_ext="*", use_itk=True) -> str:
     start = time.time()
-
+    #reader.SetFileNames(dicom_filenames)
+    reader = SimpleITK.ImageSeriesReader()
+    dicom_filenames = reader.GetGDCMSeriesFileNames(series_dir)
     # Read source Images
     series_dir = pathlib.Path(series_dir)
     image_files = series_dir.glob(file_ext)
     image_datasets = [dcmread(str(f), stop_before_pixels=True) for f in image_files]
+
+
+    reader.SetFileNames(dicom_filenames)            
+    image = reader.Execute()
     logger.info(f"Total Source Images: {len(image_datasets)}")
     
     if 0x0008103e in image_datasets[0].keys():
         image_series_desc = image_datasets[0][0x0008103e].value
     else:
         image_series_desc = ""
+    pre_path = label.split('/predictions/')[0]
+    file_name = label.split('/predictions/')[-1]
+    #sam_label_np, _ = LoadImage(image_only=False)(pre_path+'/predictions/'+'sam_'+file_name)
+    #nninter_label_np, _ = LoadImage(image_only=False)(pre_path+'/predictions/'+'nninter_'+file_name)
+    sam_label_itk = SimpleITK.ReadImage(pre_path+'/predictions/'+'sam_'+image_series_desc+'_'+final_result_json["user_name"]+'.nii.gz')
+    nninter_label_itk = SimpleITK.ReadImage(pre_path+'/predictions/'+'nninter_'+image_series_desc+'_'+final_result_json["user_name"]+'.nii.gz')
+    
+    sam_label_np = SimpleITK.GetArrayFromImage(sam_label_itk)
+    nninter_label_np = SimpleITK.GetArrayFromImage(nninter_label_itk)
 
-    label_np, meta_dict = LoadImage(image_only=False)(label)
+    nninter_label_np[nninter_label_np != 0] = 2
+    nninter_unique_labels = np.unique(nninter_label_np.flatten()).astype(np.int_)
+    nninter_unique_labels = nninter_unique_labels[nninter_unique_labels != 0]
+    logger.info(f"nninter_unique_labels: {nninter_unique_labels}")
+    sam_unique_labels = np.unique(sam_label_np.flatten()).astype(np.int_)
+    sam_unique_labels = sam_unique_labels[sam_unique_labels != 0]
+    logger.info(f"sam_unique_labels: {sam_unique_labels}")
+    label_np = sam_label_np + nninter_label_np
+    logger.info(f"sam_label_np.shape: {sam_label_np.shape}")
+    logger.info(f"nninter_label_np.shape: {nninter_label_np.shape}")
+    logger.info(f"label_np.shape: {label_np.shape}")
+    #label_np, meta_dict = LoadImage(image_only=False)(label)
+    label_itk = SimpleITK.GetImageFromArray(label_np)
+    label_itk.CopyInformation(image)
+    SimpleITK.WriteImage(label_itk, label)
     unique_labels = np.unique(label_np.flatten()).astype(np.int_)
     unique_labels = unique_labels[unique_labels != 0]
-
+    logger.info(f"unique_labels: {unique_labels}")
     #info = label_info[0] if label_info and 0 < len(label_info) else {}
     info = {}
     #model_name = info.get("model_name", "Totalsegmentor")
-    if "sam" in label:
-        label_names = ["sam_label"]
-        image_series_desc = "nnInteractive_"+ image_series_desc#"SAM2_"+ image_series_desc
+    if "/predictions/" in label:
+        label_names = ["sam_pred", "nninter_pred", "overlap"]
+        image_series_desc = "Pred_"+ image_series_desc#"SAM2_"+ image_series_desc
     else:
         label_names = np.load('/code/labelname.npy').tolist()
         image_series_desc = "Total_"+ image_series_desc
@@ -161,13 +190,18 @@ def nifti_to_dicom_seg(series_dir, label, prompt_json, file_ext="*", use_itk=Tru
     for i, idx in enumerate(unique_labels):
         #info = label_info[i] if label_info and i < len(label_info) else {}
         label_info = {}
-        name = label_names[i]
-        description = label_info.get("description", json.dumps(prompt_json))
+        name = label_names[idx-1]
+        description = label_info.get("description", json.dumps(final_result_json["prompt_info"]))
         rgb = list(np.random.random(size=3) * 256)
         rgb = [int(x) for x in rgb]
 
         logger.info(f"{i} => {idx} => {name}")
 
+        if idx == 1:
+            elapsed = final_result_json["sam_elapsed"]
+        else:
+            elapsed = final_result_json["nninter_elapsed"]
+        logger.info(f"{idx}_{name}_elapsed: {elapsed}")
         segment_attribute = label_info.get(
             "segmentAttribute",
             {
@@ -175,7 +209,7 @@ def nifti_to_dicom_seg(series_dir, label, prompt_json, file_ext="*", use_itk=Tru
                 "SegmentLabel": name,
                 "SegmentDescription": description,
                 "SegmentAlgorithmType": "AUTOMATIC",
-                "SegmentAlgorithmName": "MONAILABEL",
+                "SegmentAlgorithmName": elapsed,
                 "SegmentedPropertyCategoryCodeSequence": {
                     "CodeValue": "123037004",
                     "CodingSchemeDesignator": "SCT",

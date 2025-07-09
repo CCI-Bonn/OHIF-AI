@@ -1,4 +1,5 @@
 import math
+import numpy as np
 
 def clean_and_densify_polyline(polyline, max_segment_length=1):
     if not polyline or len(polyline) < 2:
@@ -73,3 +74,71 @@ def get_scanline_filled_points_3d(polyline):
                 points.append([x, y, z])
 
     return points
+
+# Sphere mask of radius = 1
+def spherical_kernel(radius=1):
+    size = 2 * radius + 1  # → 3 for radius=1
+    center = radius
+    zz, yy, xx = np.ogrid[:size, :size, :size]
+    dist = np.sqrt((zz - center)**2 + (yy - center)**2 + (xx - center)**2)
+    return (dist <= radius).astype(np.uint8)
+
+# Calculate Dice coefficient between prediction and ground truth
+def calculate_dice(pred_mask, gt_mask, smooth=1e-6):
+    """
+    Calculate Dice coefficient between two binary masks
+    Args:
+        pred_mask: prediction mask (numpy array)
+        gt_mask: ground truth mask (numpy array)
+        smooth: smoothing factor to avoid division by zero
+    Returns:
+        dice_score: float between 0 and 1
+    """
+    # Flatten arrays
+    pred_flat = pred_mask.flatten()
+    gt_flat = gt_mask.flatten()
+
+    logger.info(f"Pred: {pred_flat.sum()}")
+    logger.info(f"GT: {gt_flat.sum()}")
+    
+    # Comprehensive intersection analysis
+    # Method 1: Traditional intersection (both masks have same non-zero value)
+    intersection_traditional = (pred_flat * gt_flat).sum()
+    
+    # Method 2: Any overlap (both masks are non-zero, regardless of exact value)
+    pred_nonzero = (pred_flat > 0).astype(np.float32)
+    gt_nonzero = (gt_flat > 0).astype(np.float32)
+    intersection_any_overlap = (pred_nonzero * gt_nonzero).sum()
+    
+    # Method 3: Exact value matches
+    exact_matches = (pred_mask == gt_mask).sum()
+    
+    # Method 4: Check specific overlapping regions
+    overlap_indices = np.where((pred_mask > 0) & (gt_mask > 0))
+    overlap_count = len(overlap_indices[0])
+    
+    logger.info(f"Traditional intersection (same values): {intersection_traditional}")
+    logger.info(f"Any overlap (both non-zero): {intersection_any_overlap}")
+    logger.info(f"Exact value matches: {exact_matches}")
+    logger.info(f"Overlapping voxels count: {overlap_count}")
+    
+    if overlap_count > 0:
+        # Sample overlapping voxels to see what values they have
+        sample_size = min(10, overlap_count)
+        sample_indices = np.random.choice(overlap_count, sample_size, replace=False)
+        
+        pred_values = pred_mask[overlap_indices[0][sample_indices], 
+                                overlap_indices[1][sample_indices], 
+                                overlap_indices[2][sample_indices]]
+        gt_values = gt_mask[overlap_indices[0][sample_indices], 
+                            overlap_indices[1][sample_indices], 
+                            overlap_indices[2][sample_indices]]
+        
+        logger.info(f"Sample overlapping voxel values:")
+        for i in range(sample_size):
+            logger.info(f"  Index {sample_indices[i]}: Pred={pred_values[i]}, GT={gt_values[i]}")
+    
+    # Use any overlap for Dice calculation (more meaningful for segmentation)
+    dice_score = (2.0 * intersection_any_overlap + smooth) / (pred_nonzero.sum() + gt_nonzero.sum() + smooth)
+    
+    return dice_score

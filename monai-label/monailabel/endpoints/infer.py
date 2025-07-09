@@ -211,23 +211,23 @@ def run_inference(
         if 0x0008103e in dcm_img_sample.keys():
             image_series_desc = dcm_img_sample[0x0008103e].value
         image_series_desc = "nnInteractive_"+ image_series_desc
-        existing_instances = instance.datastore()._client.search_for_series(search_filters={"SeriesDate": date.today().strftime("%Y%m%d"), "SeriesDescription": image_series_desc})
+        #existing_instances = instance.datastore()._client.search_for_series(search_filters={"SeriesDate": date.today().strftime("%Y%m%d"), "SeriesDescription": image_series_desc})
         old_response = 0
-        if len(existing_instances)>500:
-            res = instance.datastore()._client._http_post("http://ohif_orthanc:1026/pacs/tools/find",'{{"Level":"Series","Query":{{"SeriesInstanceUID":"{seriesID}"}}, "Expand":true}}'.format(seriesID=existing_instances[0]['0020000E']['Value'][0]), headers={'Content-Type': 'text/plain'})
-            if res.status_code == 200:
-                del_series_id = json.loads(res.content)[0]['ID']
-                del_instance_id = json.loads(res.content)[0]['Instances'][0]
-                if 'nextObj' in params:
-                    old_response = instance.datastore()._client._http_get(f"http://ohif_orthanc:1026/pacs/instances/{del_instance_id}/file")
-                    if old_response.status_code == 200:
-                        # Load DICOM data from the binary response content
-                        dicom_old_file = io.BytesIO(old_response.content)
-                    else:
-                        raise Exception(f"Failed to retrieve DICOM file: {old_response.status_code}")    
-                res_del = instance.datastore()._client._http_delete(f"http://ohif_orthanc:1026/pacs/series/{del_series_id}")
-                if res_del.status_code != 200:
-                    breakpoint()
+        #if len(existing_instances)>500:
+        #    res = instance.datastore()._client._http_post("http://ohif_orthanc:1026/pacs/tools/find",'{{"Level":"Series","Query":{{"SeriesInstanceUID":"{seriesID}"}}, "Expand":true}}'.format(seriesID=existing_instances[0]['0020000E']['Value'][0]), headers={'Content-Type': 'text/plain'})
+        #    if res.status_code == 200:
+        #        del_series_id = json.loads(res.content)[0]['ID']
+        #        del_instance_id = json.loads(res.content)[0]['Instances'][0]
+        #        if 'nextObj' in params:
+        #            old_response = instance.datastore()._client._http_get(f"http://ohif_orthanc:1026/pacs/instances/{del_instance_id}/file")
+        #            if old_response.status_code == 200:
+        #                # Load DICOM data from the binary response content
+        #                dicom_old_file = io.BytesIO(old_response.content)
+        #            else:
+        #                raise Exception(f"Failed to retrieve DICOM file: {old_response.status_code}")    
+        #        res_del = instance.datastore()._client._http_delete(f"http://ohif_orthanc:1026/pacs/series/{del_series_id}")
+        #        if res_del.status_code != 200:
+        #            breakpoint()
         dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, prompt_json, use_itk=True)
         # For nextObj, keep the old dicom SEG and augment with recent predicted dicom SEG
         if old_response != 0:

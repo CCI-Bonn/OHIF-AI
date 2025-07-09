@@ -36,8 +36,9 @@ from monailabel.interfaces.utils.transform import dump_data, run_transforms
 from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
-from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline
-#from sam2.build_sam import build_sam2_video_predictor
+from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline, spherical_kernel, calculate_dice
+
+from sam2.build_sam import build_sam2_video_predictor
 
 #from mmdet.apis import DetInferencer
 #from mmdet.evaluation import get_classes
@@ -47,8 +48,8 @@ import requests
 from PIL import Image
 #from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection 
 
-#sam2_checkpoint = "/code/checkpoints/sam2_hiera_large.pt"
-#model_cfg = "sam2_hiera_l.yaml"
+sam2_checkpoint = "/code/checkpoints/sam2_hiera_large.pt"
+model_cfg = "sam2_hiera_l.yaml"
 
 #from transformers import BertConfig, BertModel
 #from transformers import AutoTokenizer
@@ -102,7 +103,7 @@ checkpoint = '/code/checkpoints/best_coco_bbox_mAP_epoch_11_dilated_b_l_k_curr_t
 # Initialize the DetInferencer
 #inferencer = DetInferencer(model=config_path, weights=checkpoint, palette='random')
 
-#predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
+predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
 
 logger = logging.getLogger(__name__)
 
@@ -377,11 +378,12 @@ class BasicInferTask(InferTask):
         callback_run_post_transforms = callbacks.get(CallBackTypes.POST_TRANSFORMS)
         callback_writer = callbacks.get(CallBackTypes.WRITER)
 
-        start = time.time()
+        final_result_json = {}
         result_json = {}
         nnInter = True
-
+        img = None
         if nnInter:
+            start = time.time()
             dicom_dir = data['image'].split('.nii.gz')[0]
 
             reader = sitk.ImageSeriesReader()
@@ -399,6 +401,29 @@ class BasicInferTask(InferTask):
                 instanceNumber2 = dcm_img_sample_2[0x00200013].value
             logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
 
+            contrast_center = None
+            contrast_window = None
+            
+
+            if 0x00281050 in dcm_img_sample.keys():
+                contrast_center = dcm_img_sample[0x00281050].value
+            
+            if 0x00281051 in dcm_img_sample.keys():
+                contrast_window = dcm_img_sample[0x00281051].value
+            
+
+            if contrast_window != None and contrast_center !=None:
+                #breakpoint()
+                if contrast_window.__class__.__name__ == 'MultiValue':
+                    contrast_window = contrast_window[0]
+                if contrast_center.__class__.__name__ == 'MultiValue':
+                    contrast_center = contrast_center[0]
+
+            image_series_desc = ""
+
+            if 0x0008103e in dcm_img_sample.keys():
+                image_series_desc = dcm_img_sample[0x0008103e].value
+                
             # --- Load Input Image (Example with SimpleITK) ---
             reader.SetFileNames(dicom_filenames)
             #reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
@@ -419,7 +444,14 @@ class BasicInferTask(InferTask):
             if img_np.ndim != 4:
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
             
-            if session.original_image_shape == None or not np.array_equal(img_np.shape,session.original_image_shape):
+            if img_np.ndim ==4: #session.original_image_shape == None or not np.array_equal(img_np.shape,session.original_image_shape):
+                if contrast_window != None and contrast_center !=None:
+                    img_np = img_np.astype(float)
+                    np.clip(img_np, contrast_center-contrast_window/2, contrast_center+contrast_window/2, out=img_np)   
+                    img_np = (img_np - (contrast_center-contrast_window/2))/contrast_window * 255
+                    img_np = img_np.astype(np.uint8)
+                img_itk = sitk.GetImageFromArray(img_np[0])
+                sitk.WriteImage(img_itk, f'/code/predictions/image_{image_series_desc}_{data["user_name"]}.nii.gz')
                 session.set_image(img_np)
                 session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
                 logger.info("Only first time, no image at nnInter or iamge changed")
@@ -516,17 +548,38 @@ class BasicInferTask(InferTask):
                 for scribble in data['scribbles']:
                     scribble = clean_and_densify_polyline(scribble)
                     scribbleMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
-                    filled_indices = np.asarray(scribble)
+
+                    filled_indices = np.round(np.asarray(scribble)).astype(int)
+
+                    #logger.info(f"filled_indices: {filled_indices}")
+                    #logger.info(f"filled_indices shape: {filled_indices.shape}")
                     if instanceNumber > instanceNumber2:
-                        filled_indices[:, 2]=img_np.shape[1]-1 - filled_indices[:, 2]
-                    x, y, z = filled_indices[:, 0], filled_indices[:, 1], filled_indices[:, 2]
-                    valid = (
-                        (x >= 0) & (x < img_np.shape[3]) &
-                        (y >= 0) & (y < img_np.shape[2]) &
-                        (z >= 0) & (z < img_np.shape[1])
-                    )
-                    # Apply only valid indices
-                    scribbleMask[z[valid], y[valid], x[valid]] = 1
+                        filled_indices[:, 2]=img_np.shape[1]-1 -filled_indices[:, 2]
+                    
+                    # Sphere of radius 1
+                    kernel = spherical_kernel(radius=1)
+                    kz, ky, kx = kernel.shape
+                    offset_z, offset_y, offset_x = kz // 2, ky // 2, kx // 2
+
+                    for x, y, z in filled_indices:
+                        z0, z1 = z - offset_z, z + offset_z + 1
+                        y0, y1 = y - offset_y, y + offset_y + 1
+                        x0, x1 = x - offset_x, x + offset_x + 1
+
+                        # clip bounds to mask
+                        z0c, z1c = max(z0, 0), min(z1, scribbleMask.shape[0])
+                        y0c, y1c = max(y0, 0), min(y1, scribbleMask.shape[1])
+                        x0c, x1c = max(x0, 0), min(x1, scribbleMask.shape[2])
+
+                        # compute corresponding kernel slices
+                        kz0, kz1 = z0c - z0, z1c - z0
+                        ky0, ky1 = y0c - y0, y1c - y0
+                        kx0, kx1 = x0c - x0, x1c - x0
+
+                        #if z0 < 0 or y0 < 0 or x0 < 0 or z1 > scribbleMask.shape[0] or y1 > scribbleMask.shape[1] or x1 > scribbleMask.shape[2]:
+                        #    continue  # Skip out-of-bounds
+                        scribbleMask[z0c:z1c, y0c:y1c, x0c:x1c] |= kernel[kz0:kz1, ky0:ky1, kx0:kx1]
+                    
                     if not any(np.array_equal(scribbleMask,x) for x in self._session_used_interactions["scribbles"]):
                         session.add_scribble_interaction(scribbleMask, include_interaction=True)
                         logger.info("Add a scribble")
@@ -586,173 +639,118 @@ class BasicInferTask(InferTask):
             #affine = nifti_img.affine
             #logger.info(f"Affine matrix:\n {affine}")
     
-            gt_itk = sitk.ReadImage('/code/data/100101A_BraTS-seg.nii.gz')
-            gt_itk.CopyInformation(img)
-            gt = sitk.GetArrayFromImage(gt_itk)
+            #gt_itk = sitk.ReadImage('/code/data/100101A_BraTS-seg.nii.gz')
+            #gt_itk.CopyInformation(img)
+            #gt = sitk.GetArrayFromImage(gt_itk)
+            #
+            ## Create a copy of pred for Dice calculation and flip Z axis if needed
+            #pred_for_dice = pred.copy()
+#
+            #pred_for_dice = np.transpose(pred_for_dice, (0, 2, 1))
+            #if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
+            #    logger.info(f"Flipping Z axis of prediction for Dice calculation: instanceNumber ({instanceNumber}) > instanceNumber2 ({instanceNumber2})")
+            #    pred_for_dice = np.flip(pred_for_dice, axis=0)  # Flip along Z axis (first dimension)
+            #
+            ## Merge all labels to binary (non-zero vs zero)
+            #pred_for_dice_binary = (pred_for_dice > 0).astype(np.float32)
+            #gt_binary = (gt > 0).astype(np.float32)
+            #
+            #logger.info(f"Binary pred non-zero voxels: {np.sum(pred_for_dice_binary)}")
+            #logger.info(f"Binary GT non-zero voxels: {np.sum(gt_binary)}")
             
-            # Create a copy of pred for Dice calculation and flip Z axis if needed
-            pred_for_dice = pred.copy()
-
-            pred_for_dice = np.transpose(pred_for_dice, (0, 2, 1))
-            if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
-                logger.info(f"Flipping Z axis of prediction for Dice calculation: instanceNumber ({instanceNumber}) > instanceNumber2 ({instanceNumber2})")
-                pred_for_dice = np.flip(pred_for_dice, axis=0)  # Flip along Z axis (first dimension)
-            
-            # Merge all labels to binary (non-zero vs zero)
-            pred_for_dice_binary = (pred_for_dice > 0).astype(np.float32)
-            gt_binary = (gt > 0).astype(np.float32)
-            
-            logger.info(f"Binary pred non-zero voxels: {np.sum(pred_for_dice_binary)}")
-            logger.info(f"Binary GT non-zero voxels: {np.sum(gt_binary)}")
-            
-            
-            # Calculate Dice coefficient between prediction and ground truth
-            def calculate_dice(pred_mask, gt_mask, smooth=1e-6):
-                """
-                Calculate Dice coefficient between two binary masks
-                Args:
-                    pred_mask: prediction mask (numpy array)
-                    gt_mask: ground truth mask (numpy array)
-                    smooth: smoothing factor to avoid division by zero
-                Returns:
-                    dice_score: float between 0 and 1
-                """
-                # Flatten arrays
-                pred_flat = pred_mask.flatten()
-                gt_flat = gt_mask.flatten()
-
-                logger.info(f"Pred: {pred_flat.sum()}")
-                logger.info(f"GT: {gt_flat.sum()}")
-                
-                # Comprehensive intersection analysis
-                # Method 1: Traditional intersection (both masks have same non-zero value)
-                intersection_traditional = (pred_flat * gt_flat).sum()
-                
-                # Method 2: Any overlap (both masks are non-zero, regardless of exact value)
-                pred_nonzero = (pred_flat > 0).astype(np.float32)
-                gt_nonzero = (gt_flat > 0).astype(np.float32)
-                intersection_any_overlap = (pred_nonzero * gt_nonzero).sum()
-                
-                # Method 3: Exact value matches
-                exact_matches = (pred_mask == gt_mask).sum()
-                
-                # Method 4: Check specific overlapping regions
-                overlap_indices = np.where((pred_mask > 0) & (gt_mask > 0))
-                overlap_count = len(overlap_indices[0])
-                
-                logger.info(f"Traditional intersection (same values): {intersection_traditional}")
-                logger.info(f"Any overlap (both non-zero): {intersection_any_overlap}")
-                logger.info(f"Exact value matches: {exact_matches}")
-                logger.info(f"Overlapping voxels count: {overlap_count}")
-                
-                if overlap_count > 0:
-                    # Sample overlapping voxels to see what values they have
-                    sample_size = min(10, overlap_count)
-                    sample_indices = np.random.choice(overlap_count, sample_size, replace=False)
-                    
-                    pred_values = pred_mask[overlap_indices[0][sample_indices], 
-                                          overlap_indices[1][sample_indices], 
-                                          overlap_indices[2][sample_indices]]
-                    gt_values = gt_mask[overlap_indices[0][sample_indices], 
-                                      overlap_indices[1][sample_indices], 
-                                      overlap_indices[2][sample_indices]]
-                    
-                    logger.info(f"Sample overlapping voxel values:")
-                    for i in range(sample_size):
-                        logger.info(f"  Index {sample_indices[i]}: Pred={pred_values[i]}, GT={gt_values[i]}")
-                
-                # Use any overlap for Dice calculation (more meaningful for segmentation)
-                dice_score = (2.0 * intersection_any_overlap + smooth) / (pred_nonzero.sum() + gt_nonzero.sum() + smooth)
-                
-                return dice_score
             
             # Calculate binary Dice score
-            dice_score = calculate_dice(pred_for_dice_binary, gt_binary)
-            logger.info(f"Binary Dice score (all labels merged): {dice_score:.4f}")
+            #dice_score = calculate_dice(pred_for_dice_binary, gt_binary)
+            #logger.info(f"Binary Dice score (all labels merged): {dice_score:.4f}")
 
             # Calculate Dice for each class/label if multi-class, or overall if binary
-            if len(np.unique(pred_for_dice)) > 2 or len(np.unique(gt)) > 2:
-                # Multi-class case - calculate Dice for each class
-                unique_labels = np.unique(np.concatenate([pred_for_dice.flatten(), gt.flatten()]))
-                unique_labels = unique_labels[unique_labels > 0]  # exclude background
-                
-                # Count occurrences of each label and get top 5
-                label_counts = {}
-                for label in unique_labels:
-                    pred_count = np.sum(pred_for_dice == label)
-                    gt_count = np.sum(gt == label)
-                    label_counts[label] = pred_count + gt_count
-                
-                # Sort by frequency and take top 5
-                top_labels = sorted(label_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-                logger.info(f"Processing top 5 most frequent labels: {[int(label) for label, _ in top_labels]}")
-                
-                dice_scores = {}
-                for label, count in top_labels:
-                    pred_binary = (pred_for_dice == label).astype(np.float32)
-                    gt_binary = (gt == label).astype(np.float32)
-                    
-                    # Log indices containing this label value
-                    pred_indices = np.where(pred_for_dice == label)
-                    gt_indices = np.where(gt == label)
-                    
-                    logger.info(f"Label {int(label)} - Pred voxels: {len(pred_indices[0])}, GT voxels: {len(gt_indices[0])}")
-                    if len(pred_indices[0]) > 0:
-                        # Show coordinate ranges
-                        logger.info(f"  Pred coordinate ranges - Z: [{pred_indices[0].min()}-{pred_indices[0].max()}], Y: [{pred_indices[1].min()}-{pred_indices[1].max()}], X: [{pred_indices[2].min()}-{pred_indices[2].max()}]")
-                        
-                        # Filter for Z=74 specifically and get first 10
-                        z_74_mask = pred_indices[0] == 74
-                        if np.any(z_74_mask):
-                            z_74_indices = (pred_indices[0][z_74_mask][:10], pred_indices[1][z_74_mask][:10], pred_indices[2][z_74_mask][:10])
-                            logger.info(f"  Pred coordinates at Z=74 (first 10): {list(zip(z_74_indices[0], z_74_indices[1], z_74_indices[2]))}")
-                        else:
-                            logger.info(f"  No pred voxels found at Z=74")
-                        
-                        logger.info(f"  Pred sample coordinates (first 10 found, starting Z={pred_indices[0][0]}): {list(zip(pred_indices[0][:10], pred_indices[1][:10], pred_indices[2][:10]))}")
-                    if len(gt_indices[0]) > 0:
-                        # Show coordinate ranges  
-                        logger.info(f"  GT coordinate ranges - Z: [{gt_indices[0].min()}-{gt_indices[0].max()}], Y: [{gt_indices[1].min()}-{gt_indices[1].max()}], X: [{gt_indices[2].min()}-{gt_indices[2].max()}]")
-                        
-                        # Filter for Z=74 specifically and get first 10
-                        z_74_mask_gt = gt_indices[0] == 74
-                        if np.any(z_74_mask_gt):
-                            z_74_indices_gt = (gt_indices[0][z_74_mask_gt][:10], gt_indices[1][z_74_mask_gt][:10], gt_indices[2][z_74_mask_gt][:10])
-                            logger.info(f"  GT coordinates at Z=74 (first 10): {list(zip(z_74_indices_gt[0], z_74_indices_gt[1], z_74_indices_gt[2]))}")
-                        else:
-                            logger.info(f"  No GT voxels found at Z=74")
-                        
-                        logger.info(f"  GT sample coordinates (first 10 found, starting Z={gt_indices[0][0]}): {list(zip(gt_indices[0][:10], gt_indices[1][:10], gt_indices[2][:10]))}")
-                    
-                    dice_score = calculate_dice(pred_binary, gt_binary)
-                    dice_scores[f'class_{int(label)}'] = dice_score
-                    logger.info(f"Dice score for class {int(label)}: {dice_score:.4f}")
-                
-                # Calculate mean Dice across processed classes
-                mean_dice = np.mean(list(dice_scores.values()))
-                logger.info(f"Mean Dice score (top 5 classes): {mean_dice:.4f}")
-            else:
-                # Binary case
-                pred_binary = (pred_for_dice > 0).astype(np.float32)
-                gt_binary = (gt > 0).astype(np.float32)
-                dice_score = calculate_dice(pred_binary, gt_binary)
-                logger.info(f"Dice score: {dice_score:.4f}")
+            #if len(np.unique(pred_for_dice)) > 2 or len(np.unique(gt)) > 2:
+            #    # Multi-class case - calculate Dice for each class
+            #    unique_labels = np.unique(np.concatenate([pred_for_dice.flatten(), gt.flatten()]))
+            #    unique_labels = unique_labels[unique_labels > 0]  # exclude background
+            #    
+            #    # Count occurrences of each label and get top 5
+            #    label_counts = {}
+            #    for label in unique_labels:
+            #        pred_count = np.sum(pred_for_dice == label)
+            #        gt_count = np.sum(gt == label)
+            #        label_counts[label] = pred_count + gt_count
+            #    
+            #    # Sort by frequency and take top 5
+            #    top_labels = sorted(label_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            #    logger.info(f"Processing top 5 most frequent labels: {[int(label) for label, _ in top_labels]}")
+            #    
+            #    dice_scores = {}
+            #    for label, count in top_labels:
+            #        pred_binary = (pred_for_dice == label).astype(np.float32)
+            #        gt_binary = (gt == label).astype(np.float32)
+            #        
+            #        # Log indices containing this label value
+            #        pred_indices = np.where(pred_for_dice == label)
+            #        gt_indices = np.where(gt == label)
+            #        
+            #        logger.info(f"Label {int(label)} - Pred voxels: {len(pred_indices[0])}, GT voxels: {len(gt_indices[0])}")
+            #        if len(pred_indices[0]) > 0:
+            #            # Show coordinate ranges
+            #            logger.info(f"  Pred coordinate ranges - Z: [{pred_indices[0].min()}-{pred_indices[0].max()}], Y: [{pred_indices[1].min()}-{pred_indices[1].max()}], X: [{pred_indices[2].min()}-{pred_indices[2].max()}]")
+            #            
+            #            # Filter for Z=74 specifically and get first 10
+            #            z_74_mask = pred_indices[0] == 74
+            #            if np.any(z_74_mask):
+            #                z_74_indices = (pred_indices[0][z_74_mask][:10], pred_indices[1][z_74_mask][:10], pred_indices[2][z_74_mask][:10])
+            #                logger.info(f"  Pred coordinates at Z=74 (first 10): {list(zip(z_74_indices[0], z_74_indices[1], z_74_indices[2]))}")
+            #            else:
+            #                logger.info(f"  No pred voxels found at Z=74")
+            #            
+            #            logger.info(f"  Pred sample coordinates (first 10 found, starting Z={pred_indices[0][0]}): {list(zip(pred_indices[0][:10], pred_indices[1][:10], pred_indices[2][:10]))}")
+            #        if len(gt_indices[0]) > 0:
+            #            # Show coordinate ranges  
+            #            logger.info(f"  GT coordinate ranges - Z: [{gt_indices[0].min()}-{gt_indices[0].max()}], Y: [{gt_indices[1].min()}-{gt_indices[1].max()}], X: [{gt_indices[2].min()}-{gt_indices[2].max()}]")
+            #            
+            #            # Filter for Z=74 specifically and get first 10
+            #            z_74_mask_gt = gt_indices[0] == 74
+            #            if np.any(z_74_mask_gt):
+            #                z_74_indices_gt = (gt_indices[0][z_74_mask_gt][:10], gt_indices[1][z_74_mask_gt][:10], gt_indices[2][z_74_mask_gt][:10])
+            #                logger.info(f"  GT coordinates at Z=74 (first 10): {list(zip(z_74_indices_gt[0], z_74_indices_gt[1], z_74_indices_gt[2]))}")
+            #            else:
+            #                logger.info(f"  No GT voxels found at Z=74")
+            #            
+            #            logger.info(f"  GT sample coordinates (first 10 found, starting Z={gt_indices[0][0]}): {list(zip(gt_indices[0][:10], gt_indices[1][:10], gt_indices[2][:10]))}")
+            #        
+            #        dice_score = calculate_dice(pred_binary, gt_binary)
+            #        dice_scores[f'class_{int(label)}'] = dice_score
+            #        logger.info(f"Dice score for class {int(label)}: {dice_score:.4f}")
+            #    
+            #    # Calculate mean Dice across processed classes
+            #    mean_dice = np.mean(list(dice_scores.values()))
+            #    logger.info(f"Mean Dice score (top 5 classes): {mean_dice:.4f}")
+            #else:
+            #    # Binary case
+            #    pred_binary = (pred_for_dice > 0).astype(np.float32)
+            #    gt_binary = (gt > 0).astype(np.float32)
+            #    dice_score = calculate_dice(pred_binary, gt_binary)
+            #    logger.info(f"Dice score: {dice_score:.4f}")
+            pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
+            sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}_{data["user_name"]}.nii.gz')
+            nninter_elapsed = time.time() - start
+            logger.info(f"nninter latency : {nninter_elapsed} (sec)")
 
-            sitk.WriteImage(pred_itk, '/code/sam.nii.gz')
 
+            final_result_json["prompt_info"] = result_json
+            final_result_json["nninter_elapsed"] = nninter_elapsed
 
             
-            logger.info(f"Prompt info: {result_json}")
+            logger.info(f"final_result_json info: {final_result_json}")
             # result_json contains prompt information
 
-            return '/code/sam.nii.gz', result_json
+            # return '/code/sam.nii.gz', result_json
 
         
         if "pos_points" in data:
-
-            result_json["pos_points"]=data["pos_points"]
+            start = time.time()
+            #result_json["pos_points"]=data["pos_points"]
             #SAM2
-            img = sitk.ReadImage(data['image'])
+            #img = sitk.ReadImage(data['image'])
             len_z = img.GetSize()[2]
             len_y = img.GetSize()[1]
             len_x = img.GetSize()[0]
@@ -800,8 +798,8 @@ class BasicInferTask(InferTask):
                     img_y = img_np_3d.shape[1]
                     img_x = img_np_3d.shape[2]
                     logger.info(f"len_np Z Y X: {img_z}, {img_y}, {img_x}")
-                    logger.info(f"Post point: {data['pos_points'][0]}")
-                    img_np_2d = img_np_3d[img_z-1-data['pos_points'][0][2]]
+                    logger.info(f"Post point: {result_json['pos_points'][0]}")
+                    img_np_2d = img_np_3d[img_z-1-result_json['pos_points'][0][2]]
                     #inputs = torch.from_numpy(img_np_2d)
                     #logger.info(f"tensor shape: {inputs.shape}")
                     img_np_2d = img_np_2d.astype(float)
@@ -844,22 +842,24 @@ class BasicInferTask(InferTask):
                         logger.info(f"boxes from text: {boxes_text}")
                         data['boxes']=boxes_text[:1]
 
-                inference_state = predictor.init_state(video_path=data['image'], clip_low=contrast_center-contrast_window/2, clip_high=contrast_center+contrast_window/2)
+                inference_state = predictor.init_state(video_path=img, clip_low=contrast_center-contrast_window/2, clip_high=contrast_center+contrast_window/2)
             else:    
-                inference_state = predictor.init_state(video_path=data['image'])
+                inference_state = predictor.init_state(video_path=img)
             #predictor.reset_state(inference_state)
             #breakpoint()
             ann_obj_id = 1
             video_segments = {}  # video_segments contains the per-frame segmentation results
             
-            ann_frame_list = np.unique(np.array(list(map(lambda x: x[2], data['pos_points'])), dtype=np.int16))
-                        
-            if len(data['boxes'])!=0:
-                result_json["boxes"]=data["boxes"]
-                logger.info(f"prompt boxes: {data['boxes']}")
+            ann_frame_list = np.unique(np.array(list(map(lambda x: x[2], result_json['pos_points'])), dtype=np.int16))
+
+            if "boxes" not in result_json:
+                result_json["boxes"] = []            
+            if len(result_json["boxes"])!=0:
+                #result_json["boxes"]=data["boxes"]
+                #logger.info(f"prompt boxes: {result_json["boxes"]}")
                 # Temp remove pos points
-                data['pos_points']=[]
-                ann_frame_list_box = np.unique(np.array(list(map(lambda x: x[2], [x for xs in data['boxes'] for x in xs])), dtype=np.int16))
+                #data['pos_points']=[]
+                ann_frame_list_box = np.unique(np.array(list(map(lambda x: x[2], [x for xs in result_json["boxes"] for x in xs])), dtype=np.int16))
                 ann_frame_list = np.unique(np.concatenate((ann_frame_list, ann_frame_list_box)))
 
             for i in range(len(ann_frame_list)):
@@ -891,12 +891,12 @@ class BasicInferTask(InferTask):
             #pos_points = np.array(list(map(lambda x: x[0:2], data['pos_points'])), dtype=np.float32)
                 #breakpoint()
                 value = ann_frame_list[i]
-                pos_points = np.array([i[0:2] for i in data['pos_points'] if i[2]==value], dtype=np.int16)
-                neg_points = np.array([i[0:2] for i in data['neg_points'] if i[2]==value], dtype=np.int16)
-                pre_boxes = np.array([i for i in data['boxes'] if i[0][2]==value], dtype=np.int16)
+                pos_points = np.array([i[0:2] for i in result_json['pos_points'] if i[2]==value], dtype=np.int16)
+                neg_points = np.array([i[0:2] for i in result_json['neg_points'] if i[2]==value], dtype=np.int16)
+                pre_boxes = np.array([i for i in result_json["boxes"] if i[0][2]==value], dtype=np.int16)
 
                 if len(neg_points) >0:
-                    result_json["neg_points"]=data["neg_points"]
+                    #result_json["neg_points"]=data["neg_points"]
                     #breakpoint()
                     points = np.concatenate((pos_points, neg_points), axis=0)
                     # for labels, `1` means positive click and `0` means negative click        
@@ -907,7 +907,8 @@ class BasicInferTask(InferTask):
 
                 if len(pre_boxes)!=0:
                     boxes = pre_boxes[:,:,:-1].reshape(pre_boxes.shape[0],-1)
-
+                    logger.info(f"ann_frame_list: {ann_frame_list}")
+                    logger.info(f"ann_frame_idx: {ann_frame_idx}")
                     _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
                         inference_state=inference_state,
                         frame_idx=ann_frame_idx,
@@ -948,14 +949,18 @@ class BasicInferTask(InferTask):
                 pred[i]=video_segments[i][1][0].astype(int)
             pred_itk = sitk.GetImageFromArray(pred)
             pred_itk.CopyInformation(img)
-            
-            sitk.WriteImage(pred_itk, '/code/sam.nii.gz')
+            pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
+            sitk.WriteImage(pred_itk, f'/code/predictions/sam_{image_series_desc}_{data["user_name"]}.nii.gz')
 
+            sam_elapsed = time.time() - start
+            logger.info(f"sam latency : {sam_elapsed} (sec)")
+            final_result_json["sam_elapsed"] = sam_elapsed
             
-            logger.info(f"Prompt info: {result_json}")
+            final_result_json["user_name"] = data["user_name"]
+            logger.info(f"Result json info: {final_result_json}")
             # result_json contains prompt information
 
-            return '/code/sam.nii.gz', result_json
+            return f'/code/predictions/{image_series_desc}_{data["user_name"]}.nii.gz', final_result_json
 
     def run_pre_transforms(self, data: Dict[str, Any], transforms):
         pre_cache: List[Any] = []
