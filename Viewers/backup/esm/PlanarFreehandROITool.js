@@ -36,7 +36,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
             preventHandleOutsideImage: false,
             contourHoleAdditionModifierKey: KeyboardBindings.Shift,
             alwaysRenderOpenContourHandles: {
-                enabled: true,
+                enabled: false,
                 radius: 10,
             },
             allowOpenContours: true,
@@ -425,7 +425,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
     }
     updateClosedCachedStats({ viewport, points, imageData, metadata, cachedStats, targetId, modalityUnit, canvasCoordinates, calibratedScale, sliceIndex }) {
         const { scale, areaUnit, unit } = calibratedScale;
-        let polyline = points.map(array => utilities.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
+        let boundary = points.map(array => utilities.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
         const { voxelManager } = viewport.getImageData();
         const canvasPoint = canvasCoordinates[0];
         const originalWorldPoint = viewport.canvasToWorld(canvasPoint);
@@ -527,7 +527,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
             stdDev: stats.stdDev?.value,
             statsArray: stats.array,
             pointsInShape: pointsInShape,
-            boundary: polyline,
+            boundary: boundary,
             areaUnit,
             modalityUnit,
             unit,

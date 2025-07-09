@@ -247,7 +247,7 @@ const toolbarButtons: Button[] = [
     props:{
       type: 'tool',
       icon: 'icon-tool-freehand-roi',
-      label: 'Scribble',
+      label: 'Lasso (closed), Scribble (open)',
       tooltip: 'Freehand ROI',
       commands: setToolActiveToolbar,
       evaluate: 'evaluate.cornerstoneTool',

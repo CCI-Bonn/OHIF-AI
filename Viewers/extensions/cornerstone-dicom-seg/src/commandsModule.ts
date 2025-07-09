@@ -166,23 +166,32 @@ const commandsModule = ({
           color.slice(0, 3).map(value => value / 255)
         ).map(value => Math.round(value));
 
-        const segmentMetadata = {
-          SegmentNumber: segmentIndex.toString(),
-          SegmentLabel: label,
-          SegmentAlgorithmType: segment?.algorithmType || 'MANUAL',
-          SegmentAlgorithmName: segment?.algorithmName || 'OHIF Brush',
-          RecommendedDisplayCIELabValue,
-          SegmentedPropertyCategoryCodeSequence: {
-            CodeValue: 'T-D0050',
-            CodingSchemeDesignator: 'SRT',
-            CodeMeaning: 'Tissue',
-          },
-          SegmentedPropertyTypeCodeSequence: {
-            CodeValue: 'T-D0050',
-            CodingSchemeDesignator: 'SRT',
-            CodeMeaning: 'Tissue',
-          },
-        };
+        let segmentMetadata = {};
+        if (segmentation.cachedStats.data !== undefined && segmentation.cachedStats.data.length > 1) {
+          segmentMetadata = segmentation.cachedStats.data
+          .filter(e => e !== undefined && e !== null)
+          .find(e => e.SegmentNumber == segmentIndex);
+        } 
+
+        if (segmentMetadata === undefined || Object.keys(segmentMetadata).length === 0) {
+          segmentMetadata = {
+            SegmentNumber: segmentIndex.toString(),
+            SegmentLabel: label,
+            SegmentAlgorithmType: segment?.algorithmType || 'MANUAL',
+            SegmentAlgorithmName: segment?.algorithmName || 'OHIF Brush',
+            RecommendedDisplayCIELabValue,
+            SegmentedPropertyCategoryCodeSequence: {
+              CodeValue: 'T-D0050',
+              CodingSchemeDesignator: 'SRT',
+              CodeMeaning: 'Tissue',
+            },
+            SegmentedPropertyTypeCodeSequence: {
+              CodeValue: 'T-D0050',
+              CodingSchemeDesignator: 'SRT',
+              CodeMeaning: 'Tissue',
+            },
+          };
+        }
         labelmap3D.metadata[segmentIndex] = segmentMetadata;
       });
 
@@ -255,6 +264,10 @@ const commandsModule = ({
       }
 
       const { dataset: naturalizedReport } = generatedData;
+
+      if (dataSource === undefined) {
+        dataSource = extensionManager.getActiveDataSource()[0];
+      }
 
       await dataSource.store.dicom(naturalizedReport);
 
