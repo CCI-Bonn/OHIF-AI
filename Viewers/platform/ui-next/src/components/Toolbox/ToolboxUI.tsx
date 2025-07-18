@@ -1,8 +1,10 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { PanelSection } from '../../components';
 // Migrate this file to the new UI eventually
 import { ToolSettings } from '@ohif/ui';
+import { SwitchButton } from '@ohif/ui';
 import classnames from 'classnames';
+import { toolboxState } from '../../../../../extensions/default/src/stores/toolboxState';
 
 const ItemsPerRow = 4;
 
@@ -21,14 +23,18 @@ function ToolboxUI(props: withAppTypes) {
   const {
     toolbarButtons,
     handleToolSelect,
-    toolboxState,
+    toolboxState: localToolboxState,
     numRows,
     servicesManager,
     title,
     useCollapsedPanel = true,
   } = props;
 
-  const { activeTool, toolOptions, selectedEvent } = toolboxState;
+  // Local state for UI updates
+  const [liveMode, setLiveMode] = useState(toolboxState.getLiveMode());
+  const [posNeg, setPosNeg] = useState(toolboxState.getPosNeg());
+
+  const { activeTool, toolOptions, selectedEvent } = localToolboxState;
   const activeToolOptions = toolOptions?.[activeTool];
 
   const prevToolOptions = usePrevious(activeToolOptions);
@@ -55,6 +61,30 @@ function ToolboxUI(props: withAppTypes) {
   const render = () => {
     return (
       <>
+      {title === "AI Tools" && (
+          <div className="bg-primary-dark px-2 py-2" style={{ color: 'white' }}>
+            <div className="flex flex-col gap-2">
+              <SwitchButton
+                label="Live Mode"
+                checked={liveMode}
+                onChange={(checked) => {
+                  setLiveMode(checked);
+                  toolboxState.setLiveMode(checked);
+                  console.log('Live mode:', checked);
+                }}
+              />
+              <SwitchButton
+                label="Pos/Neg"
+                checked={posNeg}
+                onChange={(checked) => {
+                  setPosNeg(checked);
+                  toolboxState.setPosNeg(checked);
+                  console.log('Pos/Neg:', checked);
+                }}
+              />
+            </div>
+          </div>
+        )}
         <div className="flex flex-col bg-black">
           <div className="bg-primary-dark mt-0.5 flex flex-wrap py-2">
             {toolbarButtons.map((toolDef, index) => {

@@ -433,6 +433,8 @@ class RectangleROITool extends AnnotationTool {
                 }, dataId);
                 renderStatus = true;
                 const options = this.getLinkedTextBoxStyle(styleSpecifier, annotation);
+                // Do not render text box for now
+                options.visibility = false;
                 if (!options.visibility) {
                     data.handles.textBox = {
                         hasMoved: false,

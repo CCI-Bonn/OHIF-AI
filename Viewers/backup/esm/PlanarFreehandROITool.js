@@ -80,7 +80,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
             return annotation;
         };
 
-        this._addNewAnnotationFromIndex = (element, idxPos) => {
+        this._addNewAnnotationFromIndex = (element, idxPos, closed = false) => {
             const enabledElement = getEnabledElement(element);
             const { viewport } = enabledElement;
             const image = this.getTargetImageData(this.getTargetId(viewport));
@@ -90,7 +90,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
                 data: {
                     contour: {
                         polyline: [...boundary],
-                        closed: false,
+                        closed: closed,
                     },
                     label: '',
                     cachedStats: {},
@@ -176,7 +176,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
                 }
                 
                 let sliceIndex = 0
-                if (targetId.startsWith('imageId:')) {
+                if (targetId.startsWith('imageId:') || targetId.startsWith('volumeId:')) {
                     sliceIndex = viewport.getCurrentImageIdIndex();
                 }
 
@@ -245,6 +245,8 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
                 viewportId: enabledElement.viewport.id,
             };
             const options = this.getLinkedTextBoxStyle(styleSpecifier, annotation);
+            // Do not render text box for now
+            options.visibility = false;
             if (!options.visibility) {
                 return;
             }

@@ -282,9 +282,20 @@ const toolbarButtons: Button[] = [
     props: {
       type: 'tool',
       icon: 'sam-icon',
-      label: 'nnInteractive',
+      label: 'SAM2',
       tooltip: 'Semi segmentation',
       commands: 'sam2',
+    },
+  },
+  {
+    id: 'nninter',
+    uiType: 'ohif.radioGroup',
+    props: {
+      type: 'tool',
+      icon: 'nninter-icon',
+      label: 'nnInteractive',
+      tooltip: 'Semi segmentation',
+      commands: 'nninter',
     },
   },
   {

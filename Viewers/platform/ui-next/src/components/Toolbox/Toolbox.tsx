@@ -21,7 +21,7 @@ function Toolbox({
   title,
   ...props
 }: withAppTypes) {
-  const { state: toolboxState, api } = useToolbox(buttonSectionId);
+  const { state: localToolboxState, api } = useToolbox(buttonSectionId);
   const { onInteraction, toolbarButtons } = useToolbar({
     servicesManager,
     buttonSection: buttonSectionId,
@@ -42,8 +42,8 @@ function Toolbox({
     );
 
     const currentToolBoxStateStr = JSON.stringify(
-      Object.keys(toolboxState.toolOptions).map(tool => {
-        const options = toolboxState.toolOptions[tool];
+      Object.keys(localToolboxState.toolOptions).map(tool => {
+        const options = localToolboxState.toolOptions[tool];
         if (Array.isArray(options)) {
           return options?.map(option => `${option.id}-${option.value}`);
         }
@@ -73,10 +73,10 @@ function Toolbox({
             }
 
             const value =
-              toolboxState.toolOptions?.[parentId]?.find(prop => prop.id === option.id)?.value ??
+              localToolboxState.toolOptions?.[parentId]?.find(prop => prop.id === option.id)?.value ??
               option.value;
 
-            const updatedOptions = toolboxState.toolOptions?.[parentId];
+            const updatedOptions = localToolboxState.toolOptions?.[parentId];
 
             return {
               ...option,
@@ -131,7 +131,7 @@ function Toolbox({
     );
 
     api.initializeToolOptions(initializeOptionsWithEnhancements);
-  }, [toolbarButtons, api, toolboxState, commandsManager, servicesManager]);
+  }, [toolbarButtons, api, localToolboxState, commandsManager, servicesManager]);
 
   const handleToolOptionChange = (toolName, optionName, newValue) => {
     api.handleToolOptionChange(toolName, optionName, newValue);
@@ -149,7 +149,7 @@ function Toolbox({
         {...props}
         title={title}
         toolbarButtons={toolbarButtons}
-        toolboxState={toolboxState}
+        toolboxState={localToolboxState}
         handleToolSelect={id => api.handleToolSelect(id)}
         handleToolOptionChange={handleToolOptionChange}
         onInteraction={onInteraction}

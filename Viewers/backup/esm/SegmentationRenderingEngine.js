@@ -187,10 +187,10 @@ class SegmentationRenderingEngine {
 
                     if (lassos!== undefined && lassos.length !== 0){
                         const toolGroup = getToolGroupForViewport(viewport.id);
-                        const splineTool = toolGroup.getToolInstance('SplineROI2')
+                        const splineTool = toolGroup.getToolInstance('PlanarFreehandROI2')
                         if (splineTool!==undefined){
                             for (const spline of lassos){
-                                let annotation = splineTool._addNewAnnotationFromIndex(element, spline)
+                                let annotation = splineTool._addNewAnnotationFromIndex(element, spline, true)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }

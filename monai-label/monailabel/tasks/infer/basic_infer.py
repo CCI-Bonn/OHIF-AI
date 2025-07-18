@@ -380,61 +380,68 @@ class BasicInferTask(InferTask):
 
         final_result_json = {}
         result_json = {}
-        nnInter = True
+        nnInter = data['nninter']
         img = None
+        
+        dicom_dir = data['image'].split('.nii.gz')[0]
+
+        reader = sitk.ImageSeriesReader()
+        dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
+        dcm_img_sample = dcmread(dicom_filenames[0], stop_before_pixels=True)
+        dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
+        
+        instanceNumber = None
+        instanceNumber2 = None
+
+        if 0x00200013 in dcm_img_sample.keys():
+            instanceNumber = dcm_img_sample[0x00200013].value
+        logger.info(f"Prompt First InstanceNumber: {instanceNumber}")
+        if 0x00200013 in dcm_img_sample_2.keys():
+            instanceNumber2 = dcm_img_sample_2[0x00200013].value
+        logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
+
+        contrast_center = None
+        contrast_window = None
+        
+
+        if 0x00281050 in dcm_img_sample.keys():
+            contrast_center = dcm_img_sample[0x00281050].value
+        
+        if 0x00281051 in dcm_img_sample.keys():
+            contrast_window = dcm_img_sample[0x00281051].value
+        
+
+        if contrast_window != None and contrast_center !=None:
+            #breakpoint()
+            if contrast_window.__class__.__name__ == 'MultiValue':
+                contrast_window = contrast_window[0]
+            if contrast_center.__class__.__name__ == 'MultiValue':
+                contrast_center = contrast_center[0]
+
+        image_series_desc = ""
+
+        if 0x0008103e in dcm_img_sample.keys():
+            image_series_desc = dcm_img_sample[0x0008103e].value
+            
+        # --- Load Input Image (Example with SimpleITK) ---
+        reader.SetFileNames(dicom_filenames)
+        #reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
+        img = reader.Execute()
+
+        rescale_slope = float(img.GetMetaData("0028|1053")) if img.HasMetaDataKey("0028|1053") else 1.0
+        rescale_intercept = float(img.GetMetaData("0028|1052")) if img.HasMetaDataKey("0028|1052") else 0.0
+
+        logger.info(f"rescale_slope: {rescale_slope}")
+        logger.info(f"rescale_intercept: {rescale_intercept}")
+
+        result_json["pos_points"]=copy.deepcopy(data["pos_points"])
+        result_json["neg_points"]=copy.deepcopy(data["neg_points"])
+
+        if len(data['boxes'])!=0:
+            result_json["boxes"]=copy.deepcopy(data["boxes"])
+            #img = sitk.ReadImage(data['image'])
         if nnInter:
             start = time.time()
-            dicom_dir = data['image'].split('.nii.gz')[0]
-
-            reader = sitk.ImageSeriesReader()
-            dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
-            dcm_img_sample = dcmread(dicom_filenames[0], stop_before_pixels=True)
-            dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
-            
-            instanceNumber = None
-            instanceNumber2 = None
-
-            if 0x00200013 in dcm_img_sample.keys():
-                instanceNumber = dcm_img_sample[0x00200013].value
-            logger.info(f"Prompt First InstanceNumber: {instanceNumber}")
-            if 0x00200013 in dcm_img_sample_2.keys():
-                instanceNumber2 = dcm_img_sample_2[0x00200013].value
-            logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
-
-            contrast_center = None
-            contrast_window = None
-            
-
-            if 0x00281050 in dcm_img_sample.keys():
-                contrast_center = dcm_img_sample[0x00281050].value
-            
-            if 0x00281051 in dcm_img_sample.keys():
-                contrast_window = dcm_img_sample[0x00281051].value
-            
-
-            if contrast_window != None and contrast_center !=None:
-                #breakpoint()
-                if contrast_window.__class__.__name__ == 'MultiValue':
-                    contrast_window = contrast_window[0]
-                if contrast_center.__class__.__name__ == 'MultiValue':
-                    contrast_center = contrast_center[0]
-
-            image_series_desc = ""
-
-            if 0x0008103e in dcm_img_sample.keys():
-                image_series_desc = dcm_img_sample[0x0008103e].value
-                
-            # --- Load Input Image (Example with SimpleITK) ---
-            reader.SetFileNames(dicom_filenames)
-            #reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
-            img = reader.Execute()
-
-            rescale_slope = float(img.GetMetaData("0028|1053")) if img.HasMetaDataKey("0028|1053") else 1.0
-            rescale_intercept = float(img.GetMetaData("0028|1052")) if img.HasMetaDataKey("0028|1052") else 0.0
-
-            logger.info(f"rescale_slope: {rescale_slope}")
-            logger.info(f"rescale_intercept: {rescale_intercept}")
-            #img = sitk.ReadImage(data['image'])
             img_np = sitk.GetArrayFromImage(img)[None]  # Ensure shape (1, x, y, z)
             if rescale_slope != 1.0 or rescale_intercept != 0.0:
                 img_np = img_np * rescale_slope + rescale_intercept
@@ -444,23 +451,20 @@ class BasicInferTask(InferTask):
             if img_np.ndim != 4:
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
             
-            if img_np.ndim ==4: #session.original_image_shape == None or not np.array_equal(img_np.shape,session.original_image_shape):
+            if session.original_image_shape == None or not np.array_equal(img_np.shape,session.original_image_shape):
                 if contrast_window != None and contrast_center !=None:
                     img_np = img_np.astype(float)
                     np.clip(img_np, contrast_center-contrast_window/2, contrast_center+contrast_window/2, out=img_np)   
                     img_np = (img_np - (contrast_center-contrast_window/2))/contrast_window * 255
                     img_np = img_np.astype(np.uint8)
-                img_itk = sitk.GetImageFromArray(img_np[0])
-                sitk.WriteImage(img_itk, f'/code/predictions/image_{image_series_desc}_{data["user_name"]}.nii.gz')
                 session.set_image(img_np)
                 session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
                 logger.info("Only first time, no image at nnInter or iamge changed")
-                if 1 not in self._session_used_interactions["objects"]:
-                    for key, lst in self._session_used_interactions.items():
-                        lst.clear()
-                    session.reset_interactions()
-                    logger.info("Only for first object")
-                    self._session_used_interactions["objects"].append(1)
+                for key, lst in self._session_used_interactions.items():
+                    lst.clear()
+                session.reset_interactions()
+                logger.info("Only for first object")
+                self._session_used_interactions["objects"].append(1)
             elif 'nextObj' not in data:
                 if 1 not in self._session_used_interactions["objects"]:
                     for key, lst in self._session_used_interactions.items():
@@ -469,10 +473,12 @@ class BasicInferTask(InferTask):
                     logger.info("Only for first object")
                     self._session_used_interactions["objects"].append(1)         
             elif data['nextObj'] not in self._session_used_interactions["objects"]:
+                temp_interactions_objects = copy.deepcopy(self._session_used_interactions["objects"])
                 for key, lst in self._session_used_interactions.items():
                     lst.clear()
                 session.reset_interactions()
                 logger.info("From second object")
+                self._session_used_interactions["objects"] = temp_interactions_objects
                 self._session_used_interactions["objects"].append(data['nextObj'])
 
 
@@ -486,8 +492,6 @@ class BasicInferTask(InferTask):
             # POINT_COORDINATES should be a tuple (x, y, z) specifying the point location.
             logger.info(f"neg_points: {data['neg_points']}")
             logger.info(f"neg_point type: {type(data['neg_points'])}")
-            result_json["pos_points"]=copy.deepcopy(data["pos_points"])
-            result_json["neg_points"]=copy.deepcopy(data["neg_points"])
             
             for point in data['pos_points']:
                 if instanceNumber > instanceNumber2:
@@ -585,48 +589,9 @@ class BasicInferTask(InferTask):
                         logger.info("Add a scribble")
                         self._session_used_interactions["scribbles"].append(scribbleMask)
 
-            # Example: Add a bounding box interaction
-            # BBOX_COORDINATES must be specified as [[x1, x2], [y1, y2], [z1, z2]] (half-open intervals).
-            # Note: nnInteractive pre-trained models currently only support **2D bounding boxes**.
-            # This means that **one dimension must be [d, d+1]** to indicate a single slice.
-
-            # Example of a 2D bounding box in the axial plane (XY slice at depth Z)
-            # BBOX_COORDINATES = [[30, 80], [40, 100], [10, 11]]  # X: 30-80, Y: 40-100, Z: slice 10
-
-            #session.add_bbox_interaction(BBOX_COORDINATES, include_interaction=True)
-
-            # Example: Add a scribble interaction
-            # - A 3D image of the same shape as img where one slice (any axis-aligned orientation) contains a hand-drawn scribble.
-            # - Background must be 0, and scribble must be 1.
-            # - Use session.preferred_scribble_thickness for optimal results.
-            #session.add_scribble_interaction(SCRIBBLE_IMAGE, include_interaction=True)
-
-            # Example: Add a lasso interaction
-            # - Similarly to scribble a 3D image with a single slice containing a **closed contour** representing the selection.
-            #session.add_lasso_interaction(LASSO_IMAGE, include_interaction=True)
-
-            # You can combine any number of interactions as needed. 
-            # The model refines the segmentation result incrementally with each new interaction.
-
             # --- Retrieve Results ---
             # The target buffer holds the segmentation result.
             results = session.target_buffer.clone()
-            # OR (equivalent)
-            #results = target_tensor.clone()
-
-            # Cloning is required because the buffer will be **reused** for the next object.
-            # Alternatively, set a new target buffer for each object:
-            #session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
-
-            # --- Start a New Object Segmentation ---
-            #session.reset_interactions()  # Clears the target buffer and resets interactions
-
-            # Now you can start segmenting the next object in the image.
-
-            # --- Set a New Image ---
-            # Setting a new image also requires setting a new matching target buffer
-            #session.set_image(NEW_IMAGE)
-            #session.set_target_buffer(torch.zeros(NEW_IMAGE.shape[1:], dtype=torch.uint8))
 
             # Enjoy!
             pred = results.numpy()
@@ -634,104 +599,9 @@ class BasicInferTask(InferTask):
             pred_itk = sitk.GetImageFromArray(pred)
             pred_itk.CopyInformation(img)
             
-            #nifti_img = nib.load('/code/data/100101A_BraTS-seg.nii.gz')
-            #gt = nifti_img.get_fdata()
-            #affine = nifti_img.affine
-            #logger.info(f"Affine matrix:\n {affine}")
-    
-            #gt_itk = sitk.ReadImage('/code/data/100101A_BraTS-seg.nii.gz')
-            #gt_itk.CopyInformation(img)
-            #gt = sitk.GetArrayFromImage(gt_itk)
-            #
-            ## Create a copy of pred for Dice calculation and flip Z axis if needed
-            #pred_for_dice = pred.copy()
-#
-            #pred_for_dice = np.transpose(pred_for_dice, (0, 2, 1))
-            #if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
-            #    logger.info(f"Flipping Z axis of prediction for Dice calculation: instanceNumber ({instanceNumber}) > instanceNumber2 ({instanceNumber2})")
-            #    pred_for_dice = np.flip(pred_for_dice, axis=0)  # Flip along Z axis (first dimension)
-            #
-            ## Merge all labels to binary (non-zero vs zero)
-            #pred_for_dice_binary = (pred_for_dice > 0).astype(np.float32)
-            #gt_binary = (gt > 0).astype(np.float32)
-            #
-            #logger.info(f"Binary pred non-zero voxels: {np.sum(pred_for_dice_binary)}")
-            #logger.info(f"Binary GT non-zero voxels: {np.sum(gt_binary)}")
             
-            
-            # Calculate binary Dice score
-            #dice_score = calculate_dice(pred_for_dice_binary, gt_binary)
-            #logger.info(f"Binary Dice score (all labels merged): {dice_score:.4f}")
-
-            # Calculate Dice for each class/label if multi-class, or overall if binary
-            #if len(np.unique(pred_for_dice)) > 2 or len(np.unique(gt)) > 2:
-            #    # Multi-class case - calculate Dice for each class
-            #    unique_labels = np.unique(np.concatenate([pred_for_dice.flatten(), gt.flatten()]))
-            #    unique_labels = unique_labels[unique_labels > 0]  # exclude background
-            #    
-            #    # Count occurrences of each label and get top 5
-            #    label_counts = {}
-            #    for label in unique_labels:
-            #        pred_count = np.sum(pred_for_dice == label)
-            #        gt_count = np.sum(gt == label)
-            #        label_counts[label] = pred_count + gt_count
-            #    
-            #    # Sort by frequency and take top 5
-            #    top_labels = sorted(label_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-            #    logger.info(f"Processing top 5 most frequent labels: {[int(label) for label, _ in top_labels]}")
-            #    
-            #    dice_scores = {}
-            #    for label, count in top_labels:
-            #        pred_binary = (pred_for_dice == label).astype(np.float32)
-            #        gt_binary = (gt == label).astype(np.float32)
-            #        
-            #        # Log indices containing this label value
-            #        pred_indices = np.where(pred_for_dice == label)
-            #        gt_indices = np.where(gt == label)
-            #        
-            #        logger.info(f"Label {int(label)} - Pred voxels: {len(pred_indices[0])}, GT voxels: {len(gt_indices[0])}")
-            #        if len(pred_indices[0]) > 0:
-            #            # Show coordinate ranges
-            #            logger.info(f"  Pred coordinate ranges - Z: [{pred_indices[0].min()}-{pred_indices[0].max()}], Y: [{pred_indices[1].min()}-{pred_indices[1].max()}], X: [{pred_indices[2].min()}-{pred_indices[2].max()}]")
-            #            
-            #            # Filter for Z=74 specifically and get first 10
-            #            z_74_mask = pred_indices[0] == 74
-            #            if np.any(z_74_mask):
-            #                z_74_indices = (pred_indices[0][z_74_mask][:10], pred_indices[1][z_74_mask][:10], pred_indices[2][z_74_mask][:10])
-            #                logger.info(f"  Pred coordinates at Z=74 (first 10): {list(zip(z_74_indices[0], z_74_indices[1], z_74_indices[2]))}")
-            #            else:
-            #                logger.info(f"  No pred voxels found at Z=74")
-            #            
-            #            logger.info(f"  Pred sample coordinates (first 10 found, starting Z={pred_indices[0][0]}): {list(zip(pred_indices[0][:10], pred_indices[1][:10], pred_indices[2][:10]))}")
-            #        if len(gt_indices[0]) > 0:
-            #            # Show coordinate ranges  
-            #            logger.info(f"  GT coordinate ranges - Z: [{gt_indices[0].min()}-{gt_indices[0].max()}], Y: [{gt_indices[1].min()}-{gt_indices[1].max()}], X: [{gt_indices[2].min()}-{gt_indices[2].max()}]")
-            #            
-            #            # Filter for Z=74 specifically and get first 10
-            #            z_74_mask_gt = gt_indices[0] == 74
-            #            if np.any(z_74_mask_gt):
-            #                z_74_indices_gt = (gt_indices[0][z_74_mask_gt][:10], gt_indices[1][z_74_mask_gt][:10], gt_indices[2][z_74_mask_gt][:10])
-            #                logger.info(f"  GT coordinates at Z=74 (first 10): {list(zip(z_74_indices_gt[0], z_74_indices_gt[1], z_74_indices_gt[2]))}")
-            #            else:
-            #                logger.info(f"  No GT voxels found at Z=74")
-            #            
-            #            logger.info(f"  GT sample coordinates (first 10 found, starting Z={gt_indices[0][0]}): {list(zip(gt_indices[0][:10], gt_indices[1][:10], gt_indices[2][:10]))}")
-            #        
-            #        dice_score = calculate_dice(pred_binary, gt_binary)
-            #        dice_scores[f'class_{int(label)}'] = dice_score
-            #        logger.info(f"Dice score for class {int(label)}: {dice_score:.4f}")
-            #    
-            #    # Calculate mean Dice across processed classes
-            #    mean_dice = np.mean(list(dice_scores.values()))
-            #    logger.info(f"Mean Dice score (top 5 classes): {mean_dice:.4f}")
-            #else:
-            #    # Binary case
-            #    pred_binary = (pred_for_dice > 0).astype(np.float32)
-            #    gt_binary = (gt > 0).astype(np.float32)
-            #    dice_score = calculate_dice(pred_binary, gt_binary)
-            #    logger.info(f"Dice score: {dice_score:.4f}")
             pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
-            sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}_{data["user_name"]}.nii.gz')
+            sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}.nii.gz')
             nninter_elapsed = time.time() - start
             logger.info(f"nninter latency : {nninter_elapsed} (sec)")
 
@@ -743,7 +613,7 @@ class BasicInferTask(InferTask):
             logger.info(f"final_result_json info: {final_result_json}")
             # result_json contains prompt information
 
-            # return '/code/sam.nii.gz', result_json
+            return f'/code/predictions/nninter_{image_series_desc}.nii.gz', final_result_json
 
         
         if "pos_points" in data:
@@ -764,24 +634,7 @@ class BasicInferTask(InferTask):
             image_files = glob('{}/*'.format(dicom_dir))
             dcm_img_sample = dcmread(image_files[0], stop_before_pixels=True)
 
-            contrast_center = None
-            contrast_window = None
-            
-
-            if 0x00281050 in dcm_img_sample.keys():
-                contrast_center = dcm_img_sample[0x00281050].value
-            
-            if 0x00281051 in dcm_img_sample.keys():
-                contrast_window = dcm_img_sample[0x00281051].value
-            
-
             if contrast_window != None and contrast_center !=None:
-                #breakpoint()
-                if contrast_window.__class__.__name__ == 'MultiValue':
-                    contrast_window = contrast_window[0]
-                if contrast_center.__class__.__name__ == 'MultiValue':
-                    contrast_center = contrast_center[0]
-
                 # Check for cats and remote controls
                 # VERY important: text queries need to be lowercased + end with a dot
                 if len(data['texts'])==1 and data['texts'][0]!='':
@@ -851,6 +704,7 @@ class BasicInferTask(InferTask):
             video_segments = {}  # video_segments contains the per-frame segmentation results
             
             ann_frame_list = np.unique(np.array(list(map(lambda x: x[2], result_json['pos_points'])), dtype=np.int16))
+            ann_frame_list_neg = np.unique(np.array(list(map(lambda x: x[2], result_json['neg_points'])), dtype=np.int16))
 
             if "boxes" not in result_json:
                 result_json["boxes"] = []            
@@ -860,7 +714,7 @@ class BasicInferTask(InferTask):
                 # Temp remove pos points
                 #data['pos_points']=[]
                 ann_frame_list_box = np.unique(np.array(list(map(lambda x: x[2], [x for xs in result_json["boxes"] for x in xs])), dtype=np.int16))
-                ann_frame_list = np.unique(np.concatenate((ann_frame_list, ann_frame_list_box)))
+                ann_frame_list = np.unique(np.concatenate((ann_frame_list, ann_frame_list_box, ann_frame_list_neg)))
 
             for i in range(len(ann_frame_list)):
 
@@ -891,19 +745,24 @@ class BasicInferTask(InferTask):
             #pos_points = np.array(list(map(lambda x: x[0:2], data['pos_points'])), dtype=np.float32)
                 #breakpoint()
                 value = ann_frame_list[i]
+                logger.info(f"z axis slice: value: {value}")
                 pos_points = np.array([i[0:2] for i in result_json['pos_points'] if i[2]==value], dtype=np.int16)
                 neg_points = np.array([i[0:2] for i in result_json['neg_points'] if i[2]==value], dtype=np.int16)
                 pre_boxes = np.array([i for i in result_json["boxes"] if i[0][2]==value], dtype=np.int16)
 
-                if len(neg_points) >0:
-                    #result_json["neg_points"]=data["neg_points"]
-                    #breakpoint()
+                if len(neg_points) >0 and len(pos_points) >0:
                     points = np.concatenate((pos_points, neg_points), axis=0)
                     # for labels, `1` means positive click and `0` means negative click        
                     labels = np.array([1]*len(pos_points) + [0]*len(neg_points), np.int32)
-                else:
+                elif len(pos_points) >0:
                     points = pos_points
                     labels = np.array([1]*len(points), np.int32)
+                elif len(neg_points) >0:
+                    points = neg_points
+                    labels = np.array([0]*len(points), np.int32)
+                else:
+                    points = np.array([], dtype=np.int16)
+                    labels = np.array([], dtype=np.int32)
 
                 if len(pre_boxes)!=0:
                     boxes = pre_boxes[:,:,:-1].reshape(pre_boxes.shape[0],-1)
@@ -950,17 +809,18 @@ class BasicInferTask(InferTask):
             pred_itk = sitk.GetImageFromArray(pred)
             pred_itk.CopyInformation(img)
             pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
-            sitk.WriteImage(pred_itk, f'/code/predictions/sam_{image_series_desc}_{data["user_name"]}.nii.gz')
+            sitk.WriteImage(pred_itk, f'/code/predictions/sam_{image_series_desc}.nii.gz')
 
             sam_elapsed = time.time() - start
             logger.info(f"sam latency : {sam_elapsed} (sec)")
+
+            final_result_json["prompt_info"] = result_json
             final_result_json["sam_elapsed"] = sam_elapsed
             
-            final_result_json["user_name"] = data["user_name"]
             logger.info(f"Result json info: {final_result_json}")
             # result_json contains prompt information
 
-            return f'/code/predictions/{image_series_desc}_{data["user_name"]}.nii.gz', final_result_json
+            return f'/code/predictions/sam_{image_series_desc}.nii.gz', final_result_json
 
     def run_pre_transforms(self, data: Dict[str, Any], transforms):
         pre_cache: List[Any] = []

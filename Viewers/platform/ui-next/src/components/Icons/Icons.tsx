@@ -61,6 +61,7 @@ import TabStudies from './Sources/TabStudies';
 import ThumbnailView from './Sources/ThumbnailView';
 import Trash from './Sources/Trash';
 import ToolSam from './Sources/ToolSam';
+import ToolNninter from './Sources/ToolNninter';
 import ToolTarget from './Sources/ToolTarget';
 import ViewportViews from './Sources/ViewportViews';
 import Sorting from './Sources/Sorting';
@@ -415,6 +416,7 @@ export const Icons = {
   ToolWindowRegion,
   ToolZoom,
   ToolSam,
+  ToolNninter,
   ToolTarget,
   LaunchArrow,
   LaunchInfo,
@@ -612,6 +614,7 @@ export const Icons = {
   'tool-crosshair': (props: IconProps) => ToolCrosshair(props),
   'dicom-tag-browser': (props: IconProps) => ToolDicomTagBrowser(props),
   'sam-icon': (props: IconProps) => ToolSam(props),
+  'nninter-icon': (props: IconProps) => ToolNninter(props),
   'target-icon': (props: IconProps) => ToolTarget(props),
   'eye-visible': (props: IconProps) => EyeVisible(props),
   'tool-flip-horizontal': (props: IconProps) => ToolFlipHorizontal(props),

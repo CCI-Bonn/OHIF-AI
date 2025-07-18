@@ -148,43 +148,22 @@ def nifti_to_dicom_seg(series_dir, label, final_result_json, file_ext="*", use_i
         image_series_desc = image_datasets[0][0x0008103e].value
     else:
         image_series_desc = ""
-    pre_path = label.split('/predictions/')[0]
-    file_name = label.split('/predictions/')[-1]
-    #sam_label_np, _ = LoadImage(image_only=False)(pre_path+'/predictions/'+'sam_'+file_name)
-    #nninter_label_np, _ = LoadImage(image_only=False)(pre_path+'/predictions/'+'nninter_'+file_name)
-    sam_label_itk = SimpleITK.ReadImage(pre_path+'/predictions/'+'sam_'+image_series_desc+'_'+final_result_json["user_name"]+'.nii.gz')
-    nninter_label_itk = SimpleITK.ReadImage(pre_path+'/predictions/'+'nninter_'+image_series_desc+'_'+final_result_json["user_name"]+'.nii.gz')
-    
-    sam_label_np = SimpleITK.GetArrayFromImage(sam_label_itk)
-    nninter_label_np = SimpleITK.GetArrayFromImage(nninter_label_itk)
+        
+    label_itk = SimpleITK.ReadImage(label)
+    label_np = SimpleITK.GetArrayFromImage(label_itk)
 
-    nninter_label_np[nninter_label_np != 0] = 2
-    nninter_unique_labels = np.unique(nninter_label_np.flatten()).astype(np.int_)
-    nninter_unique_labels = nninter_unique_labels[nninter_unique_labels != 0]
-    logger.info(f"nninter_unique_labels: {nninter_unique_labels}")
-    sam_unique_labels = np.unique(sam_label_np.flatten()).astype(np.int_)
-    sam_unique_labels = sam_unique_labels[sam_unique_labels != 0]
-    logger.info(f"sam_unique_labels: {sam_unique_labels}")
-    label_np = sam_label_np + nninter_label_np
-    logger.info(f"sam_label_np.shape: {sam_label_np.shape}")
-    logger.info(f"nninter_label_np.shape: {nninter_label_np.shape}")
-    logger.info(f"label_np.shape: {label_np.shape}")
-    #label_np, meta_dict = LoadImage(image_only=False)(label)
-    label_itk = SimpleITK.GetImageFromArray(label_np)
-    label_itk.CopyInformation(image)
-    SimpleITK.WriteImage(label_itk, label)
     unique_labels = np.unique(label_np.flatten()).astype(np.int_)
     unique_labels = unique_labels[unique_labels != 0]
     logger.info(f"unique_labels: {unique_labels}")
     #info = label_info[0] if label_info and 0 < len(label_info) else {}
     info = {}
     #model_name = info.get("model_name", "Totalsegmentor")
-    if "/predictions/" in label:
-        label_names = ["sam_pred", "nninter_pred", "overlap"]
-        image_series_desc = "Pred_"+ image_series_desc#"SAM2_"+ image_series_desc
+    if "nninter_" in label:
+        label_names = ["nninter_pred"]
+        image_series_desc = "nninter_"+ image_series_desc#"SAM2_"+ image_series_desc
     else:
-        label_names = np.load('/code/labelname.npy').tolist()
-        image_series_desc = "Total_"+ image_series_desc
+        label_names = ["sam_pred"]
+        image_series_desc = "sam_"+ image_series_desc
     segment_attributes = []
 
     for i, idx in enumerate(unique_labels):
@@ -197,10 +176,10 @@ def nifti_to_dicom_seg(series_dir, label, final_result_json, file_ext="*", use_i
 
         logger.info(f"{i} => {idx} => {name}")
 
-        if idx == 1:
-            elapsed = final_result_json["sam_elapsed"]
+        if "nninter_" in label:
+            elapsed = "nninter_"+str(final_result_json["nninter_elapsed"])
         else:
-            elapsed = final_result_json["nninter_elapsed"]
+            elapsed = "sam_"+str(final_result_json["sam_elapsed"])
         logger.info(f"{idx}_{name}_elapsed: {elapsed}")
         segment_attribute = label_info.get(
             "segmentAttribute",
@@ -238,44 +217,6 @@ def nifti_to_dicom_seg(series_dir, label, final_result_json, file_ext="*", use_i
         "ClinicalTrialCoordinatingCenterName": "MONAI",
         "BodyPartExamined": "",
     }
-#    template = {
-#  "ContentCreatorName": "SAM2",
-#  "ClinicalTrialSeriesID": "Session1",
-#  "ClinicalTrialTimePointID": "1",
-#  "SeriesDescription": image_series_desc,
-#  "SeriesNumber": "300",
-#  "InstanceNumber": "1",
-#  "segmentAttributes": [
-#    [
-#      {
-#        "labelID": 1,
-#        "SegmentDescription": "bone",
-#        "SegmentAlgorithmType": "SEMIAUTOMATIC",
-#        "SegmentAlgorithmName": "SAM2",
-#        "SegmentedPropertyCategoryCodeSequence": {
-#          "CodeValue": "91723000",
-#          "CodingSchemeDesignator": "SCT",
-#          "CodeMeaning": "Anatomical Structure"
-#        },
-#        "SegmentedPropertyTypeCodeSequence": {
-#          "CodeValue": "818981001",
-#          "CodingSchemeDesignator": "SCT",
-#          "CodeMeaning": "Abdomen"
-#        },
-#        "recommendedDisplayRGBValue": [
-#          177,
-#          122,
-#          101
-#        ]
-#      }
-#    ]
-#  ],
-#  "ContentLabel": "SEGMENTATION",
-#  "ContentDescription": "Image segmentation",
-#  "ClinicalTrialCoordinatingCenterName": "dcmqi",
-#  "BodyPartExamined": ""
-#}
-
 
     logger.info(json.dumps(template, indent=2))
     if not segment_attributes:

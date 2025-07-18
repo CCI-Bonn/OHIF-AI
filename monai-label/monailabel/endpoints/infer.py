@@ -204,72 +204,7 @@ def run_inference(
         #suffixes = [".nii", ".nii.gz", ".nrrd"]
         #image_path = [image_uri.replace(suffix, "") for suffix in suffixes if image_uri.endswith(suffix)][0]
         res_img = result.get("file") if result.get("file") else result.get("label")
-        
-        image_files = glob('{}/*'.format(image_path))
-        dcm_img_sample = dcmread(image_files[0], stop_before_pixels=True)
-        image_series_desc=""
-        if 0x0008103e in dcm_img_sample.keys():
-            image_series_desc = dcm_img_sample[0x0008103e].value
-        image_series_desc = "nnInteractive_"+ image_series_desc
-        #existing_instances = instance.datastore()._client.search_for_series(search_filters={"SeriesDate": date.today().strftime("%Y%m%d"), "SeriesDescription": image_series_desc})
-        old_response = 0
-        #if len(existing_instances)>500:
-        #    res = instance.datastore()._client._http_post("http://ohif_orthanc:1026/pacs/tools/find",'{{"Level":"Series","Query":{{"SeriesInstanceUID":"{seriesID}"}}, "Expand":true}}'.format(seriesID=existing_instances[0]['0020000E']['Value'][0]), headers={'Content-Type': 'text/plain'})
-        #    if res.status_code == 200:
-        #        del_series_id = json.loads(res.content)[0]['ID']
-        #        del_instance_id = json.loads(res.content)[0]['Instances'][0]
-        #        if 'nextObj' in params:
-        #            old_response = instance.datastore()._client._http_get(f"http://ohif_orthanc:1026/pacs/instances/{del_instance_id}/file")
-        #            if old_response.status_code == 200:
-        #                # Load DICOM data from the binary response content
-        #                dicom_old_file = io.BytesIO(old_response.content)
-        #            else:
-        #                raise Exception(f"Failed to retrieve DICOM file: {old_response.status_code}")    
-        #        res_del = instance.datastore()._client._http_delete(f"http://ohif_orthanc:1026/pacs/series/{del_series_id}")
-        #        if res_del.status_code != 200:
-        #            breakpoint()
         dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, prompt_json, use_itk=True)
-        # For nextObj, keep the old dicom SEG and augment with recent predicted dicom SEG
-        if old_response != 0:
-
-            dicom_seg1 = pydicom.dcmread(dicom_old_file)
-            dicom_seg2 = pydicom.dcmread(dicom_seg_file)
-            segmentations = [dicom_seg1, dicom_seg2]
-            
-            # Read the first segmentation file
-            segment_arrays_1, segment_frames_1, metadata_source = read_seg_file(dicom_seg1)
-            
-            # Read the second segmentation file
-            segment_arrays_2, segment_frames_2, _ = read_seg_file(dicom_seg2)
-            
-            # Combine seg pixel array
-            combined_pixel_array = np.concatenate((segment_arrays_1, segment_arrays_2), axis=0)
-            
-            segment_sequence_1 = dicom_seg1.SegmentSequence
-            segment_sequence_2 = dicom_seg2.SegmentSequence
-            # Merge segment sequences and adjust SegmentNumber
-            current_max_label = len(segment_sequence_1)
-            for i, segment in enumerate(segment_sequence_2):
-                segment.SegmentNumber = current_max_label + i + 1
-                segment_sequence_1.append(segment_sequence_2[i])
-
-            all_segments = segment_sequence_1
-            updated_frames_2 = [(segment_index + current_max_label, slice_index, sop_instance_uid) for segment_index, slice_index, sop_instance_uid in segment_frames_2]
-            combined_frames = segment_frames_1 + updated_frames_2
-
-            # Save the combined segmentation
-            combined_segmentation = save_combined_segmentation(
-                combined_pixel_array, all_segments, combined_frames, metadata_source
-            )
-
-            # Save the combined segmentation
-            combined_segmentation.save_as(dicom_seg_file)
-
-        
-        #series_id = dicom_web_upload_dcm(dicom_seg_file, instance.datastore()._client)
-        #result["dicom_seg"] = series_id
-        final_seg_ds = dcmread(dicom_seg_file)
-        #dicom_bytes = final_seg_ds.PixelData if hasattr(final_seg_ds, "PixelData") else open(dicom_seg_file, "rb").read()
         with open(dicom_seg_file, "rb") as f:
             dicom_bytes = f.read()
         result["dicom_seg"] = dicom_bytes
