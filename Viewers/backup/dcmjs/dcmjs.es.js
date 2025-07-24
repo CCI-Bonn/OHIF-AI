@@ -12132,18 +12132,18 @@ var Segmentation$4 = /*#__PURE__*/function (_DerivedPixels) {
       Segment.SegmentAlgorithmType = Segment.SegmentAlgorithmType.toUpperCase();
 
       // Check SegmentAlgorithmType and SegmentAlgorithmName if necessary.
-      switch (Segment.SegmentAlgorithmType) {
-        case "AUTOMATIC":
-        case "SEMIAUTOMATIC":
-          if (!Segment.SegmentAlgorithmName) {
-            throw new Error("If the SegmentAlgorithmType is SEMIAUTOMATIC or AUTOMATIC,\n          SegmentAlgorithmName must be provided");
-          }
-          break;
-        case "MANUAL":
-          break;
-        default:
-          throw new Error("SegmentAlgorithmType ".concat(Segment.SegmentAlgorithmType, " invalid."));
-      }
+      //switch (Segment.SegmentAlgorithmType) {
+      //  case "AUTOMATIC":
+      //  case "SEMIAUTOMATIC":
+      //    if (!Segment.SegmentAlgorithmName) {
+      //      throw new Error("If the SegmentAlgorithmType is SEMIAUTOMATIC or AUTOMATIC,\n          //SegmentAlgorithmName must be provided");
+      //    }
+      //    break;
+      //  case "MANUAL":
+      //    break;
+      //  default:
+      //    throw new Error("SegmentAlgorithmType ".concat(Segment.SegmentAlgorithmType, " invalid."));
+      //}
 
       // Deep copy, so we don't change the segment index stored in cornerstoneTools.
 
