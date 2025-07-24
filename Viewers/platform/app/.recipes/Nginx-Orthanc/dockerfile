@@ -18,13 +18,38 @@ COPY ./ /usr/src/app/
 RUN yarn config set workspaces-experimental true
 RUN yarn install
 
+# To change color of negative point
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/AnnotationTool.js
+
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/RectangleROITool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/PlanarFreehandROITool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/renderMethods.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/drawLoop.js
+
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
+RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
+
+# To change color of negative point
+COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/
+
+COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/PlanarFreehandROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/renderMethods.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
+COPY ./backup/esm/drawLoop.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
+
+
+COPY ./backup/esm/SegmentationRenderingEngine.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/
+COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
+
 # Copy the rest of the application code
 
 # set QUICK_BUILD to true to make the build faster for dev
 ENV APP_CONFIG=config/docker-nginx-orthanc.js
 
 # Build the application
-RUN yarn run build
+RUN yarn run build:dev
 
 # # Stage 2: Bundle the built application into a Docker container which runs NGINX using Alpine Linux
 FROM nginx:alpine
@@ -37,7 +62,7 @@ RUN mkdir -p /var/log/nginx /var/www/html
 COPY --from=builder /usr/src/app/platform/app/dist /var/www/html
 
 # # Expose HTTP and HTTPS ports
-EXPOSE 80 443
+EXPOSE 1025 1026
 
 # # Start NGINX
 CMD ["nginx", "-g", "daemon off;"]
