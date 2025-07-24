@@ -18,66 +18,13 @@ COPY ./ /usr/src/app/
 RUN yarn config set workspaces-experimental true
 RUN yarn install
 
-# To change color of negative point
-RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/AnnotationTool.js
-
-RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
-RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/RectangleROITool.js
-RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/SplineROITool.js
-RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/PlanarFreehandROITool.js
-RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/renderMethods.js
-RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/drawLoop.js
-
-RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
-RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/ProbeTool.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
-
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/core/dist/cjs/utilities/sortImageIdsAndGetSpacing.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/sortImageIdsAndGetSpacing.js
-
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/adapters/dist/adapters.es.js
-
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/createLabelmapVolumeForViewport.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/polySeg/Labelmap/labelmapComputationStrategies.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/polySeg/Labelmap/convertContourToLabelmap.js
-
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/utilities/triggerAnnotationRender.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/triggerAnnotationRender.js
-
-# To change color of negative point
-COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/
-
-COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
-COPY ./backup/esm/SplineROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
-COPY ./backup/esm/PlanarFreehandROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
-COPY ./backup/esm/renderMethods.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
-COPY ./backup/esm/drawLoop.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
-
-#COPY ./backup/cjs/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/
-COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
-
-COPY ./backup/esm/SegmentationRenderingEngine.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/
-COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
-#COPY ./backup/cjs/sortImageIdsAndGetSpacing.js /usr/src/app/node_modules/@cornerstonejs/core/dist/cjs/utilities/
-#COPY ./backup/esm/sortImageIdsAndGetSpacing.js /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/
-
-#COPY ./backup/adapters/adapters.es.js /usr/src/app/node_modules/@cornerstonejs/adapters/dist/
-
-#COPY ./backup/cornerstone2.0_patch/createLabelmapVolumeForViewport.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/
-#COPY ./backup/cornerstone2.0_patch/labelmapComputationStrategies.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/polySeg/Labelmap/
-#COPY ./backup/cornerstone2.0_patch/convertContourToLabelmap.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/polySeg/Labelmap/
-
-#COPY ./backup/cjs/triggerAnnotationRender.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/utilities/
-#COPY ./backup/esm/triggerAnnotationRender.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/
-
 # Copy the rest of the application code
 
 # set QUICK_BUILD to true to make the build faster for dev
 ENV APP_CONFIG=config/docker-nginx-orthanc.js
 
 # Build the application
-RUN yarn run build:dev
+RUN yarn run build
 
 # # Stage 2: Bundle the built application into a Docker container which runs NGINX using Alpine Linux
 FROM nginx:alpine
@@ -90,7 +37,7 @@ RUN mkdir -p /var/log/nginx /var/www/html
 COPY --from=builder /usr/src/app/platform/app/dist /var/www/html
 
 # # Expose HTTP and HTTPS ports
-EXPOSE 1025 1026
+EXPOSE 80 443
 
 # # Start NGINX
 CMD ["nginx", "-g", "daemon off;"]

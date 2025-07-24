@@ -12,13 +12,7 @@ const colorsByOrientation = {
   coronal: 'rgb(0, 200, 0)',
 };
 
-function initDefaultToolGroup(
-  extensionManager,
-  toolGroupService,
-  commandsManager,
-  toolGroupId,
-  modeLabelConfig
-) {
+function initDefaultToolGroup(extensionManager, toolGroupService, commandsManager, toolGroupId) {
   const utilityModule = extensionManager.getModuleEntry(
     '@ohif/extension-cornerstone.utilityModule.tools'
   );
@@ -50,34 +44,29 @@ function initDefaultToolGroup(
         toolName: toolNames.ArrowAnnotate,
         configuration: {
           getTextCallback: (callback, eventDetails) => {
-            if (modeLabelConfig) {
-              callback(' ');
-            } else {
-              commandsManager.runCommand('arrowTextCallback', {
-                callback,
-                eventDetails,
-              });
-            }
+            commandsManager.runCommand('arrowTextCallback', {
+              callback,
+              eventDetails,
+            });
           },
           changeTextCallback: (data, eventDetails, callback) => {
-            if (modeLabelConfig === undefined) {
-              commandsManager.runCommand('arrowTextCallback', {
-                callback,
-                data,
-                eventDetails,
-              });
-            }
+            commandsManager.runCommand('arrowTextCallback', {
+              callback,
+              data,
+              eventDetails,
+            });
           },
         },
+      },
+      {
+        toolName: toolNames.SegmentBidirectional,
       },
       { toolName: toolNames.Bidirectional },
       { toolName: toolNames.DragProbe },
       { toolName: toolNames.Probe },
-      { toolName: toolNames.Probe2 },
       { toolName: toolNames.EllipticalROI },
       { toolName: toolNames.CircleROI },
       { toolName: toolNames.RectangleROI },
-      { toolName: toolNames.RectangleROI2 },
       { toolName: toolNames.StackScroll },
       { toolName: toolNames.Angle },
       { toolName: toolNames.CobbAngle },
@@ -89,76 +78,9 @@ function initDefaultToolGroup(
           displayOnePointAsCrosshairs: true,
         },
       },
-      {
-        toolName: 'CircularBrush',
-        parentTool: 'Brush',
-        configuration: {
-          activeStrategy: 'FILL_INSIDE_CIRCLE',
-        },
-      },
-      {
-        toolName: 'CircularEraser',
-        parentTool: 'Brush',
-        configuration: {
-          activeStrategy: 'ERASE_INSIDE_CIRCLE',
-        },
-      },
-      {
-        toolName: 'SphereBrush',
-        parentTool: 'Brush',
-        configuration: {
-          activeStrategy: 'FILL_INSIDE_SPHERE',
-        },
-      },
-      {
-        toolName: 'SphereEraser',
-        parentTool: 'Brush',
-        configuration: {
-          activeStrategy: 'ERASE_INSIDE_SPHERE',
-        },
-      },
-      {
-        toolName: 'ThresholdCircularBrush',
-        parentTool: 'Brush',
-        configuration: {
-          activeStrategy: 'THRESHOLD_INSIDE_CIRCLE',
-        },
-      },
-      {
-        toolName: 'ThresholdSphereBrush',
-        parentTool: 'Brush',
-        configuration: {
-          activeStrategy: 'THRESHOLD_INSIDE_SPHERE',
-        },
-      },
-      {
-        toolName: 'ThresholdCircularBrushDynamic',
-        parentTool: 'Brush',
-        configuration: {
-          activeStrategy: 'THRESHOLD_INSIDE_CIRCLE',
-          // preview: {
-          //   enabled: true,
-          // },
-          strategySpecificConfiguration: {
-            // to use the use the center segment index to determine
-            // if inside -> same segment, if outside -> eraser
-            // useCenterSegmentIndex: true,
-            THRESHOLD: {
-              isDynamic: true,
-              dynamicRadius: 3,
-            },
-          },
-        },
-      },
-      { toolName: toolNames.CircleScissors },
-      { toolName: toolNames.RectangleScissors },
-      { toolName: toolNames.SphereScissors },
-      { toolName: toolNames.SegmentationDisplay },
       { toolName: toolNames.UltrasoundDirectional },
       { toolName: toolNames.PlanarFreehandROI },
-      { toolName: toolNames.PlanarFreehandROI2 },
       { toolName: toolNames.SplineROI },
-      { toolName: toolNames.SplineROI2 },
       { toolName: toolNames.LivewireContour },
       { toolName: toolNames.WindowLevelRegion },
     ],
@@ -247,7 +169,7 @@ function initSRToolGroup(extensionManager, toolGroupService) {
   toolGroupService.createToolGroupAndAddTools(toolGroupId, tools);
 }
 
-function initMPRToolGroup(extensionManager, toolGroupService, commandsManager, modeLabelConfig) {
+function initMPRToolGroup(extensionManager, toolGroupService, commandsManager) {
   const utilityModule = extensionManager.getModuleEntry(
     '@ohif/extension-cornerstone.utilityModule.tools'
   );
@@ -282,23 +204,17 @@ function initMPRToolGroup(extensionManager, toolGroupService, commandsManager, m
         toolName: toolNames.ArrowAnnotate,
         configuration: {
           getTextCallback: (callback, eventDetails) => {
-            if (modeLabelConfig) {
-              callback('');
-            } else {
-              commandsManager.runCommand('arrowTextCallback', {
-                callback,
-                eventDetails,
-              });
-            }
+            commandsManager.runCommand('arrowTextCallback', {
+              callback,
+              eventDetails,
+            });
           },
           changeTextCallback: (data, eventDetails, callback) => {
-            if (modeLabelConfig === undefined) {
-              commandsManager.runCommand('arrowTextCallback', {
-                callback,
-                data,
-                eventDetails,
-              });
-            }
+            commandsManager.runCommand('arrowTextCallback', {
+              callback,
+              data,
+              eventDetails,
+            });
           },
         },
       },
@@ -389,16 +305,10 @@ function initVolume3DToolGroup(extensionManager, toolGroupService) {
   toolGroupService.createToolGroupAndAddTools('volume3d', tools);
 }
 
-function initToolGroups(extensionManager, toolGroupService, commandsManager, modeLabelConfig) {
-  initDefaultToolGroup(
-    extensionManager,
-    toolGroupService,
-    commandsManager,
-    'default',
-    modeLabelConfig
-  );
-  initSRToolGroup(extensionManager, toolGroupService, commandsManager);
-  initMPRToolGroup(extensionManager, toolGroupService, commandsManager, modeLabelConfig);
+function initToolGroups(extensionManager, toolGroupService, commandsManager) {
+  initDefaultToolGroup(extensionManager, toolGroupService, commandsManager, 'default');
+  initSRToolGroup(extensionManager, toolGroupService);
+  initMPRToolGroup(extensionManager, toolGroupService, commandsManager);
   initVolume3DToolGroup(extensionManager, toolGroupService);
 }
 

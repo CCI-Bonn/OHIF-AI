@@ -1,9 +1,8 @@
-import { utils, Types } from '@ohif/core';
+import { Types, DicomMetadataStore } from '@ohif/core';
 
-import { ContextMenuController, defaultContextMenu } from './CustomizableContextMenu';
+import { ContextMenuController } from './CustomizableContextMenu';
 import DicomTagBrowser from './DicomTagBrowser/DicomTagBrowser';
 import reuseCachedLayouts from './utils/reuseCachedLayouts';
-import { createReportDialogPrompt } from '@ohif/extension-default';
 import findViewportsByPosition, {
   findOrCreateViewport as layoutFindOrCreate,
 } from './findViewportsByPosition';
@@ -17,19 +16,8 @@ import { useHangingProtocolStageIndexStore } from './stores/useHangingProtocolSt
 import { useToggleHangingProtocolStore } from './stores/useToggleHangingProtocolStore';
 import { useViewportsByPositionStore } from './stores/useViewportsByPositionStore';
 import { useToggleOneUpViewportGridStore } from './stores/useToggleOneUpViewportGridStore';
-
-import { Enums as csToolsEnums, Types as cstTypes, segmentation as csToolsSegmentation } from '@cornerstonejs/tools';
-import { getNextColorLUTIndex } from '@cornerstonejs/tools/segmentation/getNextColorLUTIndex';
-import { addColorLUT } from '@cornerstonejs/tools/segmentation/addColorLUT';
-import { cache, imageLoader, eventTarget,metaData, Types as csTypes, utilities as csUtils } from '@cornerstonejs/core';
-import { adaptersSEG } from '@cornerstonejs/adapters';
-
-const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
-//import { defaultRouteInit } from '@routes/Mode/defaultRouteInit'
-import MonaiLabelClient from '../../monai-label/src/services/MonaiLabelClient';
-import axios from 'axios';
-import { toolboxState } from './stores/toolboxState';
-
+import requestDisplaySetCreationForStudy from './Panels/requestDisplaySetCreationForStudy';
+import promptSaveReport from './utils/promptSaveReport';
 
 export type HangingProtocolParams = {
   protocolId?: string;
@@ -47,6 +35,7 @@ export type UpdateViewportDisplaySetParams = {
 const commandsModule = ({
   servicesManager,
   commandsManager,
+  extensionManager,
 }: Types.Extensions.ExtensionParams): Types.Extensions.CommandsModule => {
   const {
     customizationService,
@@ -55,27 +44,64 @@ const commandsModule = ({
     uiNotificationService,
     viewportGridService,
     displaySetService,
-    uiDialogService,
+    multiMonitorService,
   } = servicesManager.services;
-
-  // Listen for measurement added events to trigger nninter() when live mode is enabled
-  measurementService.subscribe(
-    measurementService.EVENTS.MEASUREMENT_ADDED,
-    (evt) => {
-      if (toolboxState.getLiveMode()) {
-        console.log('Live mode enabled, triggering nninter() for new measurement');
-        // Use setTimeout to ensure the measurement is fully processed
-        setTimeout(() => {
-          commandsManager.run('nninter');
-        }, 100);
-      }
-    }
-  );
 
   // Define a context menu controller for use with any context menus
   const contextMenuController = new ContextMenuController(servicesManager, commandsManager);
 
   const actions = {
+    /**
+     * Runs a command in multi-monitor mode.  No-op if not multi-monitor.
+     */
+    multimonitor: async options => {
+      const { screenDelta, StudyInstanceUID, commands, hashParams } = options;
+      if (multiMonitorService.numberOfScreens < 2) {
+        return options.fallback?.(options);
+      }
+
+      const newWindow = await multiMonitorService.launchWindow(
+        StudyInstanceUID,
+        screenDelta,
+        hashParams
+      );
+
+      // Only run commands if we successfully got a window with a commands manager
+      if (newWindow && commands) {
+        // Todo: fix this properly, but it takes time for the new window to load
+        // and then the commandsManager is available for it
+        setTimeout(() => {
+          multiMonitorService.run(screenDelta, commands, options);
+        }, 1000);
+      }
+    },
+
+    /** Displays a prompt and then save the report if relevant */
+    promptSaveReport: props => {
+      const { StudyInstanceUID } = props;
+      promptSaveReport({ servicesManager, commandsManager, extensionManager }, props, {
+        data: { StudyInstanceUID },
+      });
+    },
+
+    /**
+     * Ensures that the specified study is available for display
+     * Then, if commands is specified, runs the given commands list/instance
+     */
+    loadStudy: async options => {
+      const { StudyInstanceUID } = options;
+      const displaySets = displaySetService.getActiveDisplaySets();
+      const isActive = displaySets.find(ds => ds.StudyInstanceUID === StudyInstanceUID);
+      if (isActive) {
+        return;
+      }
+      const [dataSource] = extensionManager.getActiveDataSource();
+      await requestDisplaySetCreationForStudy(dataSource, displaySetService, StudyInstanceUID);
+
+      const study = DicomMetadataStore.getStudy(StudyInstanceUID);
+      hangingProtocolService.addStudy(study);
+    },
+
     /**
      * Show the context menu.
      * @param options.menuId defines the menu name to lookup, from customizationService
@@ -96,10 +122,7 @@ const commandsModule = ({
       const optionsToUse = { ...options };
 
       if (menuCustomizationId) {
-        Object.assign(
-          optionsToUse,
-          customizationService.get(menuCustomizationId, defaultContextMenu)
-        );
+        Object.assign(optionsToUse, customizationService.getCustomization(menuCustomizationId));
       }
 
       // TODO - make the selectorProps richer by including the study metadata and display set.
@@ -126,8 +149,9 @@ const commandsModule = ({
         type: type,
       });
     },
-    clearMeasurements: () => {
-      measurementService.clearMeasurements();
+
+    clearMeasurements: options => {
+      measurementService.clearMeasurements(options.measurementFilter);
     },
 
     /**
@@ -164,11 +188,13 @@ const commandsModule = ({
      */
     setHangingProtocol: ({
       activeStudyUID = '',
+      StudyInstanceUID = '',
       protocolId,
       stageId,
       stageIndex,
       reset = false,
     }: HangingProtocolParams): boolean => {
+      const toUseStudyInstanceUID = activeStudyUID || StudyInstanceUID;
       try {
         // Stores in the state the display set selector id to displaySetUID mapping
         // Pass in viewportId for the active viewport.  This item will get set as
@@ -187,7 +213,7 @@ const commandsModule = ({
           }
         } else if (stageIndex === undefined && stageId === undefined) {
           // Re-set the same stage as was previously used
-          const hangingId = `${activeStudyUID || hpInfo.activeStudyUID}:${protocolId}`;
+          const hangingId = `${toUseStudyInstanceUID || hpInfo.activeStudyUID}:${protocolId}`;
           stageIndex = hangingProtocolStageIndexMap[hangingId]?.stageIndex;
         }
 
@@ -198,11 +224,9 @@ const commandsModule = ({
             stageIndex,
           });
 
-        if (activeStudyUID) {
-          hangingProtocolService.setActiveStudyUID(activeStudyUID);
-        }
+        const activeStudyChanged = hangingProtocolService.setActiveStudyUID(toUseStudyInstanceUID);
 
-        const storedHanging = `${hangingProtocolService.getState().activeStudyUID}:${protocolId}:${
+        const storedHanging = `${toUseStudyInstanceUID || hangingProtocolService.getState().activeStudyUID}:${protocolId}:${
           useStageIdx || 0
         }`;
 
@@ -210,9 +234,25 @@ const commandsModule = ({
         const restoreProtocol = !reset && viewportGridState[storedHanging];
 
         if (
+          reset ||
+          (activeStudyChanged &&
+            !viewportGridState[storedHanging] &&
+            stageIndex === undefined &&
+            stageId === undefined)
+        ) {
+          // Run the hanging protocol fresh, re-using the existing study data
+          // This is done on reset or when the study changes and we haven't yet
+          // applied it, and don't specify exact stage to use.
+          const displaySets = displaySetService.getActiveDisplaySets();
+          const activeStudy = {
+            StudyInstanceUID: toUseStudyInstanceUID,
+            displaySets,
+          };
+          hangingProtocolService.run(activeStudy, protocolId);
+        } else if (
           protocolId === hpInfo.protocolId &&
           useStageIdx === hpInfo.stageIndex &&
-          !activeStudyUID
+          !toUseStudyInstanceUID
         ) {
           // Clear the HP setting to reset them
           hangingProtocolService.setProtocol(protocolId, {
@@ -233,7 +273,7 @@ const commandsModule = ({
         // Do this after successfully applying the update
         const { setDisplaySetSelector } = useDisplaySetSelectorStore.getState();
         setDisplaySetSelector(
-          `${activeStudyUID || hpInfo.activeStudyUID}:activeDisplaySet:0`,
+          `${toUseStudyInstanceUID || hpInfo.activeStudyUID}:activeDisplaySet:0`,
           null
         );
         return true;
@@ -310,7 +350,6 @@ const commandsModule = ({
       const { protocol } = hangingProtocolService.getActiveProtocol();
       const onLayoutChange = protocol.callbacks?.onLayoutChange;
       if (commandsManager.run(onLayoutChange, { numRows, numCols }) === false) {
-        console.log('setViewportGridLayout running', onLayoutChange, numRows, numCols);
         // Don't apply the layout if the run command returns false
         return;
       }
@@ -475,758 +514,10 @@ const commandsModule = ({
         contentProps: {
           displaySets,
           displaySetInstanceUID: defaultDisplaySetInstanceUID,
-          onClose: UIModalService.hide,
         },
-        containerDimensions: 'w-[70%] max-w-[900px]',
         title: 'DICOM Tag Browser',
+        containerClassName: 'max-w-3xl',
       });
-    },
-
-    async sam2_one() {
-      const response = await MonaiLabelClient.api_get('/monai/info/');
-      if (response.status === 200) {
-        uiNotificationService.show({
-          title: 'MONAI Label',
-          message: 'Connecting to MONAI Label',
-          type: 'info',
-          duration: 3000,
-        });
-      } else {
-        uiNotificationService.show({
-          title: 'MONAI Label',
-          message: 'Failed to connect to MONAI Label',
-          type: 'error',
-          duration: 3000,
-        });
-        return response;
-      }
-      const { activeViewportId, viewports } = viewportGridService.getState();
-      const activeViewportSpecificData = viewports.get(activeViewportId);
-      const { displaySetInstanceUIDs } = activeViewportSpecificData;
-
-      const displaySets = displaySetService.activeDisplaySets;
-      //const { UIModalService } = servicesManager.services;
-
-      const displaySetInstanceUID = displaySetInstanceUIDs[0];
-      const currentDisplaySets = displaySets.filter(e => {
-        return e.displaySetInstanceUID == displaySetInstanceUID;
-      })[0];
-
-      //const prompts = Array.from(measurementService.measurements).filter((e)=>{return e[1].data!==undefined}).map((e)=>{return Object.values(e[1].data)[0].index})
-      const pos_points = Array.from(measurementService.measurements)
-        .filter(e => {
-          return e[1].toolName === 'Probe';
-        })
-        .map(e => {
-          return Object.values(e[1].data)[0].index;
-        });
-      const neg_points = Array.from(measurementService.measurements)
-        .filter(e => {
-          return e[1].toolName === 'Probe2';
-        })
-        .map(e => {
-          return Object.values(e[1].data)[0].index;
-        });
-      const bd_boxes = Array.from(measurementService.measurements)
-        .filter(e => { return e[1].toolName === 'RectangleROI2' })
-        .map(e => { return Object.values(e[1].data)[0].pointsInShape })
-
-      let box_prompts = bd_boxes.map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
-
-      const text_prompts = Array.from(services.measurementService.measurements)
-      .filter(e => { return e[1].toolName === 'Probe' })
-      .map(e => { return e[1].label })
-
-      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
-      let params = {
-        largest_cc: false,
-        device: response.data.trainers.segmentation.config.device,
-        result_extension: '.nii.gz',
-        result_dtype: 'uint16',
-        result_compress: false,
-        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
-        restore_label_idx: false,
-        pos_points: pos_points,
-        neg_points: neg_points,
-        boxes: box_prompts,
-        texts: text_prompts,
-        one: true,
-      };
-
-      if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj!==undefined){
-        params.nextObj = useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj
-      }
-
-      let data = MonaiLabelClient.constructFormData(params, null);
-
-      axios
-        .post(url, data, {
-          responseType: 'arraybuffer',
-          headers: {
-            accept: 'application/json, multipart/form-data',
-          },
-        })
-        .then(function (response) {
-          console.debug(response);
-          if (response.status === 200) {
-            uiNotificationService.show({
-              title: 'MONAI Label',
-              message: 'Run Segmentation - Successful',
-              type: 'success',
-              duration: 2000,
-            });
-            let currentDate = utils.formatDate(Date.now(), 'YYYYMMDD')
-            //old segementation is deleted at PACS, should be excluded from activeDisplaySets
-            displaySetService.activeDisplaySets = displaySetService.activeDisplaySets.filter(e => {
-              return (e.SeriesDescription != 'SAM2_' + currentDisplaySets.SeriesDescription) || (e.SeriesDate != currentDate);
-            })
-
-            let studyInstanceUID = currentDisplaySets.StudyInstanceUID
-            let studyInstanceUIDs = [studyInstanceUID, 1]
-            let dataSource = extensionManager.getActiveDataSource()[0]
-            let filters = { 'StudyInstanceUIDs': [studyInstanceUID] }
-            let appConfig = config
-            let unsubscriptions = defaultRouteInit({ servicesManager, studyInstanceUIDs, dataSource, filters, appConfig }, "default", 0).then(async function (unsub) {
-              const displaySets = displaySetService.activeDisplaySets;
-              const currentDisplaySet = displaySets.filter(e => {
-                return (e.SeriesDescription == 'SAM2_' + currentDisplaySets.SeriesDescription) && (e.SeriesDate == currentDate);
-              })[0];
-              let updatedViewports = hangingProtocolService.getViewportsRequireUpdate(activeViewportId, currentDisplaySet.displaySetInstanceUID, true)
-              viewportGridService.setDisplaySetsForViewports(updatedViewports)
-            })
-          }
-          return response;
-        })
-        .catch(function (error) {
-          return error;
-        })
-        .finally(function () { });
-    },
-    async sam2() {
-      const start = Date.now();
-      
-      const segs = servicesManager.services.segmentationService.getSegmentations()
-      //remove old segmentationsFromViewport
-      //for (let seg of segs) {
-      //  commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
-      //}
-      const { activeViewportId, viewports } = viewportGridService.getState();
-      const activeViewportSpecificData = viewports.get(activeViewportId);
-
-      const { setViewportGridState } = useViewportGridStore.getState();
-      setViewportGridState('currentImageIdIndex', servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex);
-      const { displaySetInstanceUIDs } = activeViewportSpecificData;
-
-      const displaySets = displaySetService.activeDisplaySets;
-
-      const displaySetInstanceUID = displaySetInstanceUIDs[0];
-      const currentDisplaySets = displaySets.filter(e => {
-        return e.displaySetInstanceUID == displaySetInstanceUID;
-      })[0];
-
-      const pos_points = measurementService.getMeasurements()
-        .filter(e => {
-          return e.toolName === 'Probe';
-        })
-        .map(e => {
-          return Object.values(e.data)[0].index;
-        });
-      const neg_points = measurementService.getMeasurements()
-        .filter(e => {
-          return e.toolName === 'Probe2';
-        })
-        .map(e => {
-          return Object.values(e.data)[0].index;
-        });
-
-      const bd_boxes = measurementService.getMeasurements()
-        .filter(e => { 
-          return e.toolName === 'RectangleROI2' 
-        })
-        .map(e => { 
-          return Object.values(e.data)[0].pointsInShape 
-        })
-
-      let box_prompts = bd_boxes.map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
-
-      const lassos = measurementService.getMeasurements()
-        .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2' 
-        })
-        .map(e => { 
-          return Object.values(e.data)[0]?.boundary 
-      })
-      .filter(Boolean)
-
-      const scribbles = measurementService.getMeasurements()
-        .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2' 
-        })
-        .map(e => { 
-          return Object.values(e.data)[0]?.scribble 
-      })
-      .filter(Boolean)
-
-      const text_prompts = measurementService.getMeasurements()
-      .filter(e => { return e.toolName === 'Probe' })
-      .map(e => { return e.label })
-
-      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
-      let params = {
-        largest_cc: false,
-        result_extension: '.nii.gz',
-        result_dtype: 'uint16',
-        result_compress: false,
-        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
-        restore_label_idx: false,
-        pos_points: pos_points,
-        neg_points: neg_points,
-        boxes: box_prompts,
-        texts: text_prompts,
-        lassos: lassos,
-        scribbles: scribbles,
-        nninter: false,
-      };
-
-      if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj!==undefined){
-        params.nextObj = useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj
-      }
-
-      let data = MonaiLabelClient.constructFormData(params, null);
-
-      axios
-        .post(url, data, {
-          responseType: 'arraybuffer',
-          headers: {
-            accept: 'application/json, multipart/form-data',
-          },
-        })
-        .then(async function (response) {
-          console.debug(response);
-          if (response.status === 200) {
-            uiNotificationService.show({
-              title: 'MONAI Label',
-              message: 'Run Segmentation - Successful',
-              type: 'success',
-              duration: 2000,
-            });
-            const arrayBuffer = response.data
-            //const uint8 = new Uint8Array(arrayBuffer);
-
-            let segmentationId = `${csUtils.uuidv4()}`
-            let imageIds = currentDisplaySets.imageIds
-
-            const results = await adaptersSEG.Cornerstone3D.Segmentation.generateToolState(
-              imageIds,
-              arrayBuffer,
-              metaData
-            );
-            
-            const derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
-            const segImageIds = derivedImages.map(image => image.imageId);
-
-          const labelmapBufferArray = results.labelmapBufferArray  
-          // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
-          const volumeScalarData = new Uint8Array(labelmapBufferArray[0]);
-
-          // We should parse the segmentation as separate slices to support overlapping segments.
-          // This parsing should occur in the CornerstoneJS library adapters.
-          for (let i = 0; i < derivedImages.length; i++) {
-            const voxelManager = derivedImages[i]
-              .voxelManager as csTypes.IVoxelManager<number>;
-            const scalarData = voxelManager.getScalarData();
-            const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
-            scalarData.set(sliceData);
-            voxelManager.setScalarData(scalarData);
-          }
-
-          const segmentsInfo = results.segMetadata.data;
-          
-          // Find existing segments for the same series
-          const existingSegs = servicesManager.services.segmentationService.getSegmentations();
-          let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
-          let existingColorLUT: number[][] = [];
-          
-          // Find existing segmentation with matching seriesInstanceUid
-          for (let seg of existingSegs) {
-            if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
-              existingSegments = seg.segments || {};
-              existingColorLUT = seg.colorLUT || [];
-              break;
-            }
-          }
-          
-          const segments: { [segmentIndex: string]: cstTypes.Segment } = { ...existingSegments };
-          const colorLUT = [...existingColorLUT];
-
-          segmentsInfo.forEach((segmentInfo, index) => {
-            if (index === 0) {
-              colorLUT.push([0, 0, 0, 0]);
-              return;
-            }
-
-            const {
-              SegmentedPropertyCategoryCodeSequence,
-              SegmentNumber,
-              SegmentLabel,
-              SegmentAlgorithmType,
-              SegmentAlgorithmName,
-              SegmentDescription,
-              SegmentedPropertyTypeCodeSequence,
-              rgba,
-            } = segmentInfo;
-
-            colorLUT.push(rgba);
-
-            const segmentIndex = Number(SegmentNumber);
-
-            const centroid = results.centroids?.get(index);
-            const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
-            const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
-
-            segments[segmentIndex] = {
-              segmentIndex,
-              label: SegmentLabel || `Segment ${SegmentNumber}`,
-              locked: false,
-              active: false,
-              cachedStats: {
-                center: {
-                  image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
-                  world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
-                },
-                modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
-                category: SegmentedPropertyCategoryCodeSequence
-                  ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
-                  : '',
-                type: SegmentedPropertyTypeCodeSequence
-                  ? SegmentedPropertyTypeCodeSequence.CodeMeaning
-                  : '',
-                algorithmType: SegmentAlgorithmType,
-                algorithmName: SegmentAlgorithmName,
-                description: SegmentDescription,
-              },
-            };
-          });
-
-            csToolsSegmentation.addSegmentations([
-              {
-                  segmentationId,
-                  representation: {
-                      type: LABELMAP,
-                      data: {
-                        imageIds: segImageIds,
-                        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-                        referencedImageIds: imageIds,
-
-                      }
-                  },
-                  config: {
-                    cachedStats: results.segMetadata,
-                    label: currentDisplaySets.SeriesDescription,
-                    segments,
-                  },
-              }
-          ]);
-          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-            segmentationId: segmentationId,
-          });
-
-          const end = Date.now();
-          console.log(`Time taken: ${(end - start)/1000} Seconds`);
-          return response;
-          }
-          const end = Date.now();
-          console.log(`Time taken: ${(end - start)/1000} Seconds`);
-          return response;
-        })
-        .catch(function (error) {
-          return error;
-        })
-        .finally(function () { });
-    },
-    async resetNninter(){
-      const { activeViewportId, viewports } = viewportGridService.getState();
-      const activeViewportSpecificData = viewports.get(activeViewportId);
-      const { displaySetInstanceUIDs } = activeViewportSpecificData;
-      const displaySets = displaySetService.activeDisplaySets;
-      const displaySetInstanceUID = displaySetInstanceUIDs[0];
-      const currentDisplaySets = displaySets.filter(e => {
-        return e.displaySetInstanceUID == displaySetInstanceUID;
-      })[0];
-      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
-      let params = {
-        largest_cc: false,
-        result_extension: '.nii.gz',
-        result_dtype: 'uint16',
-        result_compress: false,
-        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
-        restore_label_idx: false,
-        nninter: "reset",
-      };
-
-      let data = MonaiLabelClient.constructFormData(params, null);
-
-      axios
-        .post(url, data, {
-          responseType: 'arraybuffer',
-          headers: {
-            accept: 'application/json, multipart/form-data',
-          },
-        })
-        .then(async function (response) {
-          if (response.status === 200) {
-            uiNotificationService.show({
-              title: 'NNInter',
-              message: 'Reset nninter - Successful',
-              type: 'success',
-              duration: 2000,
-            });
-            commandsManager.run('clearMeasurements')
-          }
-          return response;
-        })
-        .catch(function (error) {
-          return error;
-        })
-        .finally(function () { });
-
-    },
-
-    async nninter() {
-      const start = Date.now();
-      
-      const segs = servicesManager.services.segmentationService.getSegmentations()
-      //remove old segmentationsFromViewport
-      //for (let seg of segs) {
-      //  commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
-      //}
-      const { activeViewportId, viewports } = viewportGridService.getState();
-      const activeViewportSpecificData = viewports.get(activeViewportId);
-
-      const { setViewportGridState } = useViewportGridStore.getState();
-      setViewportGridState('currentImageIdIndex', servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex);
-      const { displaySetInstanceUIDs } = activeViewportSpecificData;
-
-      const displaySets = displaySetService.activeDisplaySets;
-
-      const displaySetInstanceUID = displaySetInstanceUIDs[0];
-      const currentDisplaySets = displaySets.filter(e => {
-        return e.displaySetInstanceUID == displaySetInstanceUID;
-      })[0];
-
-      const currentMeasurements = measurementService.getMeasurements()
-
-      const pos_points = currentMeasurements
-        .filter(e => {
-          return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
-        })
-        .map(e => {
-          return Object.values(e.data)[0].index;
-        });
-      const neg_points = currentMeasurements
-        .filter(e => {
-          return e.toolName === 'Probe'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
-        })
-        .map(e => {
-          return Object.values(e.data)[0].index;
-        });
-
-      const pos_boxes = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0].pointsInShape 
-        })
-        .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
-
-      const neg_boxes = currentMeasurements
-      .filter(e => { 
-        return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
-      })
-      .map(e => { 
-        return Object.values(e.data)[0].pointsInShape 
-      })
-      .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
-
-      const pos_lassos = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0]?.boundary 
-      })
-      .filter(Boolean)
-
-      const neg_lassos = currentMeasurements
-      .filter(e => { 
-        return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
-      })
-      .map(e => { 
-        return Object.values(e.data)[0]?.boundary 
-    })
-    .filter(Boolean)
-
-      const pos_scribbles = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0]?.scribble 
-      })
-      .filter(Boolean)
-
-      const neg_scribbles = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0]?.scribble 
-      })
-      .filter(Boolean)
-
-      const text_prompts = currentMeasurements
-      .filter(e => { return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID})
-      .map(e => { return e.label })
-
-      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
-      let params = {
-        largest_cc: false,
-      //  device: response.data.trainers.segmentation.config.device,
-        result_extension: '.nii.gz',
-        result_dtype: 'uint16',
-        result_compress: false,
-        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
-        restore_label_idx: false,
-        pos_points: pos_points,
-        neg_points: neg_points,
-        pos_boxes: pos_boxes,
-        neg_boxes: neg_boxes,
-        pos_lassos: pos_lassos,
-        neg_lassos: neg_lassos,
-        pos_scribbles: pos_scribbles,
-        neg_scribbles: neg_scribbles,
-        texts: text_prompts,
-        nninter: true,
-      };
-
-      if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj!==undefined){
-        params.nextObj = useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj
-      }
-
-      let data = MonaiLabelClient.constructFormData(params, null);
-
-      axios
-        .post(url, data, {
-          responseType: 'arraybuffer',
-          headers: {
-            accept: 'application/json, multipart/form-data',
-          },
-        })
-        .then(async function (response) {
-          console.debug(response);
-          if (response.status === 200) {
-            uiNotificationService.show({
-              title: 'MONAI Label',
-              message: 'Run Segmentation - Successful',
-              type: 'success',
-              duration: 2000,
-            });
-            const arrayBuffer = response.data
-            //const uint8 = new Uint8Array(arrayBuffer);
-
-            let segmentationId = `${csUtils.uuidv4()}`
-            let imageIds = currentDisplaySets.imageIds
-
-            const results = await adaptersSEG.Cornerstone3D.Segmentation.generateToolState(
-              imageIds,
-              arrayBuffer,
-              metaData
-            );
-
-            let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
-            let existingColorLUT: number[][] = [];
-            
-            let segImageIds = [];
-            // Find existing segmentation with matching seriesInstanceUid
-            for (let seg of segs) {
-              if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
-                existingSegments = seg.segments || {};
-                existingColorLUT = seg.colorLUT || [];
-                segmentationId = seg.segmentationId;
-                segImageIds = seg.representationData.Labelmap.imageIds;
-                break;
-              }
-            }
-            
-            const segments: { [segmentIndex: string]: cstTypes.Segment } = { ...existingSegments };
-            const colorLUT = [...existingColorLUT];
-            let segmentNumber = 1;
-            if (Object.keys(segments).length > 0) {
-              segmentNumber = Object.keys(segments).length + 1;
-            }
-            let derivedImages = [];
-            if (segImageIds.length === 0) {
-              derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
-              segImageIds = derivedImages.map(image => image.imageId);
-            }
-
-
-            derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
-
-          const labelmapBufferArray = results.labelmapBufferArray  
-          // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
-          const volumeScalarData = new Uint8Array(labelmapBufferArray[0]);
-
-          // We should parse the segmentation as separate slices to support overlapping segments.
-          // This parsing should occur in the CornerstoneJS library adapters.
-          for (let i = 0; i < derivedImages.length; i++) {
-            const voxelManager = derivedImages[i]
-              .voxelManager as csTypes.IVoxelManager<number>;
-            let scalarData = voxelManager.getScalarData();
-            const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
-            if(segmentNumber !== 10000){
-            const transformed_sliceData = sliceData.map(v => v === 1 ? segmentNumber : v);
-            for (let j = 0; j < scalarData.length; j++) {
-              if (transformed_sliceData[j] === segmentNumber) {
-                scalarData[j] = segmentNumber;
-              }
-            }
-            }else{
-              scalarData.set(sliceData);
-            }
-            if(segmentNumber === 1){
-              voxelManager.setScalarData(scalarData);
-            }
-          }
-
-          const segmentsInfo = results.segMetadata.data;
-          
-
-          segmentsInfo.forEach((segmentInfo, index) => {
-            if (index === 0) {
-              colorLUT.push([0, 0, 0, 0]);
-              return;
-            }
-
-            const {
-              SegmentedPropertyCategoryCodeSequence,
-              SegmentNumber,
-              SegmentLabel,
-              SegmentAlgorithmType,
-              SegmentAlgorithmName,
-              SegmentDescription,
-              SegmentedPropertyTypeCodeSequence,
-              rgba,
-            } = segmentInfo;
-
-            colorLUT.push(rgba);
-            let segmentIndex = Number(SegmentNumber);
-            if(segmentNumber !== 1){
-              segmentIndex = segmentNumber;
-            }
-              
-            const centroid = results.centroids?.get(index);
-            const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
-            const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
-
-            segments[segmentIndex] = {
-              segmentIndex,
-              label: SegmentLabel || `Segment ${SegmentNumber}`,
-              locked: false,
-              active: false,
-              cachedStats: {
-                center: {
-                  image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
-                  world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
-                },
-                modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
-                category: SegmentedPropertyCategoryCodeSequence
-                  ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
-                  : '',
-                type: SegmentedPropertyTypeCodeSequence
-                  ? SegmentedPropertyTypeCodeSequence.CodeMeaning
-                  : '',
-                algorithmType: SegmentAlgorithmType,
-                algorithmName: SegmentAlgorithmName,
-                description: SegmentDescription,
-              },
-            };
-          });
-          if(segmentNumber === 1){
-            servicesManager.services.segmentationService.removeAllSegmentations();
-            csToolsSegmentation.addSegmentations([
-              {
-                  segmentationId,
-                  representation: {
-                      type: LABELMAP,
-                      data: {
-                        imageIds: segImageIds,
-                        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-                        referencedImageIds: imageIds,
-
-                      }
-                  },
-                  config: {
-                    cachedStats: results.segMetadata,
-                    label: currentDisplaySets.SeriesDescription,
-                    segments,
-                  },
-              }
-          ]);
-          
-        }else{
-          csToolsSegmentation.updateSegmentations([
-            {
-              segmentationId,
-              payload: {
-                segments: segments,
-              },
-            },
-          ]);          
-          servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
-        }
-        await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-          segmentationId: segmentationId,
-        });
-        
-          const end = Date.now();
-          console.log(`Time taken: ${(end - start)/1000} Seconds`);
-          return response;
-          }
-          const end = Date.now();
-          console.log(`Time taken: ${(end - start)/1000} Seconds`);
-          return response;
-        })
-        .catch(function (error) {
-          return error;
-        })
-        .finally(function () { });
-    },
-    saveAndNextObj: () => {
-      commandsManager.run('clearMeasurements')
-      servicesManager.services.cornerstoneViewportService.resize()
-      if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj===undefined){
-        useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj=1
-      }
-      useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj=useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj+1
-    },
-    jumpToSegment: () => {
-      const segmentationService = servicesManager.services.segmentationService;
-      const activeSegmentation = segmentationService.getActiveSegmentation('default');
-      if (activeSegmentation != undefined) {
-        segmentationService.jumpToSegmentCenter(activeSegmentation.segmentationId, 1, 'default')
-      }
-    },
-    toggleCurrentSegment: () => {
-      const segmentationService = servicesManager.services.segmentationService;
-      const activeSegmentation = segmentationService.getActiveSegmentation('default');
-      if (activeSegmentation != undefined) {
-        segmentationService.toggleSegmentationRepresentationVisibility('default', {
-          segmentationId: activeSegmentation.segmentationId,
-          type: csToolsEnums.SegmentationRepresentations.Labelmap
-        });
-      }
     },
 
     /**
@@ -1331,34 +622,23 @@ const commandsModule = ({
         });
       }
 
-      viewportGridService.setDisplaySetsForViewports(updatedViewports);
+      commandsManager.run('setDisplaySetsForViewports', { viewportsToUpdate: updatedViewports });
 
       setTimeout(() => actions.scrollActiveThumbnailIntoView(), 0);
     },
   };
 
   const definitions = {
-    showContextMenu: {
-      commandFn: actions.showContextMenu,
-    },
-    closeContextMenu: {
-      commandFn: actions.closeContextMenu,
-    },
-    clearMeasurements: {
-      commandFn: actions.clearMeasurements,
-    },
-    displayNotification: {
-      commandFn: actions.displayNotification,
-    },
-    setHangingProtocol: {
-      commandFn: actions.setHangingProtocol,
-    },
-    toggleHangingProtocol: {
-      commandFn: actions.toggleHangingProtocol,
-    },
-    navigateHistory: {
-      commandFn: actions.navigateHistory,
-    },
+    multimonitor: actions.multimonitor,
+    promptSaveReport: actions.promptSaveReport,
+    loadStudy: actions.loadStudy,
+    showContextMenu: actions.showContextMenu,
+    closeContextMenu: actions.closeContextMenu,
+    clearMeasurements: actions.clearMeasurements,
+    displayNotification: actions.displayNotification,
+    setHangingProtocol: actions.setHangingProtocol,
+    toggleHangingProtocol: actions.toggleHangingProtocol,
+    navigateHistory: actions.navigateHistory,
     nextStage: {
       commandFn: actions.deltaStage,
       options: { direction: 1 },
@@ -1367,39 +647,10 @@ const commandsModule = ({
       commandFn: actions.deltaStage,
       options: { direction: -1 },
     },
-    setViewportGridLayout: {
-      commandFn: actions.setViewportGridLayout,
-    },
-    toggleOneUp: {
-      commandFn: actions.toggleOneUp,
-    },
-    openDICOMTagViewer: {
-      commandFn: actions.openDICOMTagViewer,
-    },
-    sam2: {
-      commandFn: actions.sam2,
-    },
-    resetNninter: {
-      commandFn: actions.resetNninter,
-    },
-    nninter: {
-      commandFn: actions.nninter,
-    },
-    sam2_one: {
-      commandFn: actions.sam2_one,
-    },
-    saveAndNextObj: {
-      commandFn: actions.saveAndNextObj,
-    },
-    jumpToSegment: {
-      commandFn: actions.jumpToSegment,
-    },
-    toggleCurrentSegment: {
-      commandFn: actions.toggleCurrentSegment,
-    },
-    updateViewportDisplaySet: {
-      commandFn: actions.updateViewportDisplaySet,
-    },
+    setViewportGridLayout: actions.setViewportGridLayout,
+    toggleOneUp: actions.toggleOneUp,
+    openDICOMTagViewer: actions.openDICOMTagViewer,
+    updateViewportDisplaySet: actions.updateViewportDisplaySet,
   };
 
   return {

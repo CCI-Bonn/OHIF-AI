@@ -15,7 +15,6 @@ services:
     volumes:
       # Nginx config
       - ./config/nginx.conf:/etc/nginx/nginx.conf
-      - ./config/.htpasswd:/etc/nginx/.htpasswd
       # Logs
       - ./logs/nginx:/var/logs/nginx
       # Let's Encrypt

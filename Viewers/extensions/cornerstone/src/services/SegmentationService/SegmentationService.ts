@@ -16,7 +16,7 @@ import {
 } from '@cornerstonejs/tools';
 import { PubSubService, Types as OHIFTypes } from '@ohif/core';
 import i18n from '@ohif/i18n';
-import { easeInOutBell, reverseEaseInOutBell } from '../../utils/transitions';
+import { easeInOutBell, easeInOutBellRelative } from '../../utils/transitions';
 import { mapROIContoursToRTStructData } from './RTSTRUCT/mapROIContoursToRTStructData';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 import { addColorLUT } from '@cornerstonejs/tools/segmentation/addColorLUT';
@@ -29,7 +29,6 @@ import { updateLabelmapSegmentationImageReferences } from '@cornerstonejs/tools/
 import { triggerSegmentationRepresentationModified } from '@cornerstonejs/tools/segmentation/triggerSegmentationEvents';
 import { convertStackToVolumeLabelmap } from '@cornerstonejs/tools/segmentation/helpers/convertStackToVolumeLabelmap';
 import { getLabelmapImageIds } from '@cornerstonejs/tools/segmentation';
-import { useViewportGridStore } from '../../../../../extensions/default/src/stores/useViewportGridStore';
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 const CONTOUR = csToolsEnums.SegmentationRepresentations.Contour;
@@ -93,6 +92,7 @@ class SegmentationService extends PubSubService {
   };
 
   private _segmentationIdToColorLUTIndexMap: Map<string, number>;
+  private _segmentationGroupStatsMap: Map<string, any>;
   readonly servicesManager: AppTypes.ServicesManager;
   highlightIntervalId = null;
   readonly EVENTS = EVENTS;
@@ -103,6 +103,8 @@ class SegmentationService extends PubSubService {
     this._segmentationIdToColorLUTIndexMap = new Map();
 
     this.servicesManager = servicesManager;
+
+    this._segmentationGroupStatsMap = new Map();
   }
 
   public onModeEnter(): void {
@@ -262,15 +264,24 @@ class SegmentationService extends PubSubService {
     {
       segmentationId,
       type,
+      config,
       suppressEvents = false,
     }: {
       segmentationId: string;
       type?: csToolsEnums.SegmentationRepresentations;
+      config?: {
+        blendMode?: csEnums.BlendModes;
+      };
       suppressEvents?: boolean;
     }
   ): Promise<void> {
     const segmentation = this.getSegmentation(segmentationId);
     const csViewport = this.getAndValidateViewport(viewportId);
+
+    if (!csViewport) {
+      return;
+    }
+
     const colorLUTIndex = this._segmentationIdToColorLUTIndexMap.get(segmentationId);
 
     const defaultRepresentationType = csToolsEnums.SegmentationRepresentations.Labelmap;
@@ -299,7 +310,8 @@ class SegmentationService extends PubSubService {
       segmentationId,
       representationTypeToUse,
       colorLUTIndex,
-      isConverted
+      isConverted,
+      config
     );
 
     if (!suppressEvents) {
@@ -353,7 +365,7 @@ class SegmentationService extends PubSubService {
         type: LABELMAP,
         data: {
           imageIds: segImageIds,
-          referencedVolumeId: this._getVolumeIdForDisplaySet(displaySet),
+          // referencedVolumeId: this._getVolumeIdForDisplaySet(displaySet),
           referencedImageIds: referenceImageIds,
         },
       },
@@ -389,13 +401,13 @@ class SegmentationService extends PubSubService {
   ): Promise<string> {
     const { type } = options;
     let { segmentationId } = options;
-    const { labelmapBufferArray } = segDisplaySet;
+    const { labelMapImages } = segDisplaySet;
 
     if (type !== LABELMAP) {
       throw new Error('Only labelmap type is supported for SEG display sets right now');
     }
 
-    if (!labelmapBufferArray) {
+    if (!labelMapImages || !labelMapImages.length) {
       throw new Error('SEG reading failed');
     }
 
@@ -412,18 +424,35 @@ class SegmentationService extends PubSubService {
     }
 
     const imageIds = images.map(image => image.imageId);
+    const derivedImages = labelMapImages?.flat();
+    const derivedImageIds = derivedImages.map(image => image.imageId);
 
-    const derivedSegmentationImages = await imageLoader.createAndCacheDerivedLabelmapImages(
-      imageIds as string[]
-    );
-
-    segDisplaySet.images = derivedSegmentationImages.map(image => ({
+    segDisplaySet.images = derivedImages.map(image => ({
       ...image,
       ...metaData.get('instance', image.referencedImageId),
     }));
 
-    // Filter out any unexpected undefined entries that may be present in the segmentation metadata array
-    const segmentsInfo = (segDisplaySet.segMetadata?.data ?? [])//.filter(Boolean);
+    segDisplaySet.imageIds = derivedImageIds;
+
+    // We should parse the segmentation as separate slices to support overlapping segments.
+    // This parsing should occur in the CornerstoneJS library adapters.
+    // For now, we use the volume returned from the library and chop it here.
+    let firstSegmentedSliceImageId = null;
+    for (let i = 0; i < derivedImages.length; i++) {
+      const voxelManager = derivedImages[i].voxelManager as csTypes.IVoxelManager<number>;
+      const scalarData = voxelManager.getScalarData();
+      voxelManager.setScalarData(scalarData);
+
+      // Check if this slice has any non-zero voxels and we haven't found one yet
+      if (!firstSegmentedSliceImageId && scalarData.some(value => value !== 0)) {
+        firstSegmentedSliceImageId = derivedImages[i].referencedImageId;
+      }
+    }
+
+    // assign the first non zero voxel image id to the segDisplaySet
+    segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
+
+    const segmentsInfo = segDisplaySet.segMetadata.data;
 
     const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
     const colorLUT = [];
@@ -440,18 +469,11 @@ class SegmentationService extends PubSubService {
         SegmentLabel,
         SegmentAlgorithmType,
         SegmentAlgorithmName,
-        SegmentDescription,
         SegmentedPropertyTypeCodeSequence,
         rgba,
       } = segmentInfo;
 
-      if (rgba === undefined){
-        colorLUT.push([255,0,0,0.5]);
-      }
-      else{
-        colorLUT.push(rgba);
-      }
-      //colorLUT.push(rgba);
+      colorLUT.push(rgba);
 
       const segmentIndex = Number(SegmentNumber);
 
@@ -478,7 +500,6 @@ class SegmentationService extends PubSubService {
             : '',
           algorithmType: SegmentAlgorithmType,
           algorithmName: SegmentAlgorithmName,
-          description: SegmentDescription,
         },
       };
     });
@@ -487,38 +508,6 @@ class SegmentationService extends PubSubService {
     const colorLUTIndex = getNextColorLUTIndex();
     addColorLUT(colorLUT, colorLUTIndex);
     this._segmentationIdToColorLUTIndexMap.set(segmentationId, colorLUTIndex);
-
-    // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
-    const volumeScalarData = new Uint8Array(labelmapBufferArray[0]);
-
-    // We should parse the segmentation as separate slices to support overlapping segments.
-    // This parsing should occur in the CornerstoneJS library adapters.
-    // For now, we use the volume returned from the library and chop it here.
-    let firstSegmentedSliceImageId = null;
-    for (let i = 0; i < derivedSegmentationImages.length; i++) {
-      const voxelManager = derivedSegmentationImages[i]
-        .voxelManager as csTypes.IVoxelManager<number>;
-      const scalarData = voxelManager.getScalarData();
-      const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
-      scalarData.set(sliceData);
-      voxelManager.setScalarData(scalarData);
-
-      // Check if this slice has any non-zero voxels and we haven't found one yet
-      if (!firstSegmentedSliceImageId && sliceData.some(value => value !== 0)) {
-        firstSegmentedSliceImageId = derivedSegmentationImages[i].referencedImageId;
-      }
-    }
-    const currentImageIdIndex = Number(useViewportGridStore.getState().viewportGridState['currentImageIdIndex']);
-    if (Number.isInteger(currentImageIdIndex) &&
-      currentImageIdIndex >= 0 &&
-      currentImageIdIndex < segDisplaySet.images.length
-    ) {
-      segDisplaySet.firstSegmentedSliceImageId = segDisplaySet.images[currentImageIdIndex].imageId;
-    } else {
-    segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
-    }
-    // assign the first non zero voxel image id to the segDisplaySet
-    //segDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
 
     this._broadcastEvent(EVENTS.SEGMENTATION_LOADING_COMPLETE, {
       segmentationId,
@@ -530,8 +519,8 @@ class SegmentationService extends PubSubService {
       representation: {
         type: LABELMAP,
         data: {
-          imageIds: derivedSegmentationImages.map(image => image.imageId),
-          referencedVolumeId: this._getVolumeIdForDisplaySet(referencedDisplaySet),
+          imageIds: derivedImageIds,
+          // referencedVolumeId: this._getVolumeIdForDisplaySet(referencedDisplaySet),
           referencedImageIds: imageIds as string[],
         },
       },
@@ -582,11 +571,12 @@ class SegmentationService extends PubSubService {
 
     const referencedImageIdsWithGeometry = Array.from(structureSet.ReferencedSOPInstanceUIDsSet);
 
-    const referencedImageIds = referencedDisplaySet.instances.map(image => image.imageId);
+    const referencedImageIds = referencedDisplaySet.imageIds;
     // find the first image id that contains a referenced SOP instance UID
-    const firstSegmentedSliceImageId = referencedImageIds.find(imageId =>
-      referencedImageIdsWithGeometry.some(referencedId => imageId.includes(referencedId))
-    );
+    const firstSegmentedSliceImageId =
+      referencedImageIds?.find(imageId =>
+        referencedImageIdsWithGeometry.some(referencedId => imageId.includes(referencedId))
+      ) || null;
 
     rtDisplaySet.firstSegmentedSliceImageId = firstSegmentedSliceImageId;
     // Map ROI contours to RT Struct Data
@@ -620,9 +610,15 @@ class SegmentationService extends PubSubService {
     const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
     let segmentsCachedStats = {};
 
+    // Create colorLUT array for RT structures
+    const colorLUT = [[0, 0, 0, 0]]; // First entry is transparent for index 0
+
     // Process each segment similarly to the SEG function
     for (const rtStructData of allRTStructData) {
       const { data, id, color, segmentIndex, geometryId } = rtStructData;
+
+      // Add the color to the colorLUT array
+      colorLUT.push(color);
 
       try {
         const geometry = await geometryLoader.createAndCacheGeometry(geometryId, {
@@ -664,6 +660,11 @@ class SegmentationService extends PubSubService {
         continue; // Continue processing other segments even if one fails
       }
     }
+
+    // Create and register the colorLUT
+    const colorLUTIndex = getNextColorLUTIndex();
+    addColorLUT(colorLUT, colorLUTIndex);
+    this._segmentationIdToColorLUTIndexMap.set(segmentationId, colorLUTIndex);
 
     // Assign processed segments to segmentation config
     segmentation.config.segments = segments;
@@ -827,7 +828,8 @@ class SegmentationService extends PubSubService {
     if (!segmentIndex) {
       // grab the next available segment index based on the object keys,
       // so basically get the highest segment index value + 1
-      segmentIndex = Math.max(...Object.keys(csSegmentation.segments).map(Number)) + 1;
+      const segmentKeys = Object.keys(csSegmentation.segments);
+      segmentIndex = segmentKeys.length === 0 ? 1 : Math.max(...segmentKeys.map(Number)) + 1;
     }
 
     // update the segmentation
@@ -1075,6 +1077,33 @@ class SegmentationService extends PubSubService {
   public getRenderInactiveSegmentations(viewportId: string): boolean {
     return cstSegmentation.config.style.getRenderInactiveSegmentations(viewportId);
   }
+  /**
+   * Sets statistics for a group of segmentations
+   * @param segmentationIds - Array of segmentation IDs that form the group
+   * @param stats - Statistics object containing metrics for the segmentation group
+   *
+   * @remarks
+   * This method stores statistical data for a group of related segmentations.
+   * The stats are stored using a composite key created from the sorted and joined
+   */
+  public setSegmentationGroupStats(segmentationIds: string[], stats: any) {
+    const groupId = this.getGroupId(segmentationIds);
+    this._segmentationGroupStatsMap.set(groupId, stats);
+  }
+
+  /**
+   * Gets statistics for a group of segmentations
+   * @param segmentationIds - Array of segmentation IDs that form the group
+   * @returns The stored statistics object for the segmentation group if found, undefined otherwise
+   */
+  public getSegmentationGroupStats(segmentationIds: string[]) {
+    const groupId = this.getGroupId(segmentationIds);
+    return this._segmentationGroupStatsMap.get(groupId);
+  }
+
+  private getGroupId(segmentationIds: string[]) {
+    return segmentationIds.sort().join(',');
+  }
 
   /**
    * Toggles the visibility of a segmentation in the state, and broadcasts the event.
@@ -1150,8 +1179,8 @@ class SegmentationService extends PubSubService {
     highlightFunctionType = 'ease-in-out' // todo: make animation functions configurable from outside
   ): void {
     const center = this._getSegmentCenter(segmentationId, segmentIndex);
-
     if (!center) {
+      console.warn('No center found for segmentation', segmentationId, segmentIndex);
       return;
     }
 
@@ -1227,7 +1256,8 @@ class SegmentationService extends PubSubService {
     const csViewport =
       this.servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
     if (!csViewport) {
-      throw new Error(`Viewport with id ${viewportId} not found.`);
+      console.warn(`Viewport with id ${viewportId} not found.`);
+      return null;
     }
     return csViewport;
   }
@@ -1344,12 +1374,15 @@ class SegmentationService extends PubSubService {
     segmentationId: string,
     representationType: csToolsEnums.SegmentationRepresentations,
     colorLUTIndex: number,
-    isConverted: boolean
+    isConverted: boolean,
+    config?: {
+      blendMode?: csEnums.BlendModes;
+    }
   ): Promise<void> {
     const representation = {
       type: representationType,
       segmentationId,
-      config: { colorLUTOrIndex: colorLUTIndex },
+      config: { colorLUTOrIndex: colorLUTIndex, ...config },
     };
 
     const addRepresentation = () =>
@@ -1654,10 +1687,7 @@ class SegmentationService extends PubSubService {
     const startTime = performance.now();
 
     const prevStyle = cstSegmentation.config.style.getStyle({
-      viewportId,
-      segmentationId,
       type: CONTOUR,
-      segmentIndex,
     }) as ContourStyle;
 
     const prevOutlineWidth = prevStyle.outlineWidth;
@@ -1667,18 +1697,11 @@ class SegmentationService extends PubSubService {
     const animate = (currentTime: number) => {
       const progress = (currentTime - startTime) / animationLength;
       if (progress >= 1) {
-        cstSegmentation.config.style.setStyle(
-          {
-            segmentationId,
-            segmentIndex,
-            type: CONTOUR,
-          },
-          {}
-        );
+        cstSegmentation.config.style.resetToGlobalStyle();
         return;
       }
 
-      const reversedProgress = reverseEaseInOutBell(progress, baseline);
+      const reversedProgress = easeInOutBellRelative(progress, baseline, prevOutlineWidth);
 
       cstSegmentation.config.style.setStyle(
         {
@@ -1748,6 +1771,12 @@ class SegmentationService extends PubSubService {
     }
 
     const { center } = cachedStats;
+
+    if (!center) {
+      return {
+        world: cachedStats.namedStats.center.value,
+      };
+    }
 
     return center;
   }

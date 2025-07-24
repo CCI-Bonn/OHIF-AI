@@ -7,8 +7,12 @@ import { toolNames } from './initCornerstoneTools';
 import { onCompletedCalibrationLine } from './tools/CalibrationLineTool';
 import measurementServiceMappingsFactory from './utils/measurementServiceMappings/measurementServiceMappingsFactory';
 import getSOPInstanceAttributes from './utils/measurementServiceMappings/utils/getSOPInstanceAttributes';
-import { triggerAnnotationRenderForViewportIds } from '@cornerstonejs/tools/utilities';
-import { toolboxState } from '@ohif/extension-default/src/stores/toolboxState';
+import {
+  setAnnotationLabel,
+  triggerAnnotationRenderForViewportIds,
+} from '@cornerstonejs/tools/utilities';
+import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
+
 const { CORNERSTONE_3D_TOOLS_SOURCE_NAME, CORNERSTONE_3D_TOOLS_SOURCE_VERSION } = CSExtensionEnums;
 const { removeAnnotation } = annotation.state;
 const csToolsEvents = Enums.Events;
@@ -29,15 +33,12 @@ const initMeasurementService = (
     Angle,
     CobbAngle,
     RectangleROI,
-    RectangleROI2,
     PlanarFreehandROI,
-    PlanarFreehandROI2,
     SplineROI,
-    SplineROI2,
     LivewireContour,
     Probe,
-    Probe2,
     UltrasoundDirectional,
+    SegmentBidirectional,
   } = measurementServiceMappingsFactory(
     measurementService,
     displaySetService,
@@ -128,25 +129,10 @@ const initMeasurementService = (
 
   measurementService.addMapping(
     csTools3DVer1MeasurementSource,
-    'RectangleROI2',
-    RectangleROI2.matchingCriteria,
-    RectangleROI2.toAnnotation,
-    RectangleROI2.toMeasurement
-  );
-
-  measurementService.addMapping(
-    csTools3DVer1MeasurementSource,
     'PlanarFreehandROI',
     PlanarFreehandROI.matchingCriteria,
     PlanarFreehandROI.toAnnotation,
     PlanarFreehandROI.toMeasurement
-  );
-  measurementService.addMapping(
-    csTools3DVer1MeasurementSource,
-    'PlanarFreehandROI2',
-    PlanarFreehandROI2.matchingCriteria,
-    PlanarFreehandROI2.toAnnotation,
-    PlanarFreehandROI2.toMeasurement
   );
 
   measurementService.addMapping(
@@ -155,14 +141,6 @@ const initMeasurementService = (
     SplineROI.matchingCriteria,
     SplineROI.toAnnotation,
     SplineROI.toMeasurement
-  );
-
-  measurementService.addMapping(
-    csTools3DVer1MeasurementSource,
-    'SplineROI2',
-    SplineROI2.matchingCriteria,
-    SplineROI2.toAnnotation,
-    SplineROI2.toMeasurement
   );
 
   // On the UI side, the Calibration Line tool will work almost the same as the
@@ -193,18 +171,18 @@ const initMeasurementService = (
 
   measurementService.addMapping(
     csTools3DVer1MeasurementSource,
-    'Probe2',
-    Probe2.matchingCriteria,
-    Probe2.toAnnotation,
-    Probe2.toMeasurement
-  );
-
-  measurementService.addMapping(
-    csTools3DVer1MeasurementSource,
     'UltrasoundDirectionalTool',
     UltrasoundDirectional.matchingCriteria,
     UltrasoundDirectional.toAnnotation,
     UltrasoundDirectional.toMeasurement
+  );
+
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
+    'SegmentBidirectional',
+    SegmentBidirectional.matchingCriteria,
+    SegmentBidirectional.toAnnotation,
+    SegmentBidirectional.toMeasurement
   );
 
   return csTools3DVer1MeasurementSource;
@@ -216,6 +194,7 @@ const connectToolsToMeasurementService = (servicesManager: AppTypes.ServicesMana
     displaySetService,
     cornerstoneViewportService,
     customizationService,
+    viewportGridService,
   } = servicesManager.services;
   const csTools3DVer1MeasurementSource = initMeasurementService(
     measurementService,
@@ -223,19 +202,17 @@ const connectToolsToMeasurementService = (servicesManager: AppTypes.ServicesMana
     cornerstoneViewportService,
     customizationService
   );
-  connectMeasurementServiceToTools(measurementService, cornerstoneViewportService);
+  connectMeasurementServiceToTools(
+    measurementService,
+    cornerstoneViewportService,
+    viewportGridService
+  );
   const { annotationToMeasurement, remove } = csTools3DVer1MeasurementSource;
 
   //
   function addMeasurement(csToolsEvent) {
     try {
-      
       const annotationAddedEventDetail = csToolsEvent.detail;
-      if (toolboxState.getPosNeg()) {
-        annotationAddedEventDetail.annotation.metadata.neg = true;
-      }else{
-        annotationAddedEventDetail.annotation.metadata.neg = false;
-      }
       const {
         annotation: { metadata, annotationUID },
       } = annotationAddedEventDetail;
@@ -355,7 +332,11 @@ const connectToolsToMeasurementService = (servicesManager: AppTypes.ServicesMana
   return csTools3DVer1MeasurementSource;
 };
 
-const connectMeasurementServiceToTools = (measurementService, cornerstoneViewportService) => {
+const connectMeasurementServiceToTools = (
+  measurementService,
+  cornerstoneViewportService,
+  viewportGridService
+) => {
   const { MEASUREMENT_REMOVED, MEASUREMENTS_CLEARED, MEASUREMENT_UPDATED, RAW_MEASUREMENT_ADDED } =
     measurementService.EVENTS;
 
@@ -379,6 +360,10 @@ const connectMeasurementServiceToTools = (measurementService, cornerstoneViewpor
   measurementService.subscribe(
     MEASUREMENT_UPDATED,
     ({ source, measurement, notYetUpdatedAtSource }) => {
+      if (!source) {
+        return;
+      }
+
       if (source.name !== CORNERSTONE_3D_TOOLS_SOURCE_NAME) {
         return;
       }
@@ -398,7 +383,8 @@ const connectMeasurementServiceToTools = (measurementService, cornerstoneViewpor
       }
 
       if (data.label !== label) {
-        data.label = label;
+        const element = getActiveViewportEnabledElement(viewportGridService)?.viewport.element;
+        setAnnotationLabel(sourceAnnotation, element, label);
       }
 
       if (metadata.toolName === 'ArrowAnnotate') {
