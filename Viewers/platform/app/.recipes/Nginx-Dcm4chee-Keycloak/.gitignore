@@ -1,6 +1,0 @@
-logs/*
-volumes/*
-config/letsencrypt/*
-config/certbot/*
-!config/letsencrypt/.gitkeep
-!config/certbot/.gitkeep
