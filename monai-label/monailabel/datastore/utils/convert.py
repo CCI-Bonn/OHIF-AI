@@ -15,6 +15,7 @@ import os
 import pathlib
 import tempfile
 import time
+from datetime import datetime
 
 import numpy as np
 import pydicom
@@ -158,11 +159,15 @@ def nifti_to_dicom_seg(series_dir, label, final_result_json, file_ext="*", use_i
     #info = label_info[0] if label_info and 0 < len(label_info) else {}
     info = {}
     #model_name = info.get("model_name", "Totalsegmentor")
+    
+    # Generate timestamp in YYYYMMDDHHMM format
+    timestamp = datetime.now().strftime("%Y%m%d%H%M")
+    
     if "nninter_" in label:
-        label_names = ["nninter_pred"]
+        label_names = [f"nninter_pred_{timestamp}"]
         image_series_desc = "nninter_"+ image_series_desc#"SAM2_"+ image_series_desc
     else:
-        label_names = ["sam_pred"]
+        label_names = [f"sam_pred_{timestamp}"]
         image_series_desc = "sam_"+ image_series_desc
     segment_attributes = []
 
