@@ -204,6 +204,9 @@ def run_inference(
         #suffixes = [".nii", ".nii.gz", ".nrrd"]
         #image_path = [image_uri.replace(suffix, "") for suffix in suffixes if image_uri.endswith(suffix)][0]
         res_img = result.get("file") if result.get("file") else result.get("label")
+        if res_img == "/code/predictions/reset.nii.gz":
+            result["dicom_seg"] = res_img
+            return send_response(instance.datastore(), result, output, background_tasks)
         dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, prompt_json, use_itk=True)
         with open(dicom_seg_file, "rb") as f:
             dicom_bytes = f.read()

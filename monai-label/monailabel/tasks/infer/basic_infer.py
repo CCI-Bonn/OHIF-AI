@@ -175,9 +175,12 @@ class BasicInferTask(InferTask):
         self._session_used_interactions = {
             "pos_points": [],
             "neg_points": [],
-            "boxes": [],
-            "lassos": [],
-            "scribbles": [],
+            "pos_boxes": [],
+            "neg_boxes": [],
+            "pos_lassos": [],
+            "neg_lassos": [],
+            "pos_scribbles": [],
+            "neg_scribbles": [],
             "objects": [],
         }
 
@@ -381,6 +384,14 @@ class BasicInferTask(InferTask):
         final_result_json = {}
         result_json = {}
         nnInter = data['nninter']
+        if nnInter == "reset":
+            for key, lst in self._session_used_interactions.items():
+                    lst.clear()
+            session.reset_interactions()
+            session.set_target_buffer(torch.zeros(session.original_image_shape[1:], dtype=torch.uint8))
+            logger.info("Reset nninter")
+            return f'/code/predictions/reset.nii.gz', final_result_json
+
         img = None
         
         dicom_dir = data['image'].split('.nii.gz')[0]
@@ -437,9 +448,6 @@ class BasicInferTask(InferTask):
         result_json["pos_points"]=copy.deepcopy(data["pos_points"])
         result_json["neg_points"]=copy.deepcopy(data["neg_points"])
 
-        if len(data['boxes'])!=0:
-            result_json["boxes"]=copy.deepcopy(data["boxes"])
-            #img = sitk.ReadImage(data['image'])
         if nnInter:
             start = time.time()
             img_np = sitk.GetArrayFromImage(img)[None]  # Ensure shape (1, x, y, z)
@@ -509,24 +517,39 @@ class BasicInferTask(InferTask):
                     logger.info("Add neg points")
                     self._session_used_interactions["neg_points"].append(point[::-1])
 
-            if len(data['boxes'])!=0:
-                result_json["boxes"]=copy.deepcopy(data["boxes"])
-                logger.info(f"prompt boxes: {data['boxes']}")
-                for box in data['boxes']:
+            if len(data['pos_boxes'])!=0:
+                result_json["pos_boxes"]=copy.deepcopy(data["pos_boxes"])
+                logger.info(f"prompt pos_boxes: {data['pos_boxes']}")
+                for box in data['pos_boxes']:
                     if instanceNumber > instanceNumber2:
                         box[0][2]=img_np.shape[1]-1-box[0][2]
                         box[1][2]=img_np.shape[1]-1-box[1][2]
                     box[0]=box[0][::-1]
                     box[1]=box[1][::-1]
-                    if not any(np.array_equal([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], x) for x in self._session_used_interactions["boxes"]):
+                    if not any(np.array_equal([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], x) for x in self._session_used_interactions["pos_boxes"]):
                         session.add_bbox_interaction([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], include_interaction=True)
                         logger.info("Add a box")
-                        self._session_used_interactions["boxes"].append([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]])            
-                    
-            if len(data['lassos'])!=0:
-                result_json["lassos"]=copy.deepcopy(data["lassos"])
-                logger.info(f"prompt lassos: {data['lassos']}")
-                for lasso in data['lassos']:
+                        self._session_used_interactions["pos_boxes"].append([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]])            
+
+            if len(data['neg_boxes'])!=0:
+                result_json["neg_boxes"]=copy.deepcopy(data["neg_boxes"])
+                logger.info(f"prompt neg_boxes: {data['neg_boxes']}")
+                for box in data['neg_boxes']:
+                    if instanceNumber > instanceNumber2:
+                        box[0][2]=img_np.shape[1]-1-box[0][2]
+                        box[1][2]=img_np.shape[1]-1-box[1][2]
+                    box[0]=box[0][::-1]
+                    box[1]=box[1][::-1]
+                    if not any(np.array_equal([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], x) for x in self._session_used_interactions["neg_boxes"]):
+                        session.add_bbox_interaction([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], include_interaction=False)
+                        logger.info("Add a box")
+                        self._session_used_interactions["neg_boxes"].append([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]])            
+
+
+            if len(data['pos_lassos'])!=0:
+                result_json["pos_lassos"]=copy.deepcopy(data["pos_lassos"])
+                logger.info(f"prompt pos_lassos: {data['pos_lassos']}")
+                for lasso in data['pos_lassos']:
                     lasso = get_scanline_filled_points_3d(clean_and_densify_polyline(lasso))
                     lassoMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
                     filled_indices = np.asarray(lasso)
@@ -540,16 +563,37 @@ class BasicInferTask(InferTask):
                     )
                     # Apply only valid indices
                     lassoMask[z[valid], y[valid], x[valid]] = 1
-                    if not any(np.array_equal(lassoMask,x) for x in self._session_used_interactions["lassos"]):
+                    if not any(np.array_equal(lassoMask,x) for x in self._session_used_interactions["pos_lassos"]):
                         session.add_lasso_interaction(lassoMask, include_interaction=True)
                         logger.info("Add a lasso")
-                        self._session_used_interactions["lassos"].append(lassoMask)                
-                    
+                        self._session_used_interactions["pos_lassos"].append(lassoMask)                
             
-            if len(data['scribbles'])!=0:
-                result_json["scribbles"]=copy.deepcopy(data["scribbles"])
-                logger.info(f"prompt scribbles: {data['scribbles']}")
-                for scribble in data['scribbles']:
+            if len(data['neg_lassos'])!=0:
+                result_json["neg_lassos"]=copy.deepcopy(data["neg_lassos"])
+                logger.info(f"prompt neg_lassos: {data['neg_lassos']}")
+                for lasso in data['neg_lassos']:
+                    lasso = get_scanline_filled_points_3d(clean_and_densify_polyline(lasso))
+                    lassoMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
+                    filled_indices = np.asarray(lasso)
+                    if instanceNumber > instanceNumber2:
+                        filled_indices[:, 2]=img_np.shape[1]-1 - filled_indices[:, 2]
+                    x, y, z = filled_indices[:, 0], filled_indices[:, 1], filled_indices[:, 2]
+                    valid = (
+                        (x >= 0) & (x < img_np.shape[3]) &
+                        (y >= 0) & (y < img_np.shape[2]) &
+                        (z >= 0) & (z < img_np.shape[1])
+                    )
+                    # Apply only valid indices
+                    lassoMask[z[valid], y[valid], x[valid]] = 1
+                    if not any(np.array_equal(lassoMask,x) for x in self._session_used_interactions["neg_lassos"]):
+                        session.add_lasso_interaction(lassoMask, include_interaction=False)
+                        logger.info("Add a lasso")
+                        self._session_used_interactions["neg_lassos"].append(lassoMask)  
+            
+            if len(data['pos_scribbles'])!=0:
+                result_json["pos_scribbles"]=copy.deepcopy(data["pos_scribbles"])
+                logger.info(f"prompt pos_scribbles: {data['pos_scribbles']}")
+                for scribble in data['pos_scribbles']:
                     scribble = clean_and_densify_polyline(scribble)
                     scribbleMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
 
@@ -584,10 +628,53 @@ class BasicInferTask(InferTask):
                         #    continue  # Skip out-of-bounds
                         scribbleMask[z0c:z1c, y0c:y1c, x0c:x1c] |= kernel[kz0:kz1, ky0:ky1, kx0:kx1]
                     
-                    if not any(np.array_equal(scribbleMask,x) for x in self._session_used_interactions["scribbles"]):
+                    if not any(np.array_equal(scribbleMask,x) for x in self._session_used_interactions["pos_scribbles"]):
                         session.add_scribble_interaction(scribbleMask, include_interaction=True)
                         logger.info("Add a scribble")
-                        self._session_used_interactions["scribbles"].append(scribbleMask)
+                        self._session_used_interactions["pos_scribbles"].append(scribbleMask)
+
+            if len(data['neg_scribbles'])!=0:
+                result_json["neg_scribbles"]=copy.deepcopy(data["neg_scribbles"])
+                logger.info(f"prompt neg_scribbles: {data['neg_scribbles']}")
+                for scribble in data['neg_scribbles']:
+                    scribble = clean_and_densify_polyline(scribble)
+                    scribbleMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
+
+                    filled_indices = np.round(np.asarray(scribble)).astype(int)
+
+                    #logger.info(f"filled_indices: {filled_indices}")
+                    #logger.info(f"filled_indices shape: {filled_indices.shape}")
+                    if instanceNumber > instanceNumber2:
+                        filled_indices[:, 2]=img_np.shape[1]-1 -filled_indices[:, 2]
+                    
+                    # Sphere of radius 1
+                    kernel = spherical_kernel(radius=1)
+                    kz, ky, kx = kernel.shape
+                    offset_z, offset_y, offset_x = kz // 2, ky // 2, kx // 2
+
+                    for x, y, z in filled_indices:
+                        z0, z1 = z - offset_z, z + offset_z + 1
+                        y0, y1 = y - offset_y, y + offset_y + 1
+                        x0, x1 = x - offset_x, x + offset_x + 1
+
+                        # clip bounds to mask
+                        z0c, z1c = max(z0, 0), min(z1, scribbleMask.shape[0])
+                        y0c, y1c = max(y0, 0), min(y1, scribbleMask.shape[1])
+                        x0c, x1c = max(x0, 0), min(x1, scribbleMask.shape[2])
+
+                        # compute corresponding kernel slices
+                        kz0, kz1 = z0c - z0, z1c - z0
+                        ky0, ky1 = y0c - y0, y1c - y0
+                        kx0, kx1 = x0c - x0, x1c - x0
+
+                        #if z0 < 0 or y0 < 0 or x0 < 0 or z1 > scribbleMask.shape[0] or y1 > scribbleMask.shape[1] or x1 > scribbleMask.shape[2]:
+                        #    continue  # Skip out-of-bounds
+                        scribbleMask[z0c:z1c, y0c:y1c, x0c:x1c] |= kernel[kz0:kz1, ky0:ky1, kx0:kx1]
+                    
+                    if not any(np.array_equal(scribbleMask,x) for x in self._session_used_interactions["neg_scribbles"]):
+                        session.add_scribble_interaction(scribbleMask, include_interaction=False)
+                        logger.info("Add a scribble")
+                        self._session_used_interactions["neg_scribbles"].append(scribbleMask)
 
             # --- Retrieve Results ---
             # The target buffer holds the segmentation result.
