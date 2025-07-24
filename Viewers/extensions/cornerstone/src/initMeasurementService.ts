@@ -8,7 +8,7 @@ import { onCompletedCalibrationLine } from './tools/CalibrationLineTool';
 import measurementServiceMappingsFactory from './utils/measurementServiceMappings/measurementServiceMappingsFactory';
 import getSOPInstanceAttributes from './utils/measurementServiceMappings/utils/getSOPInstanceAttributes';
 import { triggerAnnotationRenderForViewportIds } from '@cornerstonejs/tools/utilities';
-
+import { toolboxState } from '@ohif/extension-default/src/stores/toolboxState';
 const { CORNERSTONE_3D_TOOLS_SOURCE_NAME, CORNERSTONE_3D_TOOLS_SOURCE_VERSION } = CSExtensionEnums;
 const { removeAnnotation } = annotation.state;
 const csToolsEvents = Enums.Events;
@@ -229,7 +229,13 @@ const connectToolsToMeasurementService = (servicesManager: AppTypes.ServicesMana
   //
   function addMeasurement(csToolsEvent) {
     try {
+      
       const annotationAddedEventDetail = csToolsEvent.detail;
+      if (toolboxState.getPosNeg()) {
+        annotationAddedEventDetail.annotation.metadata.neg = true;
+      }else{
+        annotationAddedEventDetail.annotation.metadata.neg = false;
+      }
       const {
         annotation: { metadata, annotationUID },
       } = annotationAddedEventDetail;

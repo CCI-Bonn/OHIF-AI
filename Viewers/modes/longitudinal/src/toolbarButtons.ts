@@ -299,14 +299,14 @@ const toolbarButtons: Button[] = [
     },
   },
   {
-    id: 'saveAndNextObj',
+    id: 'resetNninter',
     uiType: 'ohif.radioGroup',
     props: {
       type: 'tool',
-      icon: 'icon-download',
-      label: 'saveAndNextObj',
-      tooltip: 'NextObj',
-      commands: 'saveAndNextObj',
+      icon: 'tool-reset',
+      label: 'resetNninter',
+      tooltip: 'resetNninter',
+      commands: 'resetNninter',
     },
   },
   {

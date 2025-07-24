@@ -125,7 +125,7 @@ function modeFactory({ modeConfiguration }) {
         //'toggleCurrentSegment',
         'MoreTools',
       ]);
-      toolbarService.createButtonSection('aiToolbox', ['Probe','Probe2','RectangleROI2','PlanarFreehandROI2','sam2','nninter','saveAndNextObj','jumpToSegment','toggleCurrentSegment']);
+      toolbarService.createButtonSection('aiToolbox', ['Probe','RectangleROI2','PlanarFreehandROI2','sam2','nninter','resetNninter','jumpToSegment','toggleCurrentSegment']);
       toolbarService.createButtonSection('segmentationToolbox', ['BrushTools', 'Shapes']);
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.

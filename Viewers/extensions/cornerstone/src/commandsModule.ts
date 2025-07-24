@@ -1092,6 +1092,7 @@ function commandsModule({
     deleteSegmentationCommand: ({ segmentationId }) => {
       const { segmentationService } = servicesManager.services;
       segmentationService.remove(segmentationId);
+      commandsManager.runCommand('resetNninter');
     },
 
     /**

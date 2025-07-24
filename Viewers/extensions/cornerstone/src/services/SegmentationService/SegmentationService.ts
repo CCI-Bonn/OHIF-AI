@@ -440,6 +440,7 @@ class SegmentationService extends PubSubService {
         SegmentLabel,
         SegmentAlgorithmType,
         SegmentAlgorithmName,
+        SegmentDescription,
         SegmentedPropertyTypeCodeSequence,
         rgba,
       } = segmentInfo;
@@ -477,6 +478,7 @@ class SegmentationService extends PubSubService {
             : '',
           algorithmType: SegmentAlgorithmType,
           algorithmName: SegmentAlgorithmName,
+          description: SegmentDescription,
         },
       };
     });
@@ -1460,10 +1462,7 @@ class SegmentationService extends PubSubService {
     segmentationId: string,
     payload: Partial<cstTypes.Segmentation>
   ) {
-    // Update does not work, no change
-    //cstSegmentation.updateSegmentations([{ segmentationId, payload }]);
-    cstSegmentation.removeSegmentation(segmentationId);
-    cstSegmentation.addSegmentations([payload]);
+    cstSegmentation.updateSegmentations([{ segmentationId, payload }]);
   }
 
   private _toOHIFSegmentationRepresentation(

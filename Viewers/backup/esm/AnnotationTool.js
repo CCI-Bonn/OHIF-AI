@@ -158,7 +158,7 @@ class AnnotationTool extends AnnotationDisplayTool {
         const lineWidth = getStyle('lineWidth');
         const lineDash = getStyle('lineDash');
         let color = getStyle('color');
-        if (annotation.metadata.toolName === 'Probe2') {
+        if (annotation.metadata.neg === true) {
             color = 'rgb(255, 0, 0)';
           }
         const shadow = getStyle('shadow');

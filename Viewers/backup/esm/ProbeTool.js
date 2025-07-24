@@ -217,6 +217,8 @@ class ProbeTool extends AnnotationTool {
                 drawHandlesSvg(svgDrawingHelper, annotationUID, handleGroupUID, [canvasCoordinates], { color, lineWidth, handleRadius: this.configuration.handleRadius });
                 renderStatus = true;
                 const options = this.getLinkedTextBoxStyle(styleSpecifier, annotation);
+                // Do not render text box for now
+                options.visibility = false;
                 if (!options.visibility) {
                     continue;
                 }

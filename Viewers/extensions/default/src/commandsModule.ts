@@ -607,9 +607,9 @@ const commandsModule = ({
       
       const segs = servicesManager.services.segmentationService.getSegmentations()
       //remove old segmentationsFromViewport
-      for (let seg of segs) {
-        commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
-      }
+      //for (let seg of segs) {
+      //  commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
+      //}
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
 
@@ -741,9 +741,23 @@ const commandsModule = ({
           }
 
           const segmentsInfo = results.segMetadata.data;
-
-          const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
-          const colorLUT = [];
+          
+          // Find existing segments for the same series
+          const existingSegs = servicesManager.services.segmentationService.getSegmentations();
+          let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
+          let existingColorLUT: number[][] = [];
+          
+          // Find existing segmentation with matching seriesInstanceUid
+          for (let seg of existingSegs) {
+            if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
+              existingSegments = seg.segments || {};
+              existingColorLUT = seg.colorLUT || [];
+              break;
+            }
+          }
+          
+          const segments: { [segmentIndex: string]: cstTypes.Segment } = { ...existingSegments };
+          const colorLUT = [...existingColorLUT];
 
           segmentsInfo.forEach((segmentInfo, index) => {
             if (index === 0) {
@@ -830,14 +844,62 @@ const commandsModule = ({
         })
         .finally(function () { });
     },
+    async resetNninter(){
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+      const displaySets = displaySetService.activeDisplaySets;
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(e => {
+        return e.displaySetInstanceUID == displaySetInstanceUID;
+      })[0];
+      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      let params = {
+        largest_cc: false,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        nninter: "reset",
+      };
+
+      let data = MonaiLabelClient.constructFormData(params, null);
+
+      axios
+        .post(url, data, {
+          responseType: 'arraybuffer',
+          headers: {
+            accept: 'application/json, multipart/form-data',
+          },
+        })
+        .then(async function (response) {
+          if (response.status === 200) {
+            uiNotificationService.show({
+              title: 'NNInter',
+              message: 'Reset nninter - Successful',
+              type: 'success',
+              duration: 2000,
+            });
+            commandsManager.run('clearMeasurements')
+          }
+          return response;
+        })
+        .catch(function (error) {
+          return error;
+        })
+        .finally(function () { });
+
+    },
+
     async nninter() {
       const start = Date.now();
       
       const segs = servicesManager.services.segmentationService.getSegmentations()
       //remove old segmentationsFromViewport
-      for (let seg of segs) {
-        commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
-      }
+      //for (let seg of segs) {
+      //  commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
+      //}
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
 
@@ -852,51 +914,79 @@ const commandsModule = ({
         return e.displaySetInstanceUID == displaySetInstanceUID;
       })[0];
 
-      const pos_points = measurementService.getMeasurements()
+      const currentMeasurements = measurementService.getMeasurements()
+
+      const pos_points = currentMeasurements
         .filter(e => {
-          return e.toolName === 'Probe';
+          return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
         })
         .map(e => {
           return Object.values(e.data)[0].index;
         });
-      const neg_points = measurementService.getMeasurements()
+      const neg_points = currentMeasurements
         .filter(e => {
-          return e.toolName === 'Probe2';
+          return e.toolName === 'Probe'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
         })
         .map(e => {
           return Object.values(e.data)[0].index;
         });
 
-      const bd_boxes = measurementService.getMeasurements()
+      const pos_boxes = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'RectangleROI2' 
+          return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
         })
         .map(e => { 
           return Object.values(e.data)[0].pointsInShape 
         })
+        .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
 
-      let box_prompts = bd_boxes.map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
+      const neg_boxes = currentMeasurements
+      .filter(e => { 
+        return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+      })
+      .map(e => { 
+        return Object.values(e.data)[0].pointsInShape 
+      })
+      .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
 
-      const lassos = measurementService.getMeasurements()
+      const pos_lassos = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2' 
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.boundary 
       })
       .filter(Boolean)
 
-      const scribbles = measurementService.getMeasurements()
+      const neg_lassos = currentMeasurements
+      .filter(e => { 
+        return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+      })
+      .map(e => { 
+        return Object.values(e.data)[0]?.boundary 
+    })
+    .filter(Boolean)
+
+      const pos_scribbles = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2' 
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.scribble 
       })
       .filter(Boolean)
 
-      const text_prompts = measurementService.getMeasurements()
-      .filter(e => { return e.toolName === 'Probe' })
+      const neg_scribbles = currentMeasurements
+        .filter(e => { 
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+        })
+        .map(e => { 
+          return Object.values(e.data)[0]?.scribble 
+      })
+      .filter(Boolean)
+
+      const text_prompts = currentMeasurements
+      .filter(e => { return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID})
       .map(e => { return e.label })
 
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
@@ -908,12 +998,15 @@ const commandsModule = ({
         result_compress: false,
         studyInstanceUID: currentDisplaySets.StudyInstanceUID,
         restore_label_idx: false,
-        pos_points: toolboxState.getPosNeg() ? pos_points : [],
-        neg_points: toolboxState.getPosNeg() ? neg_points : [],
-        boxes: box_prompts,
+        pos_points: pos_points,
+        neg_points: neg_points,
+        pos_boxes: pos_boxes,
+        neg_boxes: neg_boxes,
+        pos_lassos: pos_lassos,
+        neg_lassos: neg_lassos,
+        pos_scribbles: pos_scribbles,
+        neg_scribbles: neg_scribbles,
         texts: text_prompts,
-        lassos: lassos,
-        scribbles: scribbles,
         nninter: true,
       };
 
@@ -950,9 +1043,36 @@ const commandsModule = ({
               arrayBuffer,
               metaData
             );
+
+            let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
+            let existingColorLUT: number[][] = [];
             
-            const derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
-            const segImageIds = derivedImages.map(image => image.imageId);
+            let segImageIds = [];
+            // Find existing segmentation with matching seriesInstanceUid
+            for (let seg of segs) {
+              if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
+                existingSegments = seg.segments || {};
+                existingColorLUT = seg.colorLUT || [];
+                segmentationId = seg.segmentationId;
+                segImageIds = seg.representationData.Labelmap.imageIds;
+                break;
+              }
+            }
+            
+            const segments: { [segmentIndex: string]: cstTypes.Segment } = { ...existingSegments };
+            const colorLUT = [...existingColorLUT];
+            let segmentNumber = 1;
+            if (Object.keys(segments).length > 0) {
+              segmentNumber = Object.keys(segments).length + 1;
+            }
+            let derivedImages = [];
+            if (segImageIds.length === 0) {
+              derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+              segImageIds = derivedImages.map(image => image.imageId);
+            }
+
+
+            derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
 
           const labelmapBufferArray = results.labelmapBufferArray  
           // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
@@ -963,16 +1083,25 @@ const commandsModule = ({
           for (let i = 0; i < derivedImages.length; i++) {
             const voxelManager = derivedImages[i]
               .voxelManager as csTypes.IVoxelManager<number>;
-            const scalarData = voxelManager.getScalarData();
+            let scalarData = voxelManager.getScalarData();
             const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
-            scalarData.set(sliceData);
-            voxelManager.setScalarData(scalarData);
+            if(segmentNumber !== 10000){
+            const transformed_sliceData = sliceData.map(v => v === 1 ? segmentNumber : v);
+            for (let j = 0; j < scalarData.length; j++) {
+              if (transformed_sliceData[j] === segmentNumber) {
+                scalarData[j] = segmentNumber;
+              }
+            }
+            }else{
+              scalarData.set(sliceData);
+            }
+            if(segmentNumber === 1){
+              voxelManager.setScalarData(scalarData);
+            }
           }
 
           const segmentsInfo = results.segMetadata.data;
-
-          const segments: { [segmentIndex: string]: cstTypes.Segment } = {};
-          const colorLUT = [];
+          
 
           segmentsInfo.forEach((segmentInfo, index) => {
             if (index === 0) {
@@ -992,9 +1121,11 @@ const commandsModule = ({
             } = segmentInfo;
 
             colorLUT.push(rgba);
-
-            const segmentIndex = Number(SegmentNumber);
-
+            let segmentIndex = Number(SegmentNumber);
+            if(segmentNumber !== 1){
+              segmentIndex = segmentNumber;
+            }
+              
             const centroid = results.centroids?.get(index);
             const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
             const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
@@ -1022,7 +1153,8 @@ const commandsModule = ({
               },
             };
           });
-
+          if(segmentNumber === 1){
+            servicesManager.services.segmentationService.removeAllSegmentations();
             csToolsSegmentation.addSegmentations([
               {
                   segmentationId,
@@ -1042,10 +1174,22 @@ const commandsModule = ({
                   },
               }
           ]);
-          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-            segmentationId: segmentationId,
-          });
-
+          
+        }else{
+          csToolsSegmentation.updateSegmentations([
+            {
+              segmentationId,
+              payload: {
+                segments: segments,
+              },
+            },
+          ]);          
+          servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
+        }
+        await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
+          segmentationId: segmentationId,
+        });
+        
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
           return response;
@@ -1060,7 +1204,7 @@ const commandsModule = ({
         .finally(function () { });
     },
     saveAndNextObj: () => {
-      servicesManager.services.measurementService.clearMeasurements()
+      commandsManager.run('clearMeasurements')
       servicesManager.services.cornerstoneViewportService.resize()
       if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj===undefined){
         useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj=1
@@ -1234,6 +1378,9 @@ const commandsModule = ({
     },
     sam2: {
       commandFn: actions.sam2,
+    },
+    resetNninter: {
+      commandFn: actions.resetNninter,
     },
     nninter: {
       commandFn: actions.nninter,

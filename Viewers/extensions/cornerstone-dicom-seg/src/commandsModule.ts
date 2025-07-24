@@ -171,7 +171,15 @@ const commandsModule = ({
           segmentMetadata = segmentation.cachedStats.data
           .filter(e => e !== undefined && e !== null)
           .find(e => e.SegmentNumber == segmentIndex);
-        } 
+          if (segmentMetadata !== undefined){ 
+            segmentMetadata.SegmentNumber = segmentIndex.toString();
+            segmentMetadata.SegmentLabel = label;
+            segmentMetadata.RecommendedDisplayCIELabValue = RecommendedDisplayCIELabValue;
+            segmentMetadata.SegmentAlgorithmType = segmentation.cachedStats.seriesInstanceUid;
+          }
+        }
+
+        
 
         if (segmentMetadata === undefined || Object.keys(segmentMetadata).length === 0) {
           segmentMetadata = {
@@ -191,6 +199,15 @@ const commandsModule = ({
               CodeMeaning: 'Tissue',
             },
           };
+          if (segment.cachedStats.description !== undefined){
+            segmentMetadata.SegmentDescription = segment.cachedStats.description;
+          }
+          if (segment.cachedStats.algorithmType !== undefined){
+            segmentMetadata.SegmentAlgorithmType = segment.cachedStats.algorithmType;
+          }
+          if (segment.cachedStats.algorithmName !== undefined){
+            segmentMetadata.SegmentAlgorithmName = segment.cachedStats.algorithmName;
+          }
         }
         labelmap3D.metadata[segmentIndex] = segmentMetadata;
       });
