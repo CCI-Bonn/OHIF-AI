@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from monailabel.config import settings
 from monailabel.endpoints import (
-    activelearning,
+  #  activelearning,
     batch_infer,
     datastore,
     infer,
@@ -34,7 +34,7 @@ from monailabel.endpoints import (
     proxy,
     scoring,
     session,
-    train,
+   # train,
     wsi_infer,
 )
 from monailabel.interfaces.utils.app import app_instance, clear_cache
@@ -88,8 +88,8 @@ app.include_router(model.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(infer.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(wsi_infer.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(batch_infer.router, prefix=settings.MONAI_LABEL_API_STR)
-app.include_router(train.router, prefix=settings.MONAI_LABEL_API_STR)
-app.include_router(activelearning.router, prefix=settings.MONAI_LABEL_API_STR)
+#app.include_router(train.router, prefix=settings.MONAI_LABEL_API_STR)
+#app.include_router(activelearning.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(scoring.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(datastore.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(logs.router, prefix=settings.MONAI_LABEL_API_STR)
