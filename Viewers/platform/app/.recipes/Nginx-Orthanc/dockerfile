@@ -18,9 +18,10 @@ COPY ./ /usr/src/app/
 RUN yarn config set workspaces-experimental true
 RUN yarn install
 
-# To change color of negative point
+# To change color of negative prompts
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/AnnotationTool.js
 
+# Add annotation from the given indices plus the detail rendering setup for each prompt type
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/RectangleROITool.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/PlanarFreehandROITool.js
@@ -30,9 +31,10 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotat
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
 RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
-# To change color of negative point
+# To change color of negative prompts
 COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/
 
+# Add annotation from the given indices plus the detail rendering setup for each prompt type
 COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 COPY ./backup/esm/PlanarFreehandROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/

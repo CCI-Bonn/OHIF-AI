@@ -250,11 +250,17 @@ const commandsModule = ({
           }
 
           const { dataset: naturalizedReport } = generatedData;
-
-          await selectedDataSourceConfig.store.dicom(naturalizedReport);
-
+          let selectedDataSourceConfig_new = undefined;
+          if (selectedDataSourceConfig.store == undefined) {
+            selectedDataSourceConfig_new = selectedDataSourceConfig[0];
+          } else {
+            selectedDataSourceConfig_new = selectedDataSourceConfig;
+          }
+          
+          await selectedDataSourceConfig_new.store.dicom(naturalizedReport);
+          
           // add the information for where we stored it to the instance as well
-          naturalizedReport.wadoRoot = selectedDataSourceConfig.getConfig().wadoRoot;
+          naturalizedReport.wadoRoot = selectedDataSourceConfig_new.getConfig().wadoRoot;
 
           DicomMetadataStore.addInstances([naturalizedReport], true);
 

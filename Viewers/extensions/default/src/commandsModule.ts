@@ -1,4 +1,4 @@
-import { Types, DicomMetadataStore } from '@ohif/core';
+import { utils, Types, DicomMetadataStore } from '@ohif/core';
 
 import { ContextMenuController } from './CustomizableContextMenu';
 import DicomTagBrowser from './DicomTagBrowser/DicomTagBrowser';
@@ -18,6 +18,16 @@ import { useViewportsByPositionStore } from './stores/useViewportsByPositionStor
 import { useToggleOneUpViewportGridStore } from './stores/useToggleOneUpViewportGridStore';
 import requestDisplaySetCreationForStudy from './Panels/requestDisplaySetCreationForStudy';
 import promptSaveReport from './utils/promptSaveReport';
+
+import { Enums as csToolsEnums, Types as cstTypes, segmentation as csToolsSegmentation } from '@cornerstonejs/tools';
+import { updateLabelmapSegmentationImageReferences } from '@cornerstonejs/tools/segmentation/updateLabelmapSegmentationImageReferences';
+import { cache, imageLoader, metaData, Types as csTypes, utilities as csUtils } from '@cornerstonejs/core';
+import { adaptersSEG } from '@cornerstonejs/adapters';
+const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
+import MonaiLabelClient from '../../monai-label/src/services/MonaiLabelClient';
+import axios from 'axios';
+import { toolboxState } from './stores/toolboxState';
+
 
 export type HangingProtocolParams = {
   protocolId?: string;
@@ -46,6 +56,20 @@ const commandsModule = ({
     displaySetService,
     multiMonitorService,
   } = servicesManager.services;
+
+  // Listen for measurement added events to trigger nninter() when live mode is enabled
+  measurementService.subscribe(
+    measurementService.EVENTS.MEASUREMENT_ADDED,
+    (evt) => {
+      if (toolboxState.getLiveMode()) {
+        console.log('Live mode enabled, triggering nninter() for new measurement');
+        // Use setTimeout to ensure the measurement is fully processed
+        setTimeout(() => {
+          commandsManager.run('nninter');
+        }, 100);
+      }
+    }
+  );
 
   // Define a context menu controller for use with any context menus
   const contextMenuController = new ContextMenuController(servicesManager, commandsManager);
@@ -520,6 +544,669 @@ const commandsModule = ({
       });
     },
 
+    async sam2() {
+      const start = Date.now();
+      
+      const segs = servicesManager.services.segmentationService.getSegmentations()
+      //remove old segmentationsFromViewport
+      //for (let seg of segs) {
+      //  commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
+      //}
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+
+      const { setViewportGridState } = useViewportGridStore.getState();
+      setViewportGridState('currentImageIdIndex', servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+
+      const displaySets = displaySetService.activeDisplaySets;
+
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(e => {
+        return e.displaySetInstanceUID == displaySetInstanceUID;
+      })[0];
+
+      const pos_points = measurementService.getMeasurements()
+        .filter(e => {
+          return e.toolName === 'Probe2';
+        })
+        .map(e => {
+          return Object.values(e.data)[0].index;
+        });
+      const neg_points = measurementService.getMeasurements()
+        .filter(e => {
+          return e.toolName === 'Probe2';
+        })
+        .map(e => {
+          return Object.values(e.data)[0].index;
+        });
+
+      const bd_boxes = measurementService.getMeasurements()
+        .filter(e => { 
+          return e.toolName === 'RectangleROI2' 
+        })
+        .map(e => { 
+          return Object.values(e.data)[0].pointsInShape 
+        })
+
+      let box_prompts = bd_boxes.map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
+
+      const lassos = measurementService.getMeasurements()
+        .filter(e => { 
+          return e.toolName === 'PlanarFreehandROI2' 
+        })
+        .map(e => { 
+          return Object.values(e.data)[0]?.boundary 
+      })
+      .filter(Boolean)
+
+      const scribbles = measurementService.getMeasurements()
+        .filter(e => { 
+          return e.toolName === 'PlanarFreehandROI2' 
+        })
+        .map(e => { 
+          return Object.values(e.data)[0]?.scribble 
+      })
+      .filter(Boolean)
+
+      const text_prompts = measurementService.getMeasurements()
+      .filter(e => { return e.toolName === 'Probe' })
+      .map(e => { return e.label })
+
+      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      let params = {
+        largest_cc: false,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        pos_points: pos_points,
+        neg_points: neg_points,
+        boxes: box_prompts,
+        texts: text_prompts,
+        lassos: lassos,
+        scribbles: scribbles,
+        nninter: false,
+      };
+
+      if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj!==undefined){
+        params.nextObj = useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj
+      }
+
+      let data = MonaiLabelClient.constructFormData(params, null);
+
+      axios
+        .post(url, data, {
+          responseType: 'arraybuffer',
+          headers: {
+            accept: 'application/json, multipart/form-data',
+          },
+        })
+        .then(async function (response) {
+          console.debug(response);
+          if (response.status === 200) {
+            uiNotificationService.show({
+              title: 'MONAI Label',
+              message: 'Run Segmentation - Successful',
+              type: 'success',
+              duration: 2000,
+            });
+            const arrayBuffer = response.data
+            //const uint8 = new Uint8Array(arrayBuffer);
+
+            let segmentationId = `${csUtils.uuidv4()}`
+            let imageIds = currentDisplaySets.imageIds
+
+            const results = await adaptersSEG.Cornerstone3D.Segmentation.createFromDICOMSegBuffer(
+              imageIds,
+              arrayBuffer,
+              { metadataProvider: metaData, tolerance: 0.001 }
+            );
+            
+            const derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+            const segImageIds = derivedImages.map(image => image.imageId);
+
+          const labelmapBufferArray = results.labelMapImages  
+          // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
+          const volumeScalarData = new Uint8Array(labelmapBufferArray[0]);
+
+          // We should parse the segmentation as separate slices to support overlapping segments.
+          // This parsing should occur in the CornerstoneJS library adapters.
+          for (let i = 0; i < derivedImages.length; i++) {
+            const voxelManager = derivedImages[i]
+              .voxelManager as csTypes.IVoxelManager<number>;
+            const scalarData = voxelManager.getScalarData();
+            const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
+            scalarData.set(sliceData);
+            voxelManager.setScalarData(scalarData);
+          }
+
+          const segmentsInfo = results.segMetadata.data;
+          
+          // Find existing segments for the same series
+          const existingSegs = servicesManager.services.segmentationService.getSegmentations();
+          let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
+          let existingColorLUT: number[][] = [];
+          
+          // Find existing segmentation with matching seriesInstanceUid
+          for (let seg of existingSegs) {
+            if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
+              existingSegments = seg.segments || {};
+              existingColorLUT = seg.colorLUT || [];
+              break;
+            }
+          }
+          
+          const segments: { [segmentIndex: string]: cstTypes.Segment } = { ...existingSegments };
+          const colorLUT = [...existingColorLUT];
+
+          segmentsInfo.forEach((segmentInfo, index) => {
+            if (index === 0) {
+              colorLUT.push([0, 0, 0, 0]);
+              return;
+            }
+
+            const {
+              SegmentedPropertyCategoryCodeSequence,
+              SegmentNumber,
+              SegmentLabel,
+              SegmentAlgorithmType,
+              SegmentAlgorithmName,
+              SegmentDescription,
+              SegmentedPropertyTypeCodeSequence,
+              rgba,
+            } = segmentInfo;
+
+            colorLUT.push(rgba);
+
+            const segmentIndex = Number(SegmentNumber);
+
+            const centroid = results.centroids?.get(index);
+            const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
+            const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
+
+            segments[segmentIndex] = {
+              segmentIndex,
+              label: SegmentLabel || `Segment ${SegmentNumber}`,
+              locked: false,
+              active: false,
+              cachedStats: {
+                center: {
+                  image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
+                  world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
+                },
+                modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
+                category: SegmentedPropertyCategoryCodeSequence
+                  ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
+                  : '',
+                type: SegmentedPropertyTypeCodeSequence
+                  ? SegmentedPropertyTypeCodeSequence.CodeMeaning
+                  : '',
+                algorithmType: SegmentAlgorithmType,
+                algorithmName: SegmentAlgorithmName,
+                description: SegmentDescription,
+              },
+            };
+          });
+
+            csToolsSegmentation.addSegmentations([
+              {
+                  segmentationId,
+                  representation: {
+                      type: LABELMAP,
+                      data: {
+                        imageIds: segImageIds,
+                        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
+                        referencedImageIds: imageIds,
+
+                      }
+                  },
+                  config: {
+                    cachedStats: results.segMetadata,
+                    label: currentDisplaySets.SeriesDescription,
+                    segments,
+                  },
+              }
+          ]);
+          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
+            segmentationId: segmentationId,
+          });
+
+          const end = Date.now();
+          console.log(`Time taken: ${(end - start)/1000} Seconds`);
+          return response;
+          }
+          const end = Date.now();
+          console.log(`Time taken: ${(end - start)/1000} Seconds`);
+          return response;
+        })
+        .catch(function (error) {
+          return error;
+        })
+        .finally(function () { });
+    },
+    async resetNninter(){
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+      const displaySets = displaySetService.activeDisplaySets;
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(e => {
+        return e.displaySetInstanceUID == displaySetInstanceUID;
+      })[0];
+      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      let params = {
+        largest_cc: false,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        nninter: "reset",
+      };
+
+      let data = MonaiLabelClient.constructFormData(params, null);
+
+      axios
+        .post(url, data, {
+          responseType: 'arraybuffer',
+          headers: {
+            accept: 'application/json, multipart/form-data',
+          },
+        })
+        .then(async function (response) {
+          if (response.status === 200) {
+            uiNotificationService.show({
+              title: 'NNInter',
+              message: 'Reset nninter - Successful',
+              type: 'success',
+              duration: 2000,
+            });
+            commandsManager.run('clearMeasurements')
+          }
+          return response;
+        })
+        .catch(function (error) {
+          return error;
+        })
+        .finally(function () { });
+
+    },
+
+    async nninter() {
+      const start = Date.now();
+      
+      const segs = servicesManager.services.segmentationService.getSegmentations()
+      //remove old segmentationsFromViewport
+      //for (let seg of segs) {
+      //  commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: seg.segmentationId });
+      //}
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+
+      const { setViewportGridState } = useViewportGridStore.getState();
+      setViewportGridState('currentImageIdIndex', servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+
+      const displaySets = displaySetService.activeDisplaySets;
+
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(e => {
+        return e.displaySetInstanceUID == displaySetInstanceUID;
+      })[0];
+
+      const currentMeasurements = measurementService.getMeasurements()
+
+      const pos_points = currentMeasurements
+        .filter(e => {
+          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+        })
+        .map(e => {
+          return Object.values(e.data)[0].index;
+        });
+      const neg_points = currentMeasurements
+        .filter(e => {
+          return e.toolName === 'Probe2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+        })
+        .map(e => {
+          return Object.values(e.data)[0].index;
+        });
+
+      const pos_boxes = currentMeasurements
+        .filter(e => { 
+          return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+        })
+        .map(e => { 
+          return Object.values(e.data)[0].pointsInShape 
+        })
+        .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
+
+      const neg_boxes = currentMeasurements
+      .filter(e => { 
+        return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+      })
+      .map(e => { 
+        return Object.values(e.data)[0].pointsInShape 
+      })
+      .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
+
+      const pos_lassos = currentMeasurements
+        .filter(e => { 
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+        })
+        .map(e => { 
+          return Object.values(e.data)[0]?.boundary 
+      })
+      .filter(Boolean)
+
+      const neg_lassos = currentMeasurements
+      .filter(e => { 
+        return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+      })
+      .map(e => { 
+        return Object.values(e.data)[0]?.boundary 
+    })
+    .filter(Boolean)
+
+      const pos_scribbles = currentMeasurements
+        .filter(e => { 
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+        })
+        .map(e => { 
+          return Object.values(e.data)[0]?.scribble 
+      })
+      .filter(Boolean)
+
+      const neg_scribbles = currentMeasurements
+        .filter(e => { 
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+        })
+        .map(e => { 
+          return Object.values(e.data)[0]?.scribble 
+      })
+      .filter(Boolean)
+
+      const text_prompts = currentMeasurements
+      .filter(e => { return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID})
+      .map(e => { return e.label })
+
+      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      let params = {
+        largest_cc: false,
+      //  device: response.data.trainers.segmentation.config.device,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        pos_points: pos_points,
+        neg_points: neg_points,
+        pos_boxes: pos_boxes,
+        neg_boxes: neg_boxes,
+        pos_lassos: pos_lassos,
+        neg_lassos: neg_lassos,
+        pos_scribbles: pos_scribbles,
+        neg_scribbles: neg_scribbles,
+        texts: text_prompts,
+        nninter: true,
+      };
+
+      if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj!==undefined){
+        params.nextObj = useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj
+      }
+
+      let data = MonaiLabelClient.constructFormData(params, null);
+
+      axios
+        .post(url, data, {
+          responseType: 'arraybuffer',
+          headers: {
+            accept: 'application/json, multipart/form-data',
+          },
+        })
+        .then(async function (response) {
+          console.debug(response);
+          if (response.status === 200) {
+            uiNotificationService.show({
+              title: 'MONAI Label',
+              message: 'Run Segmentation - Successful',
+              type: 'success',
+              duration: 2000,
+            });
+            const arrayBuffer = response.data
+            //const uint8 = new Uint8Array(arrayBuffer);
+
+            let segmentationId = `${csUtils.uuidv4()}`
+            let imageIds = currentDisplaySets.imageIds
+
+            const results = await adaptersSEG.Cornerstone3D.Segmentation.createFromDICOMSegBuffer(
+              imageIds,
+              arrayBuffer,
+              { metadataProvider: metaData, tolerance: 0.001 }
+            );
+
+            let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
+            let existingColorLUT: number[][] = [];
+            
+            let segImageIds = [];
+            // Find existing segmentation with matching seriesInstanceUid
+            for (let seg of segs) {
+              if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
+                existingSegments = seg.segments || {};
+                existingColorLUT = seg.colorLUT || [];
+                segmentationId = seg.segmentationId;
+                segImageIds = seg.representationData.Labelmap.imageIds;
+                break;
+              }
+            }
+            
+            const segments: { [segmentIndex: string]: cstTypes.Segment } = { ...existingSegments };
+            const colorLUT = [...existingColorLUT];
+            let segmentNumber = 1;
+            if (Object.keys(segments).length > 0) {
+              segmentNumber = Object.keys(segments).length + 1;
+            }
+            //let derivedImages = [];
+            //if (segImageIds.length === 0) {
+            //  derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+            //  segImageIds = derivedImages.map(image => image.imageId);
+            //}
+
+
+          let derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
+
+          const labelMapImages = results.labelMapImages
+
+          if (!labelMapImages || !labelMapImages.length) {
+            throw new Error('SEG reading failed');
+          }
+          const derivedImages_new = labelMapImages?.flat();
+          for (let i = 0; i < derivedImages_new.length; i++) {
+            if (!cache.getImageLoadObject(derivedImages_new[i].imageId)) {
+              cache.putImageSync(derivedImages_new[i].imageId, derivedImages_new[i]);
+            }
+            const voxelManager = derivedImages_new[i].voxelManager as csTypes.IVoxelManager<number>;
+            const scalarData = voxelManager.getScalarData();
+            voxelManager.setScalarData(scalarData.map(v => v === 1 ? segmentNumber : v));
+          }
+          // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
+          //const volumeScalarData = new Uint8Array(labelmapBufferArray[0]);
+
+          // We should parse the segmentation as separate slices to support overlapping segments.
+          // This parsing should occur in the CornerstoneJS library adapters.
+          //for (let i = 0; i < derivedImages.length; i++) {
+          //  const voxelManager = derivedImages[i]
+          //    .voxelManager as csTypes.IVoxelManager<number>;
+          //  let scalarData = voxelManager.getScalarData();
+          //  const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
+          //  if(segmentNumber !== 10000){
+          //  const transformed_sliceData = sliceData.map(v => v === 1 ? segmentNumber : v);
+          //  for (let j = 0; j < scalarData.length; j++) {
+          //    if (transformed_sliceData[j] === segmentNumber) {
+          //      scalarData[j] = segmentNumber;
+          //    }
+          //  }
+          //  }else{
+          //    scalarData.set(sliceData);
+          //  }
+          //  if(segmentNumber === 1){
+          //    voxelManager.setScalarData(scalarData);
+          //  }
+          //}
+
+          for (let i = 0; i < derivedImages.length; i++) {
+            const voxelManager = derivedImages[i].voxelManager as csTypes.IVoxelManager<number>;
+            const scalarData = voxelManager.getScalarData();
+            voxelManager.setScalarData(scalarData);
+          }
+
+          let merged_derivedImages = [...derivedImages, ...derivedImages_new];
+          const derivedImageIds = merged_derivedImages.map(image => image.imageId);  
+          
+
+          const segmentsInfo = results.segMetadata.data;
+          
+
+          segmentsInfo.forEach((segmentInfo, index) => {
+            if (index === 0) {
+              colorLUT.push([0, 0, 0, 0]);
+              return;
+            }
+
+            const {
+              SegmentedPropertyCategoryCodeSequence,
+              SegmentNumber,
+              SegmentLabel,
+              SegmentAlgorithmType,
+              SegmentAlgorithmName,
+              SegmentDescription,
+              SegmentedPropertyTypeCodeSequence,
+              rgba,
+            } = segmentInfo;
+
+            colorLUT.push(rgba);
+            let segmentIndex = Number(SegmentNumber);
+            if(segmentNumber !== 1){
+              segmentIndex = segmentNumber;
+            }
+              
+            const centroid = results.centroids?.get(index);
+            const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
+            const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
+
+            segments[segmentIndex] = {
+              segmentIndex,
+              label: SegmentLabel || `Segment ${SegmentNumber}`,
+              locked: false,
+              active: false,
+              cachedStats: {
+                center: {
+                  image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
+                  world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
+                },
+                modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
+                category: SegmentedPropertyCategoryCodeSequence
+                  ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
+                  : '',
+                type: SegmentedPropertyTypeCodeSequence
+                  ? SegmentedPropertyTypeCodeSequence.CodeMeaning
+                  : '',
+                algorithmType: SegmentAlgorithmType,
+                algorithmName: SegmentAlgorithmName,
+                description: SegmentDescription,
+              },
+            };
+          });
+          if(segmentNumber === 1){
+            servicesManager.services.segmentationService.removeAllSegmentations();
+            csToolsSegmentation.addSegmentations([
+              {
+                  segmentationId,
+                  representation: {
+                      type: LABELMAP,
+                      data: {
+                        imageIds: derivedImageIds,
+                        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
+                        referencedImageIds: imageIds,
+                      }
+                  },
+                  config: {
+                    cachedStats: results.segMetadata,
+                    label: currentDisplaySets.SeriesDescription,
+                    segments,
+                  },
+              }
+          ]);
+          
+        }else{
+          // Remove the existing segmentation representation first
+          servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
+          
+          // Update the segmentation data
+          csToolsSegmentation.updateSegmentations([
+            {
+              segmentationId,
+              payload: {
+                segments: segments,
+                representationData: {
+                  [LABELMAP]: {
+                    imageIds: derivedImageIds,
+                    referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
+                    referencedImageIds: imageIds,
+                  }
+                }
+              },
+            },
+          ]);
+          }
+          
+          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
+            segmentationId: segmentationId,
+          });
+          commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: segmentationId })
+          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
+            segmentationId: segmentationId,
+          });
+          const end = Date.now();
+          console.log(`Time taken: ${(end - start)/1000} Seconds`);
+          return response;
+          }
+          const end = Date.now();
+          console.log(`Time taken: ${(end - start)/1000} Seconds`);
+          return response;
+        })
+        .catch(function (error) {
+          return error;
+        })
+        .finally(function () { });
+    },
+    saveAndNextObj: () => {
+      commandsManager.run('clearMeasurements')
+      servicesManager.services.cornerstoneViewportService.resize()
+      if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj===undefined){
+        useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj=1
+      }
+      useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj=useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj+1
+    },
+    jumpToSegment: () => {
+      const segmentationService = servicesManager.services.segmentationService;
+      const activeSegmentation = segmentationService.getActiveSegmentation('default');
+      if (activeSegmentation != undefined) {
+        segmentationService.jumpToSegmentCenter(activeSegmentation.segmentationId, 1, 'default')
+      }
+    },
+    toggleCurrentSegment: () => {
+      const segmentationService = servicesManager.services.segmentationService;
+      const activeSegmentation = segmentationService.getActiveSegmentation('default');
+      if (activeSegmentation != undefined) {
+        segmentationService.toggleSegmentationRepresentationVisibility('default', {
+          segmentationId: activeSegmentation.segmentationId,
+          type: csToolsEnums.SegmentationRepresentations.Labelmap
+        });
+      }
+    },
+
     /**
      * Toggle viewport overlay (the information panel shown on the four corners
      * of the viewport)
@@ -650,6 +1337,12 @@ const commandsModule = ({
     setViewportGridLayout: actions.setViewportGridLayout,
     toggleOneUp: actions.toggleOneUp,
     openDICOMTagViewer: actions.openDICOMTagViewer,
+    sam2: actions.sam2,
+    resetNninter: actions.resetNninter,
+    nninter: actions.nninter,
+    saveAndNextObj: actions.saveAndNextObj,
+    jumpToSegment: actions.jumpToSegment,
+    toggleCurrentSegment: actions.toggleCurrentSegment,
     updateViewportDisplaySet: actions.updateViewportDisplaySet,
   };
 

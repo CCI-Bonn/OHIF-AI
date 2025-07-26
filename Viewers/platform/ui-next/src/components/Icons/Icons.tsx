@@ -63,6 +63,9 @@ import TabSegmentation from './Sources/TabSegmentation';
 import TabStudies from './Sources/TabStudies';
 import ThumbnailView from './Sources/ThumbnailView';
 import Trash from './Sources/Trash';
+import ToolSam from './Sources/ToolSam';
+import ToolNninter from './Sources/ToolNninter';
+import ToolTarget from './Sources/ToolTarget';
 import ViewportViews from './Sources/ViewportViews';
 import Sorting from './Sources/Sorting';
 import Upload from './Sources/Upload';
@@ -672,6 +675,10 @@ export const Icons = {
   'tool-seg-shape': (props: IconProps) => ToolSegShape(props),
   'tool-seg-threshold': (props: IconProps) => ToolSegThreshold(props),
   'tool-spline-roi': (props: IconProps) => ToolSplineRoi(props),
+  'tool-sam': (props: IconProps) => ToolSam(props),
+  'tool-nninter': (props: IconProps) => ToolNninter(props),
+  'tool-target': (props: IconProps) => ToolTarget(props),
+  'eye-visible': (props: IconProps) => EyeVisible(props),
   'tool-stack-image-sync': (props: IconProps) => ToolStackImageSync(props),
   'tool-stack-scroll': (props: IconProps) => ToolStackScroll(props),
   'toggle-dicom-overlay': (props: IconProps) => ToolToggleDicomOverlay(props),

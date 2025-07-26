@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Icons, PanelSection, ToolSettings } from '@ohif/ui-next';
+import { Icons, PanelSection, ToolSettings, Switch, Label } from '@ohif/ui-next';
 import { useSystem, useToolbar } from '@ohif/core';
 import classnames from 'classnames';
 import { useTranslation } from 'react-i18next';
+import { toolboxState } from '../stores/toolboxState';
 
 interface ButtonProps {
   isActive?: boolean;
@@ -25,6 +26,10 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
 
   const { toolbarService, customizationService } = servicesManager.services;
   const [showConfig, setShowConfig] = useState(false);
+
+  // Local state for UI updates
+  const [liveMode, setLiveMode] = useState(toolboxState.getLiveMode());
+  const [posNeg, setPosNeg] = useState(toolboxState.getPosNeg());
 
   const { toolbarButtons: toolboxSections, onInteraction } = useToolbar({
     servicesManager,
@@ -102,10 +107,38 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
           const buttons = toolbarService.getButtonSection(sectionId) as any[];
 
           return (
-            <div
-              key={sectionId}
-              className="bg-muted flex flex-wrap space-x-2 py-2 px-1"
-            >
+            <React.Fragment key={sectionId}>
+                               {buttonSectionId === "aiToolBox" && (
+                 <div className="flex justify-center items-center gap-4 py-2 px-1">
+                   <div className="flex items-center gap-2">
+                     <Label htmlFor="live-mode">Live Mode</Label>
+                     <Switch
+                       id="live-mode"
+                       checked={liveMode}
+                       onCheckedChange={(checked) => {
+                        setLiveMode(checked);
+                        toolboxState.setLiveMode(checked);
+                        console.log('Live mode:', checked);
+                       }}
+                     />
+                   </div>
+                   <div className="flex items-center gap-2">
+                     <Label htmlFor="pos-neg">Pos/Neg</Label>
+                     <Switch
+                       id="pos-neg"
+                       checked={posNeg}
+                       onCheckedChange={(checked) => {
+                        setPosNeg(checked);
+                        toolboxState.setPosNeg(checked);
+                        console.log('Pos/Neg:', checked);
+                      }}
+                     />
+                   </div>
+                 </div>
+                )}
+              <div
+                className="bg-muted flex flex-wrap space-x-2 py-2 px-1"
+              >
               {buttons.map(tool => {
                 if (!tool) {
                   return null;
@@ -128,6 +161,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
                 );
               })}
             </div>
+            </React.Fragment>
           );
         })}
         {activeToolOptions && (

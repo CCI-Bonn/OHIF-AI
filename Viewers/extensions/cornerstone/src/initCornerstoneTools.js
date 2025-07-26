@@ -46,6 +46,15 @@ import * as polySeg from '@cornerstonejs/polymorphic-segmentation';
 import CalibrationLineTool from './tools/CalibrationLineTool';
 import ImageOverlayViewerTool from './tools/ImageOverlayViewerTool';
 
+class Probe2Tool extends ProbeTool {}
+Probe2Tool.toolName = 'Probe2';
+
+class RectangleROI2Tool extends RectangleROITool {}
+RectangleROI2Tool.toolName = 'RectangleROI2';
+
+class PlanarFreehandROI2Tool extends PlanarFreehandROITool {}
+PlanarFreehandROI2Tool.toolName = 'PlanarFreehandROI2';
+
 export default function initCornerstoneTools(configuration = {}) {
   CrosshairsTool.isAnnotation = false;
   LabelmapSlicePropagationTool.isAnnotation = false;
@@ -71,9 +80,11 @@ export default function initCornerstoneTools(configuration = {}) {
   addTool(VolumeRotateTool);
   addTool(ZoomTool);
   addTool(ProbeTool);
+  addTool(Probe2Tool);
   addTool(MIPJumpToClickTool);
   addTool(LengthTool);
   addTool(RectangleROITool);
+  addTool(RectangleROI2Tool);
   addTool(RectangleROIThresholdTool);
   addTool(EllipticalROITool);
   addTool(CircleROITool);
@@ -96,6 +107,7 @@ export default function initCornerstoneTools(configuration = {}) {
   addTool(AdvancedMagnifyTool);
   addTool(UltrasoundDirectionalTool);
   addTool(PlanarFreehandROITool);
+  addTool(PlanarFreehandROI2Tool);
   addTool(SplineROITool);
   addTool(LivewireContourTool);
   addTool(OrientationMarkerTool);
@@ -131,7 +143,9 @@ const toolNames = {
   Length: LengthTool.toolName,
   DragProbe: DragProbeTool.toolName,
   Probe: ProbeTool.toolName,
+  Probe2: Probe2Tool.toolName,
   RectangleROI: RectangleROITool.toolName,
+  RectangleROI2: RectangleROI2Tool.toolName,
   RectangleROIThreshold: RectangleROIThresholdTool.toolName,
   EllipticalROI: EllipticalROITool.toolName,
   CircleROI: CircleROITool.toolName,
@@ -154,6 +168,7 @@ const toolNames = {
   SplineROI: SplineROITool.toolName,
   LivewireContour: LivewireContourTool.toolName,
   PlanarFreehandROI: PlanarFreehandROITool.toolName,
+  PlanarFreehandROI2: PlanarFreehandROI2Tool.toolName,
   OrientationMarker: OrientationMarkerTool.toolName,
   WindowLevelRegion: WindowLevelRegionTool.toolName,
   PlanarFreehandContourSegmentation: PlanarFreehandContourSegmentationTool.toolName,

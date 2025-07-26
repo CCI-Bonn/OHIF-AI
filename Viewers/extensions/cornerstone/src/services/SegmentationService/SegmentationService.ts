@@ -469,6 +469,7 @@ class SegmentationService extends PubSubService {
         SegmentLabel,
         SegmentAlgorithmType,
         SegmentAlgorithmName,
+        SegmentDescription,
         SegmentedPropertyTypeCodeSequence,
         rgba,
       } = segmentInfo;
@@ -500,6 +501,7 @@ class SegmentationService extends PubSubService {
             : '',
           algorithmType: SegmentAlgorithmType,
           algorithmName: SegmentAlgorithmName,
+          description: SegmentDescription,
         },
       };
     });

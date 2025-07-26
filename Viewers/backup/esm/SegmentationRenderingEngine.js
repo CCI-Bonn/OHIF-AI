@@ -158,7 +158,7 @@ class SegmentationRenderingEngine {
 
                     if (posPoints!== undefined && posPoints.length !== 0){
                         const toolGroup = getToolGroupForViewport(viewport.id);
-                        const posPointTool = toolGroup.getToolInstance('Probe')
+                        const posPointTool = toolGroup.getToolInstance('Probe2')
                         if (posPointTool!==undefined){
                             for (const posPos of posPoints){
                                 let annotation = posPointTool._addNewAnnotationFromIndex(element, posPos, false)
@@ -169,7 +169,7 @@ class SegmentationRenderingEngine {
 
                     if (negPoints!== undefined && negPoints.length !== 0){
                         const toolGroup = getToolGroupForViewport(viewport.id);
-                        const negPointTool = toolGroup.getToolInstance('Probe')
+                        const negPointTool = toolGroup.getToolInstance('Probe2')
                         if (negPointTool!==undefined){
                             for (const negPos of negPoints){
                                 let annotation = negPointTool._addNewAnnotationFromIndex(element, negPos, true)

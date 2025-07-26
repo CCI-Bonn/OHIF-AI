@@ -13,6 +13,7 @@ import {
 } from '@cornerstonejs/tools/utilities';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 
+import { toolboxState } from '@ohif/extension-default/src/stores/toolboxState';
 const { CORNERSTONE_3D_TOOLS_SOURCE_NAME, CORNERSTONE_3D_TOOLS_SOURCE_VERSION } = CSExtensionEnums;
 const { removeAnnotation } = annotation.state;
 const csToolsEvents = Enums.Events;
@@ -33,10 +34,13 @@ const initMeasurementService = (
     Angle,
     CobbAngle,
     RectangleROI,
+    RectangleROI2,
     PlanarFreehandROI,
+    PlanarFreehandROI2,
     SplineROI,
     LivewireContour,
     Probe,
+    Probe2,
     UltrasoundDirectional,
     SegmentBidirectional,
   } = measurementServiceMappingsFactory(
@@ -129,10 +133,26 @@ const initMeasurementService = (
 
   measurementService.addMapping(
     csTools3DVer1MeasurementSource,
+    'RectangleROI2',
+    RectangleROI2.matchingCriteria,
+    RectangleROI2.toAnnotation,
+    RectangleROI2.toMeasurement
+  );
+
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
     'PlanarFreehandROI',
     PlanarFreehandROI.matchingCriteria,
     PlanarFreehandROI.toAnnotation,
     PlanarFreehandROI.toMeasurement
+  );
+
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
+    'PlanarFreehandROI2',
+    PlanarFreehandROI2.matchingCriteria,
+    PlanarFreehandROI2.toAnnotation,
+    PlanarFreehandROI2.toMeasurement
   );
 
   measurementService.addMapping(
@@ -167,6 +187,14 @@ const initMeasurementService = (
     Probe.matchingCriteria,
     Probe.toAnnotation,
     Probe.toMeasurement
+  );
+
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
+    'Probe2',
+    Probe2.matchingCriteria,
+    Probe2.toAnnotation,
+    Probe2.toMeasurement
   );
 
   measurementService.addMapping(
@@ -213,6 +241,11 @@ const connectToolsToMeasurementService = (servicesManager: AppTypes.ServicesMana
   function addMeasurement(csToolsEvent) {
     try {
       const annotationAddedEventDetail = csToolsEvent.detail;
+      if (toolboxState.getPosNeg()) {
+        annotationAddedEventDetail.annotation.metadata.neg = true;
+      }else{
+        annotationAddedEventDetail.annotation.metadata.neg = false;
+      }
       const {
         annotation: { metadata, annotationUID },
       } = annotationAddedEventDetail;

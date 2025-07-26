@@ -17,11 +17,11 @@ const ohif = {
 
 const cornerstone = {
   measurements: '@ohif/extension-cornerstone.panelModule.panelMeasurement',
-  segmentation: '@ohif/extension-cornerstone.panelModule.panelSegmentation',
+  segmentation: '@ohif/extension-cornerstone.panelModule.panelSegmentationWithTools',
 };
 
 const tracked = {
-  measurements: '@ohif/extension-measurement-tracking.panelModule.trackedMeasurements',
+ // measurements: '@ohif/extension-measurement-tracking.panelModule.trackedMeasurements',
   thumbnailList: '@ohif/extension-measurement-tracking.panelModule.seriesList',
   viewport: '@ohif/extension-measurement-tracking.viewportModule.cornerstone-tracked',
 };
@@ -138,9 +138,39 @@ function modeFactory({ modeConfiguration }) {
 
       customizationService.setCustomizations({
         'panelSegmentation.disableEditing': {
-          $set: true,
+          $set: false,
         },
       });
+
+      toolbarService.createButtonSection('segmentationToolbox', [
+        'SegmentationUtilities',
+        'SegmentationTools',
+      ]);
+
+      toolbarService.createButtonSection('aiToolBox', ['aiToolBoxContainer']);
+
+      toolbarService.createButtonSection('aiToolBoxSection', [
+        'Probe2',
+        'RectangleROI2',
+        'PlanarFreehandROI2',
+        'sam2',
+        'nninter',
+        'resetNninter',
+        'jumpToSegment',
+        'toggleCurrentSegment',
+      ]);
+      toolbarService.createButtonSection('segmentationToolboxUtilitySection', [
+        //'LabelmapSlicePropagation',
+        'InterpolateLabelmap',
+        'SegmentBidirectional',
+      ]);
+      toolbarService.createButtonSection('segmentationToolboxToolsSection', [
+        'BrushTools',
+        //'MarkerLabelmap',
+        //'RegionSegmentPlus',
+        'Shapes',
+      ]);
+      toolbarService.createButtonSection('brushToolsSection', ['Brush', 'Eraser', 'Threshold']);
 
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.
@@ -219,8 +249,8 @@ function modeFactory({ modeConfiguration }) {
             props: {
               leftPanels: [tracked.thumbnailList],
               leftPanelResizable: true,
-              rightPanels: [cornerstone.segmentation, tracked.measurements],
-              rightPanelClosed: true,
+              rightPanels: [cornerstone.segmentation],
+              rightPanelClosed: false,
               rightPanelResizable: true,
               viewports: [
                 {
