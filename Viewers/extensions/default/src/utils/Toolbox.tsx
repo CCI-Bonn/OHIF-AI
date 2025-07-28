@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Icons, PanelSection, ToolSettings, Switch, Label } from '@ohif/ui-next';
 import { useSystem, useToolbar } from '@ohif/core';
 import classnames from 'classnames';
@@ -30,6 +30,24 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   // Local state for UI updates
   const [liveMode, setLiveMode] = useState(toolboxState.getLiveMode());
   const [posNeg, setPosNeg] = useState(toolboxState.getPosNeg());
+  const [refineNew, setRefineNew] = useState(toolboxState.getRefineNew());
+
+  // Sync local state with global state changes
+  useEffect(() => {
+    const updateLocalState = () => {
+      setLiveMode(toolboxState.getLiveMode());
+      setPosNeg(toolboxState.getPosNeg());
+      setRefineNew(toolboxState.getRefineNew());
+    };
+
+    // Update immediately
+    updateLocalState();
+
+    // Set up an interval to check for changes (since toolboxState doesn't have events)
+    const interval = setInterval(updateLocalState, 100);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const { toolbarButtons: toolboxSections, onInteraction } = useToolbar({
     servicesManager,
@@ -131,6 +149,18 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
                         setPosNeg(checked);
                         toolboxState.setPosNeg(checked);
                         console.log('Pos/Neg:', checked);
+                      }}
+                     />
+                   </div>
+                   <div className="flex items-center gap-2">
+                     <Label htmlFor="refine-new">Refine/New</Label>
+                     <Switch
+                       id="refine-new"
+                       checked={refineNew}
+                       onCheckedChange={(checked) => {
+                        setRefineNew(checked);
+                        toolboxState.setRefineNew(checked);
+                        console.log('Refine/New:', checked);
                       }}
                      />
                    </div>

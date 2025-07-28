@@ -66,7 +66,7 @@ const commandsModule = ({
         // Use setTimeout to ensure the measurement is fully processed
         setTimeout(() => {
           commandsManager.run('nninter');
-        }, 100);
+        }, 50);
       }
     }
   );
@@ -786,7 +786,7 @@ const commandsModule = ({
         })
         .finally(function () { });
     },
-    async resetNninter(){
+    async resetNninter(options: {clearMeasurements: boolean} = {clearMeasurements: true}){
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
@@ -823,7 +823,9 @@ const commandsModule = ({
               type: 'success',
               duration: 2000,
             });
-            commandsManager.run('clearMeasurements')
+            if (options.clearMeasurements) {
+              commandsManager.run('clearMeasurements')
+            }
           }
           return response;
         })
@@ -1006,7 +1008,12 @@ const commandsModule = ({
             let segmentNumber = 1;
             if (Object.keys(segments).length > 0) {
               segmentNumber = Object.keys(segments).length + 1;
+              if (!toolboxState.getRefineNew()) {
+                segmentNumber -=1;
+              }
             }
+
+
             //let derivedImages = [];
             //if (segImageIds.length === 0) {
             //  derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
@@ -1055,13 +1062,22 @@ const commandsModule = ({
           //  }
           //}
 
-          for (let i = 0; i < derivedImages.length; i++) {
-            const voxelManager = derivedImages[i].voxelManager as csTypes.IVoxelManager<number>;
-            const scalarData = voxelManager.getScalarData();
-            voxelManager.setScalarData(scalarData);
+
+          let filteredDerivedImages = derivedImages;
+          // If toolboxState.getRefineNew() is true, exclude derivedImages that contain segmentNumber
+          if (!toolboxState.getRefineNew()) {
+            filteredDerivedImages = derivedImages.filter(image => {
+              const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
+              const scalarData = voxelManager.getScalarData();
+              // Check if scalarData contains segmentNumber
+              //return !scalarData.some(value => value === segmentNumber);
+              if (scalarData.some(value => value === segmentNumber)){
+                voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
+              }
+            });
           }
 
-          let merged_derivedImages = [...derivedImages, ...derivedImages_new];
+          let merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new];          
           const derivedImageIds = merged_derivedImages.map(image => image.imageId);  
           
 
