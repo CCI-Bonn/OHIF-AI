@@ -611,7 +611,7 @@ const toolbarButtons: Button[] = [
     uiType: 'ohif.toolBoxButton',
     props: {
       type: 'tool',
-      icon: 'next-arrow',
+      icon: 'tool-reset',
       label: 'resetNninter',
       tooltip: 'resetNninter',
       commands: 'resetNninter',
