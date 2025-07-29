@@ -43,6 +43,7 @@ const measurementServiceMappingsFactory = (
       RectangleROI2: RECTANGLE,
       PlanarFreehandROI: POLYLINE,
       PlanarFreehandROI2: POLYLINE,
+      PlanarFreehandROI3: POLYLINE,
       Bidirectional: BIDIRECTIONAL,
       ArrowAnnotate: POINT,
       CobbAngle: ANGLE,
@@ -204,6 +205,23 @@ const measurementServiceMappingsFactory = (
     },
 
     PlanarFreehandROI2: {
+      toAnnotation: PlanarFreehandROI.toAnnotation,
+      toMeasurement: csToolsAnnotation =>
+        PlanarFreehandROI.toMeasurement(
+          csToolsAnnotation,
+          displaySetService,
+          cornerstoneViewportService,
+          _getValueTypeFromToolType,
+          customizationService
+        ),
+      matchingCriteria: [
+        {
+          valueType: MeasurementService.VALUE_TYPES.POLYLINE,
+        },
+      ],
+    },
+
+    PlanarFreehandROI3: {
       toAnnotation: PlanarFreehandROI.toAnnotation,
       toMeasurement: csToolsAnnotation =>
         PlanarFreehandROI.toMeasurement(

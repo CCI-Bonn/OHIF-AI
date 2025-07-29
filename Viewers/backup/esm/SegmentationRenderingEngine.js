@@ -202,7 +202,7 @@ class SegmentationRenderingEngine {
 
                     if (pos_lassos!== undefined && pos_lassos.length !== 0){
                         const toolGroup = getToolGroupForViewport(viewport.id);
-                        const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI2')
+                        const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI3')
                         if (freehandTool!==undefined){
                             for (const spline of pos_lassos){
                                 let annotation = freehandTool._addNewAnnotationFromIndex(element, spline, true, false)
@@ -213,7 +213,7 @@ class SegmentationRenderingEngine {
 
                     if (neg_lassos!== undefined && neg_lassos.length !== 0){
                         const toolGroup = getToolGroupForViewport(viewport.id);
-                        const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI2')
+                        const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI3')
                         if (freehandTool!==undefined){
                             for (const spline of neg_lassos){
                                 let annotation = freehandTool._addNewAnnotationFromIndex(element, spline, true, true)

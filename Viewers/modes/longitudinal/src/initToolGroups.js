@@ -83,6 +83,7 @@ function initDefaultToolGroup(extensionManager, toolGroupService, commandsManage
       { toolName: toolNames.UltrasoundDirectional },
       { toolName: toolNames.PlanarFreehandROI },
       { toolName: toolNames.PlanarFreehandROI2 },
+      { toolName: toolNames.PlanarFreehandROI3 },
       { toolName: toolNames.SplineROI },
       { toolName: toolNames.LivewireContour },
       { toolName: toolNames.WindowLevelRegion },

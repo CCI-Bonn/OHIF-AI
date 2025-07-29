@@ -37,6 +37,7 @@ const initMeasurementService = (
     RectangleROI2,
     PlanarFreehandROI,
     PlanarFreehandROI2,
+    PlanarFreehandROI3,
     SplineROI,
     LivewireContour,
     Probe,
@@ -153,6 +154,14 @@ const initMeasurementService = (
     PlanarFreehandROI2.matchingCriteria,
     PlanarFreehandROI2.toAnnotation,
     PlanarFreehandROI2.toMeasurement
+  );
+
+  measurementService.addMapping(
+    csTools3DVer1MeasurementSource,
+    'PlanarFreehandROI3',
+    PlanarFreehandROI3.matchingCriteria,
+    PlanarFreehandROI3.toAnnotation,
+    PlanarFreehandROI3.toMeasurement
   );
 
   measurementService.addMapping(

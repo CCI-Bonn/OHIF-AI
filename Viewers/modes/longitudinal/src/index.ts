@@ -152,6 +152,7 @@ function modeFactory({ modeConfiguration }) {
       toolbarService.createButtonSection('aiToolBoxSection', [
         'Probe2',
         'RectangleROI2',
+        'PlanarFreehandROI3',
         'PlanarFreehandROI2',
         'sam2',
         'nninter',

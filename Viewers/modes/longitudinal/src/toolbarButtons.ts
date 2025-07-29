@@ -455,11 +455,22 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'PlanarFreehandROI3',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      icon: 'icon-tool-lasso-roi',
+      label: 'Lasso',
+      tooltip: 'Freehand ROI',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
     id: 'PlanarFreehandROI2',
     uiType: 'ohif.toolBoxButton',
     props: {
       icon: 'icon-tool-freehand-roi',
-      label: 'Lasso (closed), Scribble (open)',
+      label: 'Scribble',
       tooltip: 'Freehand ROI',
       commands: setToolActiveToolbar,
       evaluate: 'evaluate.cornerstoneTool',
@@ -586,7 +597,7 @@ const toolbarButtons: Button[] = [
   },
   {
     id: 'nninter',
-    uiType: 'ohif.toolButton',
+    uiType: 'ohif.toolBoxButton',
     props: {
       type: 'tool',
       icon: 'tool-nninter',

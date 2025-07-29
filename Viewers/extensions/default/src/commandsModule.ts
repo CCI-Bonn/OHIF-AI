@@ -593,7 +593,7 @@ const commandsModule = ({
 
       const lassos = measurementService.getMeasurements()
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2' 
+          return e.toolName === 'PlanarFreehandROI3' 
         })
         .map(e => { 
           return Object.values(e.data)[0]?.boundary 
@@ -895,7 +895,7 @@ const commandsModule = ({
 
       const pos_lassos = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+          return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.boundary 
@@ -904,7 +904,7 @@ const commandsModule = ({
 
       const neg_lassos = currentMeasurements
       .filter(e => { 
-        return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+        return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
       })
       .map(e => { 
         return Object.values(e.data)[0]?.boundary 

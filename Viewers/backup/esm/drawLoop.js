@@ -89,15 +89,15 @@ function mouseDragDrawCallback(evt) {
         textBox.hasMoved = true;
     }
     else {
-        const crossingIndex = this.findCrossingIndexDuringCreate(evt);
-        if (crossingIndex !== undefined) {
-            this.applyCreateOnCross(evt, crossingIndex);
-        }
-        else {
-            const numPointsAdded = addCanvasPointsToArray(element, canvasPoints, canvasPos, this.commonData);
-            this.drawData.polylineIndex = polylineIndex + numPointsAdded;
-        }
-        annotation.invalidated = true;
+            const crossingIndex = this.findCrossingIndexDuringCreate(evt);
+            if (crossingIndex !== undefined && annotation.metadata.toolName !== 'PlanarFreehandROI2') {
+                this.applyCreateOnCross(evt, crossingIndex);
+            }
+            else {
+                const numPointsAdded = addCanvasPointsToArray(element, canvasPoints, canvasPos, this.commonData);
+                this.drawData.polylineIndex = polylineIndex + numPointsAdded;
+            }
+            annotation.invalidated = true;
     }
     triggerAnnotationRenderForViewportIds(viewportIdsToRender);
     if (annotation.invalidated) {

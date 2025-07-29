@@ -202,7 +202,20 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
                     const bottomRightBBIndex = csUtils.transformWorldToIndex(imageData, bottomRightBBWorld);
                     return [topLeftBBIndex, bottomRightBBIndex];
                 });
-                if (closed) {
+                if(annotation.metadata.toolName === 'PlanarFreehandROI2'){
+                    this.updateOpenCachedStats({
+                        metadata,
+                        imageData,
+                        canvasCoordinates,
+                        points,
+                        sliceIndex,
+                        targetId,
+                        cachedStats,
+                        modalityUnit,
+                        calibratedScale,
+                    });
+                }
+                else if (closed) {
                     this.updateClosedCachedStats({
                         targetId,
                         viewport,
@@ -359,6 +372,9 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
         const isDrawing = this.isDrawing;
         const isEditingOpen = this.isEditingOpen;
         const isEditingClosed = this.isEditingClosed;
+        if(annotation.metadata.toolName === 'PlanarFreehandROI3'){
+            this.configuration.allowOpenContours = false;
+        }
         if (!(isDrawing || isEditingOpen || isEditingClosed)) {
             if (this.configuration.displayOnePointAsCrosshairs &&
                 annotation.data.contour.polyline.length === 1) {
@@ -427,7 +443,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
             }
         }
     }
-    updateClosedCachedStats({ viewport, points, imageData, metadata, cachedStats, targetId, modalityUnit, canvasCoordinates, calibratedScale, }) {
+    updateClosedCachedStats({ viewport, points, imageData, metadata, cachedStats, targetId, modalityUnit, canvasCoordinates, calibratedScale,sliceIndex }) {
         const { scale, areaUnit, unit } = calibratedScale;
         let boundary = points.map(array => csUtils.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
         const { voxelManager } = viewport.getImageData();
