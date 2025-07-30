@@ -1134,8 +1134,7 @@ const commandsModule = ({
               },
             };
           });
-          if(segmentNumber === 1){
-            servicesManager.services.segmentationService.removeAllSegmentations();
+          if(segmentNumber === 1 && Object.keys(existingSegments).length === 0){
             csToolsSegmentation.addSegmentations([
               {
                   segmentationId,
