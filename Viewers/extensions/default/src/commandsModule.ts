@@ -992,6 +992,8 @@ const commandsModule = ({
             let existingColorLUT: number[][] = [];
             
             let segImageIds = [];
+
+            let existing = false;
             // Find existing segmentation with matching seriesInstanceUid
             for (let seg of segs) {
               if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
@@ -999,6 +1001,7 @@ const commandsModule = ({
                 existingColorLUT = seg.colorLUT || [];
                 segmentationId = seg.segmentationId;
                 segImageIds = seg.representationData.Labelmap.imageIds;
+                existing = true;
                 break;
               }
             }
@@ -1007,9 +1010,22 @@ const commandsModule = ({
             const colorLUT = [...existingColorLUT];
             let segmentNumber = 1;
             if (Object.keys(segments).length > 0) {
-              segmentNumber = Object.keys(segments).length + 1;
+              // Find the minimum available segment number
+              const existingSegmentNumbers = Object.keys(segments).map(Number).sort((a, b) => a - b);
+              let minAvailableNumber = 1;
+              
+              // Find the first gap in segment numbers, or use the next number after the highest
+              for (let i = 0; i < existingSegmentNumbers.length; i++) {
+                if (existingSegmentNumbers[i] !== minAvailableNumber) {
+                  break;
+                }
+                minAvailableNumber++;
+              }
+              
+              segmentNumber = minAvailableNumber;
               if (!toolboxState.getRefineNew()) {
-                segmentNumber -=1;
+                // For refinement mode, use the highest existing segment number
+                segmentNumber = Math.max(...existingSegmentNumbers);
               }
             }
 
@@ -1133,7 +1149,7 @@ const commandsModule = ({
               },
             };
           });
-          if(segmentNumber === 1 && Object.keys(existingSegments).length === 0){
+          if(segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing){
             csToolsSegmentation.addSegmentations([
               {
                   segmentationId,
