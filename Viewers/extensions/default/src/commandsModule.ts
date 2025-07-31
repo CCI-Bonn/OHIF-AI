@@ -1155,7 +1155,7 @@ const commandsModule = ({
           
         }else{
           // Remove the existing segmentation representation first
-          servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
+          //servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
           
           // Update the segmentation data
           csToolsSegmentation.updateSegmentations([
@@ -1177,6 +1177,14 @@ const commandsModule = ({
           servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
           await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
             segmentationId: segmentationId,
+          });
+          // Recover the visibility of the segments
+          servicesManager.services.segmentationService.getRepresentationsForSegmentation(segmentationId).then(representations => {
+            representations.forEach(representation => {
+              for (let segment of representation.segments){
+                servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, segment.segmentIndex, segment.visible);
+              }
+            });
           });
           //commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: segmentationId })
           //await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
