@@ -1207,6 +1207,9 @@ const commandsModule = ({
           await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
             segmentationId: segmentationId,
           });
+          if(toolboxState.getRefineNew()){
+            toolboxState.setRefineNew(false);
+          }
           // semi-hack: to render segmentation properly on the current image
           await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(0);
           await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);

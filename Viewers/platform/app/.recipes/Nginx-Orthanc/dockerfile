@@ -28,6 +28,8 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotat
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/renderMethods.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/drawLoop.js
 
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/cursors/elementCursor.js
+
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/helpers/clearSegmentValue.js
 RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
@@ -42,6 +44,7 @@ COPY ./backup/esm/PlanarFreehandROITool.js /usr/src/app/node_modules/@cornerston
 COPY ./backup/esm/renderMethods.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
 COPY ./backup/esm/drawLoop.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
 
+COPY ./backup/esm/elementCursor.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/cursors/elementCursor.js
 
 COPY ./backup/esm/SegmentationRenderingEngine.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/
 COPY ./backup/esm/clearSegmentValue.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/helpers/
