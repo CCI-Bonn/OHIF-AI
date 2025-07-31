@@ -1115,7 +1115,6 @@ const commandsModule = ({
               segmentIndex,
               label: SegmentLabel || `Segment ${SegmentNumber}`,
               locked: false,
-              active: false,
               cachedStats: {
                 center: {
                   image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
@@ -1175,14 +1174,14 @@ const commandsModule = ({
             },
           ]);
           }
-          
+          servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
           await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
             segmentationId: segmentationId,
           });
-          commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: segmentationId })
-          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-            segmentationId: segmentationId,
-          });
+          //commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: segmentationId })
+          //await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
+          //  segmentationId: segmentationId,
+          //});
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
           return response;
