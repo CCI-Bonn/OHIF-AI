@@ -848,7 +848,8 @@ const commandsModule = ({
       const activeViewportSpecificData = viewports.get(activeViewportId);
 
       const { setViewportGridState } = useViewportGridStore.getState();
-      setViewportGridState('currentImageIdIndex', servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex);
+      const currentImageIdIndex = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex;
+      setViewportGridState('currentImageIdIndex', currentImageIdIndex);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
 
       const displaySets = displaySetService.activeDisplaySets;
@@ -932,6 +933,16 @@ const commandsModule = ({
       const text_prompts = currentMeasurements
       .filter(e => { return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID})
       .map(e => { return e.label })
+
+      // Hide the measurements after inference
+      currentMeasurements
+        .filter(e => {
+          return e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID;
+        })
+        .map(e => { return e.uid })
+        .forEach(e => {
+          measurementService.toggleVisibilityMeasurement(e, false);
+        });
 
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
@@ -1149,6 +1160,8 @@ const commandsModule = ({
               },
             };
           });
+          // Get the representations for the segmentation to recover the visibility of the segments
+          const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId })
           if(segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing){
             csToolsSegmentation.addSegmentations([
               {
@@ -1170,8 +1183,8 @@ const commandsModule = ({
           ]);
           
         }else{
-          // Remove the existing segmentation representation first
-          //servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
+          // Comment out at the moment (necessary for hiding previous segments), may need to uncomment some weird bugs.
+          // servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
           
           // Update the segmentation data
           csToolsSegmentation.updateSegmentations([
@@ -1194,13 +1207,16 @@ const commandsModule = ({
           await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
             segmentationId: segmentationId,
           });
+          // semi-hack: to render segmentation properly on the current image
+          await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(0);
+          await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
           // Recover the visibility of the segments
-          servicesManager.services.segmentationService.getRepresentationsForSegmentation(segmentationId).then(representations => {
-            representations.forEach(representation => {
-              for (let segment of representation.segments){
+          representations.forEach(representation => {
+            if(Object.keys(representation.segments).length > 0){
+              representation.segments.forEach(segment => {
                 servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, segment.segmentIndex, segment.visible);
-              }
-            });
+              });
+            }
           });
           //commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: segmentationId })
           //await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
