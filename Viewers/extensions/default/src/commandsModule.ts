@@ -786,6 +786,52 @@ const commandsModule = ({
         })
         .finally(function () { });
     },
+    async initNninter(){
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+      const displaySets = displaySetService.activeDisplaySets;
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(e => {
+        return e.displaySetInstanceUID == displaySetInstanceUID;
+      })[0];
+      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      let params = {
+        largest_cc: false,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        nninter: "init",
+      };
+
+      let data = MonaiLabelClient.constructFormData(params, null);
+
+      axios
+        .post(url, data, {
+          responseType: 'arraybuffer',
+          headers: {
+            accept: 'application/json, multipart/form-data',
+          },
+        })
+        .then(async function (response) {
+          if (response.status === 200) {
+            uiNotificationService.show({
+              title: 'NNInit',
+              message: 'Init nninter - Successful',
+              type: 'success',
+              duration: 2000,
+            });
+          }
+          return response;
+        })
+        .catch(function (error) {
+          return error;
+        })
+        .finally(function () { });
+
+    },
     async resetNninter(options: {clearMeasurements: boolean} = {clearMeasurements: true}){
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
@@ -1211,7 +1257,11 @@ const commandsModule = ({
             toolboxState.setRefineNew(false);
           }
           // semi-hack: to render segmentation properly on the current image
-          await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(0);
+          let somewhereIndex = 0;
+          if(currentImageIdIndex === 0){
+            somewhereIndex = 1;
+          }
+          await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
           await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
           // Recover the visibility of the segments
           representations.forEach(representation => {
@@ -1395,6 +1445,7 @@ const commandsModule = ({
     toggleOneUp: actions.toggleOneUp,
     openDICOMTagViewer: actions.openDICOMTagViewer,
     sam2: actions.sam2,
+    initNninter: actions.initNninter,
     resetNninter: actions.resetNninter,
     nninter: actions.nninter,
     saveAndNextObj: actions.saveAndNextObj,

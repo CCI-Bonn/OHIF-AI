@@ -445,9 +445,6 @@ class BasicInferTask(InferTask):
         logger.info(f"rescale_slope: {rescale_slope}")
         logger.info(f"rescale_intercept: {rescale_intercept}")
 
-        result_json["pos_points"]=copy.deepcopy(data["pos_points"])
-        result_json["neg_points"]=copy.deepcopy(data["neg_points"])
-
         if nnInter:
             start = time.time()
             img_np = sitk.GetArrayFromImage(img)[None]  # Ensure shape (1, x, y, z)
@@ -459,7 +456,7 @@ class BasicInferTask(InferTask):
             if img_np.ndim != 4:
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
             
-            if session.original_image_shape == None or not np.array_equal(img_np.shape,session.original_image_shape):
+            if nnInter == "init":
                 if contrast_window != None and contrast_center !=None:
                     img_np = img_np.astype(float)
                     np.clip(img_np, contrast_center-contrast_window/2, contrast_center+contrast_window/2, out=img_np)   
@@ -467,6 +464,7 @@ class BasicInferTask(InferTask):
                     img_np = img_np.astype(np.uint8)
                 session.set_image(img_np)
                 session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+                return f'/code/predictions/init.nii.gz', final_result_json
                 logger.info("Only first time, no image at nnInter or iamge changed")
                 for key, lst in self._session_used_interactions.items():
                     lst.clear()
@@ -500,6 +498,9 @@ class BasicInferTask(InferTask):
             # POINT_COORDINATES should be a tuple (x, y, z) specifying the point location.
             logger.info(f"neg_points: {data['neg_points']}")
             logger.info(f"neg_point type: {type(data['neg_points'])}")
+
+            result_json["pos_points"]=copy.deepcopy(data["pos_points"])
+            result_json["neg_points"]=copy.deepcopy(data["neg_points"])
             
             for point in data['pos_points']:
                 if instanceNumber > instanceNumber2:
@@ -706,6 +707,8 @@ class BasicInferTask(InferTask):
         if "pos_points" in data:
             start = time.time()
             #result_json["pos_points"]=data["pos_points"]
+            result_json["pos_points"]=copy.deepcopy(data["pos_points"])
+            result_json["neg_points"]=copy.deepcopy(data["neg_points"])
             #SAM2
             #img = sitk.ReadImage(data['image'])
             len_z = img.GetSize()[2]
