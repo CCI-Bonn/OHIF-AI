@@ -786,15 +786,25 @@ const commandsModule = ({
         })
         .finally(function () { });
     },
-    async initNninter(){
-      const { activeViewportId, viewports } = viewportGridService.getState();
+    async initNninter( options: {viewportId: string} = {viewportId: undefined} ){
+
+      let { activeViewportId, viewports } = viewportGridService.getState();
+      if(options.viewportId !== undefined){
+        activeViewportId = options.viewportId;
+      }
       const activeViewportSpecificData = viewports.get(activeViewportId);
+      if(activeViewportSpecificData === undefined){
+        return;
+      }
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
       const displaySets = displaySetService.activeDisplaySets;
       const displaySetInstanceUID = displaySetInstanceUIDs[0];
       const currentDisplaySets = displaySets.filter(e => {
         return e.displaySetInstanceUID == displaySetInstanceUID;
       })[0];
+      if(currentDisplaySets === undefined){
+        return;
+      }
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,

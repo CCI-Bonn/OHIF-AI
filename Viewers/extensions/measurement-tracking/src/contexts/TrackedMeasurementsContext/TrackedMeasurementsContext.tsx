@@ -277,6 +277,9 @@ function TrackedMeasurementsContextProvider(
     sendTrackedMeasurementsEvent('UPDATE_ACTIVE_VIEWPORT_ID', {
       activeViewportId,
     });
+    commandsManager.run('initNninter', {
+      viewportId: activeViewportId,
+    });
   }, [activeViewportId, sendTrackedMeasurementsEvent]);
 
   // ~~ Listen for changes to ViewportGrid for potential SRs hung in panes when idle
