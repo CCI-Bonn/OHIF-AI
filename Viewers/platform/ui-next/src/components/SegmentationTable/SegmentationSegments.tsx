@@ -11,6 +11,7 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
     disableEditing,
     onSegmentColorClick,
     onToggleSegmentVisibility,
+    onToggleSegmentMeasurement,
     onToggleSegmentLock,
     onSegmentClick,
     onSegmentEdit,
@@ -94,6 +95,7 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
                   representation.type
                 )
               }
+              onToggleMeasurement={() => onToggleSegmentMeasurement(segmentation.segmentationId, segmentIndex)}
               onToggleLocked={() => onToggleSegmentLock(segmentation.segmentationId, segmentIndex)}
               onSelect={() => onSegmentClick(segmentation.segmentationId, segmentIndex)}
               onRename={() => onSegmentEdit(segmentation.segmentationId, segmentIndex)}

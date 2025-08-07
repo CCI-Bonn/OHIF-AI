@@ -8741,7 +8741,7 @@ var CodeString = /*#__PURE__*/function (_AsciiStringRepresent2) {
     var _this2;
     _classCallCheck(this, CodeString);
     _this2 = _super5.call(this, "CS");
-    _this2.maxLength = 16;
+    _this2.maxLength = 64;
     _this2.padByte = PADDING_SPACE;
     return _this2;
   }
@@ -11594,7 +11594,7 @@ var Segmentation$4 = /*#__PURE__*/function (_DerivedPixels) {
 
       // Capitalise the SegmentAlgorithmType if it happens to be given in
       // Lower/mixed case.
-      Segment.SegmentAlgorithmType = Segment.SegmentAlgorithmType.toUpperCase();
+      //Segment.SegmentAlgorithmType = Segment.SegmentAlgorithmType.toUpperCase();
 
       // Check SegmentAlgorithmType and SegmentAlgorithmName if necessary.
       //switch (Segment.SegmentAlgorithmType) {
@@ -11622,8 +11622,11 @@ var Segmentation$4 = /*#__PURE__*/function (_DerivedPixels) {
         RecommendedDisplayCIELabValue: Segment.RecommendedDisplayCIELabValue,
         SegmentedPropertyTypeCodeSequence: Segment.SegmentedPropertyTypeCodeSequence
       };
-      if (SegmentAlgorithmType === "AUTOMATIC" || SegmentAlgorithmType === "SEMIAUTOMATIC") {
+      if (Segment.SegmentAlgorithmName) {
         reNumberedSegmentCopy.SegmentAlgorithmName = Segment.SegmentAlgorithmName;
+      }
+      if (Segment.SegmentDescription) {
+        reNumberedSegmentCopy.SegmentDescription = Segment.SegmentDescription;
       }
       SegmentSequence.push(reNumberedSegmentCopy);
       return reNumberedSegmentCopy.SegmentNumber;

@@ -954,6 +954,15 @@ class SegmentationService extends PubSubService {
     this._setSegmentVisibility(viewportId, segmentationId, segmentIndex, !isVisible, type);
   }
 
+  public toggleSegmentMeasurement(segmentationId: string, segmentIndex: number): void {
+   const measurements = this.servicesManager.services.measurementService.getMeasurements()
+   const selectedMeasurements = measurements.filter(e => e.metadata.segmentationId === segmentationId && e.metadata.SegmentNumber === segmentIndex)
+   selectedMeasurements.forEach(e => {
+    this.servicesManager.services.measurementService.toggleVisibilityMeasurement(e.uid, !e.isVisible)
+    e.metadata.isDisabled = !e.isVisible
+   })
+  }
+
   /**
    * Sets the color of a specific segment in a segmentation.
    *

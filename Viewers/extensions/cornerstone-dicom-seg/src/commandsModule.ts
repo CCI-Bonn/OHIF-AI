@@ -153,23 +153,47 @@ const commandsModule = ({
           color.slice(0, 3).map(value => value / 255)
         ).map(value => Math.round(value));
 
-        const segmentMetadata = {
-          SegmentNumber: segmentIndex.toString(),
-          SegmentLabel: label,
-          SegmentAlgorithmType: segment?.algorithmType || 'MANUAL',
-          SegmentAlgorithmName: segment?.algorithmName || 'OHIF Brush',
-          RecommendedDisplayCIELabValue,
-          SegmentedPropertyCategoryCodeSequence: {
-            CodeValue: 'T-D0050',
-            CodingSchemeDesignator: 'SRT',
-            CodeMeaning: 'Tissue',
-          },
-          SegmentedPropertyTypeCodeSequence: {
-            CodeValue: 'T-D0050',
-            CodingSchemeDesignator: 'SRT',
-            CodeMeaning: 'Tissue',
-          },
-        };
+        let segmentMetadata = {};
+        if (segmentation.cachedStats.data !== undefined && segmentation.cachedStats.data.length > 1) {
+          segmentMetadata = segmentation.cachedStats.data
+          .filter(e => e !== undefined && e !== null)
+          .find(e => e.SegmentNumber == segmentIndex);
+          if (segmentMetadata !== undefined && Object.keys(segmentMetadata).length !== 0){ 
+            segmentMetadata.SegmentNumber = segmentIndex.toString();
+            segmentMetadata.SegmentLabel = label;
+            segmentMetadata.RecommendedDisplayCIELabValue = RecommendedDisplayCIELabValue;
+            segmentMetadata.SegmentAlgorithmType = segmentation.cachedStats.seriesInstanceUid;
+          }
+        }
+
+        if (segmentMetadata === undefined || Object.keys(segmentMetadata).length === 0) {
+          segmentMetadata = {
+            SegmentNumber: segmentIndex.toString(),
+            SegmentLabel: label,
+            SegmentAlgorithmType: segment?.algorithmType || 'MANUAL',
+            SegmentAlgorithmName: segment?.algorithmName || 'OHIF Brush',
+            RecommendedDisplayCIELabValue,
+            SegmentedPropertyCategoryCodeSequence: {
+              CodeValue: 'T-D0050',
+              CodingSchemeDesignator: 'SRT',
+              CodeMeaning: 'Tissue',
+            },
+            SegmentedPropertyTypeCodeSequence: {
+              CodeValue: 'T-D0050',
+              CodingSchemeDesignator: 'SRT',
+              CodeMeaning: 'Tissue',
+            },
+          };
+        }
+        if (segment.cachedStats.description !== undefined){
+          segmentMetadata.SegmentDescription = segment.cachedStats.description;
+        }
+        if (segment.cachedStats.algorithmName !== undefined){
+          segmentMetadata.SegmentAlgorithmName = segment.cachedStats.algorithmName;
+        }
+
+        segmentMetadata.SegmentAlgorithmType = segmentation.cachedStats.seriesInstanceUid;
+        
         labelmap3D.metadata[segmentIndex] = segmentMetadata;
       });
 

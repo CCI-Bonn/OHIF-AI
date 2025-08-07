@@ -86,6 +86,7 @@ export interface SegmentationTableContextType {
     segmentIndex: number,
     representationType?: string
   ) => void;
+  onToggleSegmentMeasurement?: (segmentationId: string, segmentIndex: number) => void;
   onToggleSegmentLock?: (segmentationId: string, segmentIndex: number) => void;
   onToggleSegmentationRepresentationVisibility?: (segmentationId: string, type: string) => void;
   onSegmentationDownload?: (segmentationId: string) => void;

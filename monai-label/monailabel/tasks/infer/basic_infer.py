@@ -464,12 +464,12 @@ class BasicInferTask(InferTask):
                     img_np = img_np.astype(np.uint8)
                 session.set_image(img_np)
                 session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
-                return f'/code/predictions/init.nii.gz', final_result_json
                 logger.info("Only first time, no image at nnInter or iamge changed")
                 for key, lst in self._session_used_interactions.items():
                     lst.clear()
                 session.reset_interactions()
                 logger.info("Only for first object")
+                return f'/code/predictions/init.nii.gz', final_result_json
                 self._session_used_interactions["objects"].append(1)
             elif 'nextObj' not in data:
                 if 1 not in self._session_used_interactions["objects"]:

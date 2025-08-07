@@ -143,6 +143,8 @@ class SegmentationRenderingEngine {
                         continue;
                     }
                     let prompts = JSON.parse(data.SegmentDescription)
+                    let SegmentNumber = data.SegmentNumber
+                    let segmentationId = segmentationDetails[0].segmentationId
                     
                     let posPoints = prompts.pos_points
                     let negPoints = prompts.neg_points
@@ -161,7 +163,7 @@ class SegmentationRenderingEngine {
                         const posPointTool = toolGroup.getToolInstance('Probe2')
                         if (posPointTool!==undefined){
                             for (const posPos of posPoints){
-                                let annotation = posPointTool._addNewAnnotationFromIndex(element, posPos, false)
+                                let annotation = posPointTool._addNewAnnotationFromIndex(element, posPos, false, SegmentNumber, segmentationId)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }
@@ -172,7 +174,7 @@ class SegmentationRenderingEngine {
                         const negPointTool = toolGroup.getToolInstance('Probe2')
                         if (negPointTool!==undefined){
                             for (const negPos of negPoints){
-                                let annotation = negPointTool._addNewAnnotationFromIndex(element, negPos, true)
+                                let annotation = negPointTool._addNewAnnotationFromIndex(element, negPos, true, SegmentNumber, segmentationId)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }
@@ -183,7 +185,7 @@ class SegmentationRenderingEngine {
                         const bboxTool = toolGroup.getToolInstance('RectangleROI2')
                         if (bboxTool!==undefined){
                             for (const box of pos_boxes){
-                                let annotation = bboxTool._addNewAnnotationFromIndex(element, box, false)
+                                let annotation = bboxTool._addNewAnnotationFromIndex(element, box, false, SegmentNumber, segmentationId)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }
@@ -194,7 +196,7 @@ class SegmentationRenderingEngine {
                         const bboxTool = toolGroup.getToolInstance('RectangleROI2')
                         if (bboxTool!==undefined){
                             for (const box of neg_boxes){
-                                let annotation = bboxTool._addNewAnnotationFromIndex(element, box, true)
+                                let annotation = bboxTool._addNewAnnotationFromIndex(element, box, true, SegmentNumber, segmentationId)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }
@@ -205,7 +207,7 @@ class SegmentationRenderingEngine {
                         const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI3')
                         if (freehandTool!==undefined){
                             for (const spline of pos_lassos){
-                                let annotation = freehandTool._addNewAnnotationFromIndex(element, spline, true, false)
+                                let annotation = freehandTool._addNewAnnotationFromIndex(element, spline, true, false, SegmentNumber, segmentationId)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }
@@ -216,7 +218,7 @@ class SegmentationRenderingEngine {
                         const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI3')
                         if (freehandTool!==undefined){
                             for (const spline of neg_lassos){
-                                let annotation = freehandTool._addNewAnnotationFromIndex(element, spline, true, true)
+                                let annotation = freehandTool._addNewAnnotationFromIndex(element, spline, true, true, SegmentNumber, segmentationId)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }
@@ -227,7 +229,7 @@ class SegmentationRenderingEngine {
                         const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI2')
                         if (freehandTool!==undefined){
                             for (const polyline of pos_scribbles){
-                                let annotation = freehandTool._addNewAnnotationFromIndex(element, polyline, false, false)
+                                let annotation = freehandTool._addNewAnnotationFromIndex(element, polyline, false, false, SegmentNumber, segmentationId)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }
@@ -238,7 +240,7 @@ class SegmentationRenderingEngine {
                         const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI2')
                         if (freehandTool!==undefined){
                             for (const polyline of neg_scribbles){
-                                let annotation = freehandTool._addNewAnnotationFromIndex(element, polyline, false, true)
+                                let annotation = freehandTool._addNewAnnotationFromIndex(element, polyline, false, true, SegmentNumber, segmentationId)
                                 setAnnotationSelected(annotation.annotationUID);
                             }
                         }

@@ -1287,6 +1287,20 @@ function commandsModule({
     },
 
     /**
+     * Toggles the visibility of a segment measurement
+     * @param props.segmentationId - The ID of the segmentation
+     * @param props.segmentIndex - The index of the segment
+     */
+
+    toggleSegmentMeasurementCommand: ({ segmentationId, segmentIndex }) => {
+      const { segmentationService } = servicesManager.services;
+      segmentationService.toggleSegmentMeasurement(
+        segmentationId,
+        segmentIndex
+      );
+    },
+
+    /**
      * Toggles the lock state of a segment
      * @param props.segmentationId - The ID of the segmentation
      * @param props.segmentIndex - The index of the segment
@@ -1940,6 +1954,9 @@ function commandsModule({
     },
     toggleSegmentVisibility: {
       commandFn: actions.toggleSegmentVisibilityCommand,
+    },
+    toggleSegmentMeasurement: {
+      commandFn: actions.toggleSegmentMeasurementCommand,
     },
     toggleSegmentLock: {
       commandFn: actions.toggleSegmentLockCommand,

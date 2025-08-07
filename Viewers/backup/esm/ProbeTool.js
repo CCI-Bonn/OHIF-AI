@@ -56,7 +56,7 @@ class ProbeTool extends AnnotationTool {
             triggerAnnotationRenderForViewportIds(viewportIdsToRender);
             return annotation;
         };
-        this._addNewAnnotationFromIndex = (element, idxPos, neg = false) => {
+        this._addNewAnnotationFromIndex = (element, idxPos, neg = false, SegmentNumber, segmentationId) => {
             const enabledElement = getEnabledElement(element);
             const { viewport } = enabledElement;
             const worldPos = viewport.getImageData().imageData.indexToWorld(idxPos)
@@ -67,6 +67,9 @@ class ProbeTool extends AnnotationTool {
                 },
             });
             annotation.metadata.neg = neg;
+            annotation.metadata.SegmentNumber = SegmentNumber;
+            annotation.metadata.segmentationId = segmentationId;
+            annotation.metadata.toolLoad = true;
             addAnnotation(annotation, element);
             const viewportIdsToRender = getViewportIdsWithToolToRender(element, this.getToolName());
             this.editData = {

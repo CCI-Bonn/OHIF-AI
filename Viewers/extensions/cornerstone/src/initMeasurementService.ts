@@ -250,10 +250,12 @@ const connectToolsToMeasurementService = (servicesManager: AppTypes.ServicesMana
   function addMeasurement(csToolsEvent) {
     try {
       const annotationAddedEventDetail = csToolsEvent.detail;
-      if (toolboxState.getPosNeg()) {
-        annotationAddedEventDetail.annotation.metadata.neg = true;
-      }else{
-        annotationAddedEventDetail.annotation.metadata.neg = false;
+      if (annotationAddedEventDetail.annotation.metadata.toolLoad !== true) {
+        if (toolboxState.getPosNeg()) {
+          annotationAddedEventDetail.annotation.metadata.neg = true;
+        }else{
+          annotationAddedEventDetail.annotation.metadata.neg = false;
+        }
       }
       const {
         annotation: { metadata, annotationUID },

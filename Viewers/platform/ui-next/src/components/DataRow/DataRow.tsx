@@ -7,6 +7,7 @@ import {
   DropdownMenuItem,
 } from '../../components/DropdownMenu';
 import { Icons } from '../../components/Icons/Icons';
+import { Pen, PenOff } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/Tooltip/Tooltip';
 import { cn } from '../../lib/utils';
 
@@ -50,6 +51,7 @@ import { cn } from '../../lib/utils';
  * @property {() => void} [onSelect] - Callback when the row is clicked/selected
  * @property {boolean} isVisible - Controls the row's visibility state
  * @property {() => void} onToggleVisibility - Callback to toggle visibility
+ * @property {() => void} onToggleMeasurement - Callback to toggle measurement visibility
  * @property {boolean} isLocked - Controls the row's locked state
  * @property {() => void} onToggleLocked - Callback to toggle locked state
  * @property {() => void} onRename - Callback when rename is requested
@@ -67,6 +69,7 @@ interface DataRowProps {
   //
   isVisible: boolean;
   onToggleVisibility: (e) => void;
+  onToggleMeasurement: (e) => void;
   //
   isLocked: boolean;
   onToggleLocked: (e) => void;
@@ -89,6 +92,7 @@ export const DataRow: React.FC<DataRowProps> = ({
   onSelect,
   isLocked,
   onToggleVisibility,
+  onToggleMeasurement = () => {},
   onToggleLocked,
   onRename,
   onDelete,
@@ -99,6 +103,7 @@ export const DataRow: React.FC<DataRowProps> = ({
   className,
 }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isMeasurementVisible, setIsMeasurementVisible] = useState(true);
   const isTitleLong = title?.length > 25;
   const rowRef = useRef<HTMLDivElement>(null);
 
@@ -273,6 +278,23 @@ export const DataRow: React.FC<DataRowProps> = ({
             }}
           >
             {isVisible ? <Icons.Hide className="h-6 w-6" /> : <Icons.Show className="h-6 w-6" />}
+          </Button>
+
+          {/* Measurement Visibility Toggle Icon */}
+          <Button
+            size="icon"
+            variant="ghost"
+            className={`h-6 w-6 transition-opacity ${
+              isSelected || !isMeasurementVisible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+            }`}
+            aria-label={isMeasurementVisible ? 'Hide' : 'Show'}
+            onClick={e => {
+              e.stopPropagation();
+              setIsMeasurementVisible(!isMeasurementVisible);
+              onToggleMeasurement(e);
+            }}
+          >
+            {isMeasurementVisible ? <Pen className="h-4 w-4" /> : <PenOff className="h-4 w-4" />}
           </Button>
 
           {/* Lock Icon (if needed) */}

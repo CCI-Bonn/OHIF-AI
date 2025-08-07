@@ -56,6 +56,9 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     onToggleSegmentVisibility: (segmentationId, segmentIndex, type) => {
       commandsManager.run('toggleSegmentVisibility', { segmentationId, segmentIndex, type });
     },
+    onToggleSegmentMeasurement: (segmentationId, segmentIndex) => {
+      commandsManager.run('toggleSegmentMeasurement', { segmentationId, segmentIndex });
+    },
     onToggleSegmentLock: (segmentationId, segmentIndex) => {
       commandsManager.run('toggleSegmentLock', { segmentationId, segmentIndex });
     },

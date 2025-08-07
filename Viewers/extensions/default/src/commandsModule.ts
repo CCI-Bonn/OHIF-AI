@@ -842,7 +842,7 @@ const commandsModule = ({
         .finally(function () { });
 
     },
-    async resetNninter(options: {clearMeasurements: boolean} = {clearMeasurements: true}){
+    async resetNninter(options: {clearMeasurements: boolean} = {clearMeasurements: false}){
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
@@ -919,14 +919,14 @@ const commandsModule = ({
 
       const pos_points = currentMeasurements
         .filter(e => {
-          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true;
         })
         .map(e => {
           return Object.values(e.data)[0].index;
         });
       const neg_points = currentMeasurements
         .filter(e => {
-          return e.toolName === 'Probe2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+          return e.toolName === 'Probe2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true;
         })
         .map(e => {
           return Object.values(e.data)[0].index;
@@ -934,7 +934,7 @@ const commandsModule = ({
 
       const pos_boxes = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+          return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true;
         })
         .map(e => { 
           return Object.values(e.data)[0].pointsInShape 
@@ -943,7 +943,7 @@ const commandsModule = ({
 
       const neg_boxes = currentMeasurements
       .filter(e => { 
-        return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+        return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true;
       })
       .map(e => { 
         return Object.values(e.data)[0].pointsInShape 
@@ -952,7 +952,7 @@ const commandsModule = ({
 
       const pos_lassos = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+          return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.boundary 
@@ -961,7 +961,7 @@ const commandsModule = ({
 
       const neg_lassos = currentMeasurements
       .filter(e => { 
-        return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+        return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true;
       })
       .map(e => { 
         return Object.values(e.data)[0]?.boundary 
@@ -970,7 +970,7 @@ const commandsModule = ({
 
       const pos_scribbles = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false;
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.scribble 
@@ -979,7 +979,7 @@ const commandsModule = ({
 
       const neg_scribbles = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true;
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.scribble 
@@ -993,7 +993,7 @@ const commandsModule = ({
       // Hide the measurements after inference
       currentMeasurements
         .filter(e => {
-          return e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID;
+          return e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true;
         })
         .map(e => { return e.uid })
         .forEach(e => {
@@ -1063,7 +1063,17 @@ const commandsModule = ({
             let existing = false;
             // Find existing segmentation with matching seriesInstanceUid
             for (let seg of segs) {
-              if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
+              let existingseriesInstanceUid = undefined;
+              if(seg.cachedStats?.seriesInstanceUid === undefined){
+                Object.values(seg.segments).forEach(segment => {
+                  if(segment.cachedStats?.algorithmType !== undefined){
+                    existingseriesInstanceUid = segment.cachedStats.algorithmType;
+                  }
+                });
+              } else {
+                existingseriesInstanceUid = seg.cachedStats.seriesInstanceUid;
+              }
+              if (existingseriesInstanceUid === results.segMetadata.seriesInstanceUid) {
                 existingSegments = seg.segments || {};
                 existingColorLUT = seg.colorLUT || [];
                 segmentationId = seg.segmentationId;
@@ -1093,7 +1103,28 @@ const commandsModule = ({
               if (!toolboxState.getRefineNew()) {
                 // For refinement mode, use the highest existing segment number
                 segmentNumber = Math.max(...existingSegmentNumbers);
+
+                let representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId })
+                let visibleSegments = []
+                representations.forEach(representation => {
+                  visibleSegments.push(
+                    ...Object.values(representation.segments).filter(
+                      segment => segment.visible === true
+                    )
+                  );
+                });
+                if (visibleSegments.length == 1){
+                  segmentNumber = visibleSegments[0].segmentIndex;
+                }
               }
+              currentMeasurements
+              .filter(e => {
+                return e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true;
+              })
+              .forEach(e => {
+                e.metadata.SegmentNumber = segmentNumber;
+                e.metadata.segmentationId = segmentationId;
+              });
             }
 
 
@@ -1210,7 +1241,7 @@ const commandsModule = ({
                 type: SegmentedPropertyTypeCodeSequence
                   ? SegmentedPropertyTypeCodeSequence.CodeMeaning
                   : '',
-                algorithmType: SegmentAlgorithmType,
+                algorithmType: results.segMetadata.seriesInstanceUid,
                 algorithmName: SegmentAlgorithmName,
                 description: SegmentDescription,
               },
@@ -1276,7 +1307,7 @@ const commandsModule = ({
           // Recover the visibility of the segments
           representations.forEach(representation => {
             if(Object.keys(representation.segments).length > 0){
-              representation.segments.forEach(segment => {
+              Object.values(representation.segments).forEach(segment => {
                 servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, segment.segmentIndex, segment.visible);
               });
             }
