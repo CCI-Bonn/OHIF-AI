@@ -49,6 +49,66 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
     return () => clearInterval(interval);
   }, []);
 
+  // Keyboard hotkey handler for Live Mode toggle
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Check if the pressed key is 'L' or 'l' with Ctrl modifier
+      if ((event.key === 'L' || event.key === 'l') && event.ctrlKey && !event.altKey && !event.metaKey) {
+        // Only trigger if we're not typing in an input field
+        const activeElement = document.activeElement;
+        const isInputField = activeElement?.tagName === 'INPUT' || 
+                           activeElement?.tagName === 'TEXTAREA' || 
+                           (activeElement as HTMLElement)?.contentEditable === 'true';
+        
+        if (!isInputField) {
+          event.preventDefault();
+          const newLiveMode = !liveMode;
+          setLiveMode(newLiveMode);
+          toolboxState.setLiveMode(newLiveMode);
+          console.log('Live mode toggled via hotkey (Ctrl+L):', newLiveMode);
+        }
+      }
+    };
+
+    // Add event listener
+    document.addEventListener('keydown', handleKeyDown);
+
+    // Cleanup
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [liveMode]);
+
+  // Keyboard hotkey handler for Pos/Neg toggle
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Check if the pressed key is 'P' or 'p' with Ctrl modifier
+      if ((event.key === 'P' || event.key === 'p') && event.ctrlKey && !event.altKey && !event.metaKey) {
+        // Only trigger if we're not typing in an input field
+        const activeElement = document.activeElement;
+        const isInputField = activeElement?.tagName === 'INPUT' || 
+                           activeElement?.tagName === 'TEXTAREA' || 
+                           (activeElement as HTMLElement)?.contentEditable === 'true';
+        
+        if (!isInputField) {
+          event.preventDefault();
+          const newPosNeg = !posNeg;
+          setPosNeg(newPosNeg);
+          toolboxState.setPosNeg(newPosNeg);
+          console.log('Pos/Neg toggled via hotkey (Ctrl+P):', newPosNeg);
+        }
+      }
+    };
+
+    // Add event listener
+    document.addEventListener('keydown', handleKeyDown);
+
+    // Cleanup
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [posNeg]);
+
   const { toolbarButtons: toolboxSections, onInteraction } = useToolbar({
     servicesManager,
     buttonSection: buttonSectionId,

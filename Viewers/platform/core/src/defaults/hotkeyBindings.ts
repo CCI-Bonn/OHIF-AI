@@ -190,6 +190,18 @@ const bindings = [
     isEditable: true,
   },
   {
+    commandName: 'nninter',
+    label: 'NNInteractive',
+    keys: ['ctrl+n'],
+    isEditable: true,
+  },
+  {
+    commandName: 'resetNninter',
+    label: 'Reset NNInteractive',
+    keys: ['ctrl+r'],
+    isEditable: true,
+  },
+  {
     commandName: 'interpolateScrollForMarkerLabelmap',
     label: 'Interpolate Scroll',
     keys: ['n'],
