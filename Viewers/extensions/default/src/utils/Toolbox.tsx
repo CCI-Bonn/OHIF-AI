@@ -109,6 +109,36 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
     };
   }, [posNeg]);
 
+  // Keyboard hotkey handler for Refine/New toggle
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Check if the pressed key is 'T' or 't' with Ctrl modifier
+      if ((event.key === 'T' || event.key === 't') && event.ctrlKey && !event.altKey && !event.metaKey) {
+        // Only trigger if we're not typing in an input field
+        const activeElement = document.activeElement;
+        const isInputField = activeElement?.tagName === 'INPUT' || 
+                           activeElement?.tagName === 'TEXTAREA' || 
+                           (activeElement as HTMLElement)?.contentEditable === 'true';
+        
+        if (!isInputField) {
+          event.preventDefault();
+          const newRefineNew = !refineNew;
+          setRefineNew(newRefineNew);
+          toolboxState.setRefineNew(newRefineNew);
+          console.log('Refine/New toggled via hotkey (Ctrl+T):', newRefineNew);
+        }
+      }
+    };
+
+    // Add event listener
+    document.addEventListener('keydown', handleKeyDown);
+
+    // Cleanup
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [refineNew]);
+
   const { toolbarButtons: toolboxSections, onInteraction } = useToolbar({
     servicesManager,
     buttonSection: buttonSectionId,
