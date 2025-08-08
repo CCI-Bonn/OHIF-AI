@@ -4,6 +4,14 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from '../../components/
 import { useSystem } from '@ohif/core';
 import { useSegmentationTableContext, useSegmentationExpanded } from './contexts';
 import { SegmentStatistics } from './SegmentStatistics';
+
+// Helper function to get measurement visibility
+const getMeasurementVisibility = (servicesManager: any, segmentationId: string, segmentIndex: number) => {
+  return (servicesManager.services as any).segmentationService.getSegmentMeasurementVisibility(
+    segmentationId,
+    segmentIndex
+  );
+};
 import { useDynamicMaxHeight } from '../../hooks/useDynamicMaxHeight';
 
 export const SegmentationSegments = ({ children = null }: { children?: React.ReactNode }) => {
@@ -34,31 +42,6 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
       document.removeEventListener('measurement-state-changed', handleMeasurementVisibilityChange);
     };
   }, []);
-
-  // Custom hook to get measurement visibility with proper reactivity
-  const useMeasurementVisibility = (segmentationId: string, segmentIndex: number) => {
-    const [isVisible, setIsVisible] = useState(true);
-    
-    useEffect(() => {
-      const updateVisibility = () => {
-        const visibility = (servicesManager.services as any).segmentationService.getSegmentMeasurementVisibility(
-          segmentationId,
-          segmentIndex
-        );
-        setIsVisible(visibility);
-      };
-      
-      // Update immediately
-      updateVisibility();
-      
-      // Set up interval to check for changes
-      const interval = setInterval(updateVisibility, 100);
-      
-      return () => clearInterval(interval);
-    }, [segmentationId, segmentIndex, forceUpdate]);
-    
-    return isVisible;
-  };
 
   // Try to get segmentation data from expanded context first, then fall back to table context
   let segmentation;
@@ -116,8 +99,8 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
 
           const hasStats = segmentFromSegmentation.cachedStats?.namedStats;
           
-          // Use custom hook to get measurement visibility with proper reactivity
-          const isMeasurementVisible = useMeasurementVisibility(segmentation.segmentationId, segmentIndex);
+          // Get measurement visibility state for this segment
+          const isMeasurementVisible = getMeasurementVisibility(servicesManager, segmentation.segmentationId, segmentIndex);
           
           const DataRowComponent = (
             <DataRow
