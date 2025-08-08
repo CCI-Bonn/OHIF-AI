@@ -30,6 +30,15 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
     data,
   } = useSegmentationTableContext('SegmentationSegments');
 
+  // Continuous polling to check for measurement visibility changes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setForceUpdate(prev => prev + 1);
+    }, 500); // Check every 500ms
+
+    return () => clearInterval(interval);
+  }, []);
+
   // Listen for measurement visibility changes to force re-render
   useEffect(() => {
     const handleMeasurementVisibilityChange = () => {
