@@ -1000,6 +1000,13 @@ const commandsModule = ({
           measurementService.toggleVisibilityMeasurement(e, false);
         });
 
+      // Force a re-render of the segmentation table after a short delay
+      setTimeout(() => {
+        // This will trigger a re-render of components that depend on measurement state
+        const event = new Event('measurement-state-changed');
+        document.dispatchEvent(event);
+      }, 200);
+
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -1177,10 +1184,10 @@ const commandsModule = ({
           //}
 
 
-          let filteredDerivedImages = derivedImages;
+          //let filteredDerivedImages = derivedImages;
           // If toolboxState.getRefineNew() is true, exclude derivedImages that contain segmentNumber
           if (!toolboxState.getRefineNew()) {
-            filteredDerivedImages = derivedImages.filter(image => {
+            derivedImages.forEach(image => {
               const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
               const scalarData = voxelManager.getScalarData();
               // Check if scalarData contains segmentNumber
@@ -1191,7 +1198,15 @@ const commandsModule = ({
             });
           }
 
-          let merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new];          
+          let filteredDerivedImages = derivedImages.filter(image => {
+            const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
+            const scalarData = voxelManager.getScalarData();
+            // Filter out images where all scalarData values are 0
+            return !scalarData.every(value => value === 0);
+          });
+          let merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
+          
+                    
           const derivedImageIds = merged_derivedImages.map(image => image.imageId);  
           
 

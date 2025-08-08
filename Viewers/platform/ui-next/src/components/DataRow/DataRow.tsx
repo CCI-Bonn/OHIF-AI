@@ -68,6 +68,7 @@ interface DataRowProps {
   onSelect?: (e) => void;
   //
   isVisible: boolean;
+  isMeasurementVisible?: boolean;
   onToggleVisibility: (e) => void;
   onToggleMeasurement: (e) => void;
   //
@@ -99,13 +100,19 @@ export const DataRow: React.FC<DataRowProps> = ({
   onColor,
   isSelected = false,
   isVisible = true,
+  isMeasurementVisible = true,
   disableEditing = false,
   className,
 }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [isMeasurementVisible, setIsMeasurementVisible] = useState(true);
+  const [localMeasurementVisible, setLocalMeasurementVisible] = useState(isMeasurementVisible);
   const isTitleLong = title?.length > 25;
   const rowRef = useRef<HTMLDivElement>(null);
+
+  // Sync local state with external prop
+  useEffect(() => {
+    setLocalMeasurementVisible(isMeasurementVisible);
+  }, [isMeasurementVisible]);
 
   // useEffect(() => {
   //   if (isSelected && rowRef.current) {
@@ -285,16 +292,16 @@ export const DataRow: React.FC<DataRowProps> = ({
             size="icon"
             variant="ghost"
             className={`h-6 w-6 transition-opacity ${
-              isSelected || !isMeasurementVisible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              isSelected || !localMeasurementVisible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
             }`}
-            aria-label={isMeasurementVisible ? 'Hide' : 'Show'}
+            aria-label={localMeasurementVisible ? 'Hide' : 'Show'}
             onClick={e => {
               e.stopPropagation();
-              setIsMeasurementVisible(!isMeasurementVisible);
+              setLocalMeasurementVisible(!localMeasurementVisible);
               onToggleMeasurement(e);
             }}
           >
-            {isMeasurementVisible ? <Pen className="h-4 w-4" /> : <PenOff className="h-4 w-4" />}
+            {localMeasurementVisible ? <Pen className="h-4 w-4" /> : <PenOff className="h-4 w-4" />}
           </Button>
 
           {/* Lock Icon (if needed) */}

@@ -191,8 +191,12 @@ const commandsModule = ({
         if (segment.cachedStats.algorithmName !== undefined){
           segmentMetadata.SegmentAlgorithmName = segment.cachedStats.algorithmName;
         }
-
-        segmentMetadata.SegmentAlgorithmType = segmentation.cachedStats.seriesInstanceUid;
+        if (segment.cachedStats.algorithmType !== undefined){
+          segmentMetadata.SegmentAlgorithmType = segment.cachedStats.algorithmType;
+        }
+        if (segmentation.cachedStats.seriesInstanceUid !== undefined){
+          segmentMetadata.SegmentAlgorithmType = segmentation.cachedStats.seriesInstanceUid;
+        }
         
         labelmap3D.metadata[segmentIndex] = segmentMetadata;
       });

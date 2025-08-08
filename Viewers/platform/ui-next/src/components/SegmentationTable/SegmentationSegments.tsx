@@ -1,11 +1,14 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ScrollArea, DataRow } from '../../components';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '../../components/HoverCard';
+import { useSystem } from '@ohif/core';
 import { useSegmentationTableContext, useSegmentationExpanded } from './contexts';
 import { SegmentStatistics } from './SegmentStatistics';
 import { useDynamicMaxHeight } from '../../hooks/useDynamicMaxHeight';
 
 export const SegmentationSegments = ({ children = null }: { children?: React.ReactNode }) => {
+  const { servicesManager } = useSystem();
+  const [forceUpdate, setForceUpdate] = useState(0);
   const {
     activeSegmentationId,
     disableEditing,
@@ -18,6 +21,44 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
     onSegmentDelete,
     data,
   } = useSegmentationTableContext('SegmentationSegments');
+
+  // Listen for measurement visibility changes to force re-render
+  useEffect(() => {
+    const handleMeasurementVisibilityChange = () => {
+      setForceUpdate(prev => prev + 1);
+    };
+
+    document.addEventListener('measurement-state-changed', handleMeasurementVisibilityChange);
+    
+    return () => {
+      document.removeEventListener('measurement-state-changed', handleMeasurementVisibilityChange);
+    };
+  }, []);
+
+  // Custom hook to get measurement visibility with proper reactivity
+  const useMeasurementVisibility = (segmentationId: string, segmentIndex: number) => {
+    const [isVisible, setIsVisible] = useState(true);
+    
+    useEffect(() => {
+      const updateVisibility = () => {
+        const visibility = (servicesManager.services as any).segmentationService.getSegmentMeasurementVisibility(
+          segmentationId,
+          segmentIndex
+        );
+        setIsVisible(visibility);
+      };
+      
+      // Update immediately
+      updateVisibility();
+      
+      // Set up interval to check for changes
+      const interval = setInterval(updateVisibility, 100);
+      
+      return () => clearInterval(interval);
+    }, [segmentationId, segmentIndex, forceUpdate]);
+    
+    return isVisible;
+  };
 
   // Try to get segmentation data from expanded context first, then fall back to table context
   let segmentation;
@@ -74,6 +115,10 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
           const cssColor = `rgb(${color[0]},${color[1]},${color[2]})`;
 
           const hasStats = segmentFromSegmentation.cachedStats?.namedStats;
+          
+          // Use custom hook to get measurement visibility with proper reactivity
+          const isMeasurementVisible = useMeasurementVisibility(segmentation.segmentationId, segmentIndex);
+          
           const DataRowComponent = (
             <DataRow
               key={segmentIndex}
@@ -84,6 +129,7 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
               colorHex={cssColor}
               isSelected={active}
               isVisible={visible}
+              isMeasurementVisible={isMeasurementVisible}
               isLocked={locked}
               disableEditing={disableEditing}
               className={!isActiveSegmentation ? 'opacity-80' : ''}

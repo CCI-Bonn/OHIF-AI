@@ -76,6 +76,8 @@ const EVENTS = {
   SEGMENT_LOADING_COMPLETE: 'event::segment_loading_complete',
   // loading completed for all segments
   SEGMENTATION_LOADING_COMPLETE: 'event::segmentation_loading_complete',
+  // fired when measurement visibility changes
+  MEASUREMENT_VISIBILITY_CHANGED: 'event::measurement_visibility_changed',
 };
 
 const VALUE_TYPES = {};
@@ -961,6 +963,24 @@ class SegmentationService extends PubSubService {
     this.servicesManager.services.measurementService.toggleVisibilityMeasurement(e.uid, !e.isVisible)
     e.metadata.isDisabled = !e.isVisible
    })
+   
+   // Trigger an event to notify UI components about measurement visibility change
+   this._broadcastEvent(this.EVENTS.MEASUREMENT_VISIBILITY_CHANGED, {
+     segmentationId,
+     segmentIndex
+   });
+  }
+
+  public getSegmentMeasurementVisibility(segmentationId: string, segmentIndex: number): boolean {
+   const measurements = this.servicesManager.services.measurementService.getMeasurements()
+   const selectedMeasurements = measurements.filter(e => e.metadata.segmentationId === segmentationId && e.metadata.SegmentNumber === segmentIndex)
+   
+   if (selectedMeasurements.length === 0) {
+     return true; // Default to visible if no measurements found
+   }
+   
+   // Return true if any measurement is visible, false if all are hidden
+   return selectedMeasurements.some(e => e.isVisible)
   }
 
   /**
