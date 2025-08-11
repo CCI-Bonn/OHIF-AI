@@ -1123,6 +1123,14 @@ const commandsModule = ({
                 if (visibleSegments.length == 1){
                   segmentNumber = visibleSegments[0].segmentIndex;
                 }
+                if (visibleSegments.length > 1){
+                  uiNotificationService.warn({
+                    title: 'Overwrite Segment warning',
+                    message: segmentNumber + 'will be overwritten. Highest Segment Number will be used, please hide other segments if you want to specify the segment.',
+                    type: 'warning',
+                    duration: 2000,
+                  });
+                }
               }
               currentMeasurements
               .filter(e => {
