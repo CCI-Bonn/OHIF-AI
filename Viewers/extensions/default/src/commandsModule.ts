@@ -1158,9 +1158,9 @@ const commandsModule = ({
                 if (visibleSegments.length > 1){
                   uiNotificationService.show({
                     title: 'Overwrite Segment warning',
-                    message: segmentNumber + 'will be overwritten. Highest Segment Number will be used, please hide other segments if you want to specify the segment.',
+                    message: segmentNumber + 'will be overwritten. Highest Segment Number will be used, please hide other segments if you want to specify the segment. and Do not forget reset nnInteractive',
                     type: 'warning',
-                    duration: 2000,
+                    duration: 7000,
                   });
                 }
               }
