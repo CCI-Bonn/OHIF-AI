@@ -636,121 +636,131 @@ const commandsModule = ({
 
       let data = MonaiLabelClient.constructFormData(params, null);
 
-      axios
-        .post(url, data, {
-          responseType: 'arraybuffer',
-          headers: {
-            accept: 'application/json, multipart/form-data',
-          },
-        })
-        .then(async function (response) {
-          console.debug(response);
-          if (response.status === 200) {
-            uiNotificationService.show({
-              title: 'MONAI Label',
-              message: 'Run Segmentation - Successful',
-              type: 'success',
-              duration: 2000,
-            });
-            const arrayBuffer = response.data
-            //const uint8 = new Uint8Array(arrayBuffer);
+      // Create the axios promise
+      const segmentationPromise = axios.post(url, data, {
+        responseType: 'arraybuffer',
+        headers: {
+          accept: 'application/json, multipart/form-data',
+        },
+      });
 
-            let segmentationId = `${csUtils.uuidv4()}`
-            let imageIds = currentDisplaySets.imageIds
+      // Show notification with promise support
+      uiNotificationService.show({
+        title: 'MONAI Label',
+        message: 'Processing segmentation...',
+        type: 'info',
+        promise: segmentationPromise,
+        promiseMessages: {
+          loading: 'Processing segmentation...',
+          success: () => 'Run Segmentation - Successful',
+          error: (error) => `Run Segmentation - Failed: ${error.message || 'Unknown error'}`,
+        },
+      });
 
-            const results = await adaptersSEG.Cornerstone3D.Segmentation.createFromDICOMSegBuffer(
-              imageIds,
-              arrayBuffer,
-              { metadataProvider: metaData, tolerance: 0.001 }
-            );
-            
-            const derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
-            const segImageIds = derivedImages.map(image => image.imageId);
+            try {
+        // Process the response
+        const response = await segmentationPromise;
+        console.debug(response);
+        if (response.status === 200) {
+          const arrayBuffer = response.data
+          //const uint8 = new Uint8Array(arrayBuffer);
 
-          const labelmapBufferArray = results.labelMapImages  
-          // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
-          const volumeScalarData = new Uint8Array(labelmapBufferArray[0]);
+          let segmentationId = `${csUtils.uuidv4()}`
+          let imageIds = currentDisplaySets.imageIds
 
-          // We should parse the segmentation as separate slices to support overlapping segments.
-          // This parsing should occur in the CornerstoneJS library adapters.
-          for (let i = 0; i < derivedImages.length; i++) {
-            const voxelManager = derivedImages[i]
-              .voxelManager as csTypes.IVoxelManager<number>;
-            const scalarData = voxelManager.getScalarData();
-            const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
-            scalarData.set(sliceData);
-            voxelManager.setScalarData(scalarData);
+          const results = await adaptersSEG.Cornerstone3D.Segmentation.createFromDICOMSegBuffer(
+            imageIds,
+            arrayBuffer,
+            { metadataProvider: metaData, tolerance: 0.001 }
+          );
+          
+          const derivedImages = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+          const segImageIds = derivedImages.map(image => image.imageId);
+
+        const labelmapBufferArray = results.labelMapImages  
+        // now we need to chop the volume array into chunks and set the scalar data for each derived segmentation image
+        const volumeScalarData = new Uint8Array(labelmapBufferArray[0]);
+
+        // We should parse the segmentation as separate slices to support overlapping segments.
+        // This parsing should occur in the CornerstoneJS library adapters.
+        for (let i = 0; i < derivedImages.length; i++) {
+          const voxelManager = derivedImages[i]
+            .voxelManager as csTypes.IVoxelManager<number>;
+          const scalarData = voxelManager.getScalarData();
+          const sliceData = volumeScalarData.slice(i * scalarData.length, (i + 1) * scalarData.length);
+          scalarData.set(sliceData);
+          voxelManager.setScalarData(scalarData);
+        }
+
+        const segmentsInfo = results.segMetadata.data;
+        
+        // Find existing segments for the same series
+        const existingSegs = servicesManager.services.segmentationService.getSegmentations();
+        let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
+        let existingColorLUT: number[][] = [];
+        
+        // Find existing segmentation with matching seriesInstanceUid
+        for (let seg of existingSegs) {
+          if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
+            existingSegments = seg.segments || {};
+            existingColorLUT = seg.colorLUT || [];
+            break;
+          }
+        }
+        
+        const segments: { [segmentIndex: string]: cstTypes.Segment } = { ...existingSegments };
+        const colorLUT = [...existingColorLUT];
+
+        segmentsInfo.forEach((segmentInfo, index) => {
+          if (index === 0) {
+            colorLUT.push([0, 0, 0, 0]);
+            return;
           }
 
-          const segmentsInfo = results.segMetadata.data;
-          
-          // Find existing segments for the same series
-          const existingSegs = servicesManager.services.segmentationService.getSegmentations();
-          let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
-          let existingColorLUT: number[][] = [];
-          
-          // Find existing segmentation with matching seriesInstanceUid
-          for (let seg of existingSegs) {
-            if (seg.cachedStats?.seriesInstanceUid === results.segMetadata.seriesInstanceUid) {
-              existingSegments = seg.segments || {};
-              existingColorLUT = seg.colorLUT || [];
-              break;
-            }
-          }
-          
-          const segments: { [segmentIndex: string]: cstTypes.Segment } = { ...existingSegments };
-          const colorLUT = [...existingColorLUT];
+          const {
+            SegmentedPropertyCategoryCodeSequence,
+            SegmentNumber,
+            SegmentLabel,
+            SegmentAlgorithmType,
+            SegmentAlgorithmName,
+            SegmentDescription,
+            SegmentedPropertyTypeCodeSequence,
+            rgba,
+          } = segmentInfo;
 
-          segmentsInfo.forEach((segmentInfo, index) => {
-            if (index === 0) {
-              colorLUT.push([0, 0, 0, 0]);
-              return;
-            }
+          colorLUT.push(rgba);
 
-            const {
-              SegmentedPropertyCategoryCodeSequence,
-              SegmentNumber,
-              SegmentLabel,
-              SegmentAlgorithmType,
-              SegmentAlgorithmName,
-              SegmentDescription,
-              SegmentedPropertyTypeCodeSequence,
-              rgba,
-            } = segmentInfo;
+          const segmentIndex = Number(SegmentNumber);
 
-            colorLUT.push(rgba);
+          const centroid = results.centroids?.get(index);
+          const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
+          const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
 
-            const segmentIndex = Number(SegmentNumber);
-
-            const centroid = results.centroids?.get(index);
-            const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
-            const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
-
-            segments[segmentIndex] = {
-              segmentIndex,
-              label: SegmentLabel || `Segment ${SegmentNumber}`,
-              locked: false,
-              active: false,
-              cachedStats: {
-                center: {
-                  image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
-                  world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
-                },
-                modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
-                category: SegmentedPropertyCategoryCodeSequence
-                  ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
-                  : '',
-                type: SegmentedPropertyTypeCodeSequence
-                  ? SegmentedPropertyTypeCodeSequence.CodeMeaning
-                  : '',
-                algorithmType: SegmentAlgorithmType,
-                algorithmName: SegmentAlgorithmName,
-                description: SegmentDescription,
+          segments[segmentIndex] = {
+            segmentIndex,
+            label: SegmentLabel || `Segment ${SegmentNumber}`,
+            locked: false,
+            active: false,
+            cachedStats: {
+              center: {
+                image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
+                world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
               },
-            };
-          });
+              modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
+              category: SegmentedPropertyCategoryCodeSequence
+                ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
+                : '',
+              type: SegmentedPropertyTypeCodeSequence
+                ? SegmentedPropertyTypeCodeSequence.CodeMeaning
+                : '',
+              algorithmType: SegmentAlgorithmType,
+              algorithmName: SegmentAlgorithmName,
+              description: SegmentDescription,
+            },
+          };
+        });
 
-            csToolsSegmentation.addSegmentations([
+          csToolsSegmentation.addSegmentations([
               {
                   segmentationId,
                   representation: {
@@ -776,15 +786,11 @@ const commandsModule = ({
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
           return response;
-          }
-          const end = Date.now();
-          console.log(`Time taken: ${(end - start)/1000} Seconds`);
-          return response;
-        })
-        .catch(function (error) {
-          return error;
-        })
-        .finally(function () { });
+        }
+      } catch (error) {
+        console.error('Segmentation error:', error);
+        throw error;
+      }
     },
     async initNninter( options: {viewportId: string} = {viewportId: undefined} ){
 
@@ -818,28 +824,36 @@ const commandsModule = ({
 
       let data = MonaiLabelClient.constructFormData(params, null);
 
-      axios
-        .post(url, data, {
-          responseType: 'arraybuffer',
-          headers: {
-            accept: 'application/json, multipart/form-data',
-          },
-        })
-        .then(async function (response) {
-          if (response.status === 200) {
-            uiNotificationService.show({
-              title: 'NNInit',
-              message: 'Init nninter - Successful',
-              type: 'success',
-              duration: 2000,
-            });
-          }
+      // Create the axios promise
+      const initPromise = axios.post(url, data, {
+        responseType: 'arraybuffer',
+        headers: {
+          accept: 'application/json, multipart/form-data',
+        },
+      });
+
+      // Show notification with promise support
+      uiNotificationService.show({
+        title: 'NNInit',
+        message: 'Initializing nninter...',
+        type: 'info',
+        promise: initPromise,
+        promiseMessages: {
+          loading: 'Initializing nninter...',
+          success: () => 'Init nninter - Successful',
+          error: (error) => `Init nninter - Failed: ${error.message || 'Unknown error'}`,
+        },
+      });
+
+      try {
+        const response = await initPromise;
+        if (response.status === 200) {
           return response;
-        })
-        .catch(function (error) {
-          return error;
-        })
-        .finally(function () { });
+        }
+      } catch (error) {
+        console.error('Init nninter error:', error);
+        throw error;
+      }
 
     },
     async resetNninter(options: {clearMeasurements: boolean} = {clearMeasurements: false}){
@@ -864,31 +878,39 @@ const commandsModule = ({
 
       let data = MonaiLabelClient.constructFormData(params, null);
 
-      axios
-        .post(url, data, {
-          responseType: 'arraybuffer',
-          headers: {
-            accept: 'application/json, multipart/form-data',
-          },
-        })
-        .then(async function (response) {
-          if (response.status === 200) {
-            uiNotificationService.show({
-              title: 'NNInter',
-              message: 'Reset nninter - Successful',
-              type: 'success',
-              duration: 2000,
-            });
-            if (options.clearMeasurements) {
-              commandsManager.run('clearMeasurements')
-            }
+      // Create the axios promise
+      const resetPromise = axios.post(url, data, {
+        responseType: 'arraybuffer',
+        headers: {
+          accept: 'application/json, multipart/form-data',
+        },
+      });
+
+      // Show notification with promise support
+      uiNotificationService.show({
+        title: 'NNInter',
+        message: 'Resetting nninter...',
+        type: 'info',
+        promise: resetPromise,
+        promiseMessages: {
+          loading: 'Resetting nninter...',
+          success: () => 'Reset nninter - Successful',
+          error: (error) => `Reset nninter - Failed: ${error.message || 'Unknown error'}`,
+        },
+      });
+
+      try {
+        const response = await resetPromise;
+        if (response.status === 200) {
+          if (options.clearMeasurements) {
+            commandsManager.run('clearMeasurements')
           }
           return response;
-        })
-        .catch(function (error) {
-          return error;
-        })
-        .finally(function () { });
+        }
+      } catch (error) {
+        console.error('Reset nninter error:', error);
+        throw error;
+      }
 
     },
 
@@ -1034,22 +1056,32 @@ const commandsModule = ({
 
       let data = MonaiLabelClient.constructFormData(params, null);
 
-      axios
-        .post(url, data, {
-          responseType: 'arraybuffer',
-          headers: {
-            accept: 'application/json, multipart/form-data',
-          },
-        })
-        .then(async function (response) {
-          console.debug(response);
-          if (response.status === 200) {
-            uiNotificationService.show({
-              title: 'MONAI Label',
-              message: 'Run Segmentation - Successful',
-              type: 'success',
-              duration: 2000,
-            });
+      // Create the axios promise
+      const segmentationPromise = axios.post(url, data, {
+        responseType: 'arraybuffer',
+        headers: {
+          accept: 'application/json, multipart/form-data',
+        },
+      });
+
+      // Show notification with promise support
+      uiNotificationService.show({
+        title: 'MONAI Label',
+        message: 'Processing nninter segmentation...',
+        type: 'info',
+        promise: segmentationPromise,
+        promiseMessages: {
+          loading: 'Processing nninter segmentation...',
+          success: () => 'Run Segmentation - Successful',
+          error: (error) => `Run Segmentation - Failed: ${error.message || 'Unknown error'}`,
+        },
+      });
+
+      try {
+        // Process the response
+        const response = await segmentationPromise;
+        console.debug(response);
+        if (response.status === 200) {
             const arrayBuffer = response.data
             //const uint8 = new Uint8Array(arrayBuffer);
 
@@ -1124,7 +1156,7 @@ const commandsModule = ({
                   segmentNumber = visibleSegments[0].segmentIndex;
                 }
                 if (visibleSegments.length > 1){
-                  uiNotificationService.warn({
+                  uiNotificationService.show({
                     title: 'Overwrite Segment warning',
                     message: segmentNumber + 'will be overwritten. Highest Segment Number will be used, please hide other segments if you want to specify the segment.',
                     type: 'warning',
@@ -1205,7 +1237,7 @@ const commandsModule = ({
               }
             });
           }
-
+          //let filteredDerivedImages = derivedImages;
           let filteredDerivedImages = derivedImages.filter(image => {
             const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
             const scalarData = voxelManager.getScalarData();
@@ -1273,6 +1305,7 @@ const commandsModule = ({
           // Get the representations for the segmentation to recover the visibility of the segments
           const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId })
           if(segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing){
+            //servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
             csToolsSegmentation.addSegmentations([
               {
                   segmentationId,
@@ -1342,15 +1375,11 @@ const commandsModule = ({
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
           return response;
-          }
-          const end = Date.now();
-          console.log(`Time taken: ${(end - start)/1000} Seconds`);
-          return response;
-        })
-        .catch(function (error) {
-          return error;
-        })
-        .finally(function () { });
+        }
+      } catch (error) {
+        console.error('Nninter segmentation error:', error);
+        throw error;
+      }
     },
     saveAndNextObj: () => {
       commandsManager.run('clearMeasurements')
