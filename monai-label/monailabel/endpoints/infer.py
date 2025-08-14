@@ -10,7 +10,6 @@
 # limitations under the License.
 
 import json
-import gzip
 import secrets
 import logging
 import os
@@ -153,7 +152,6 @@ def send_response(datastore, result, output, background_tasks):
                     f"--{boundary}{CRLF}"
                     f'Content-Disposition: form-data; name="seg"; filename="seg.bin"{CRLF}'
                     f"Content-Type: application/octet-stream{CRLF}{CRLF}"
-                    f"Content-Encoding: gzip{CRLF}{CRLF}"
                 ).encode("utf-8")
 
                 tail = f"{CRLF}--{boundary}--{CRLF}".encode("utf-8")
@@ -161,7 +159,7 @@ def send_response(datastore, result, output, background_tasks):
                 body = b"".join([head_meta, meta_json.encode("utf-8"), CRLF.encode("utf-8"),head_seg, res_dicom_seg, tail])
 
                 logger.info(f"Just before Response: {time.time()-start} secs")
-                return Response(content=gzip.compress(body), media_type=f"multipart/form-data; boundary={boundary}"
+                return Response(content=body, media_type=f"multipart/form-data; boundary={boundary}"
                 )
             else:
                 logger.info("No prompt info?")
