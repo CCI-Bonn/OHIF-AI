@@ -153,11 +153,12 @@ def send_response(datastore, result, output, background_tasks):
                     f"--{boundary}{CRLF}"
                     f'Content-Disposition: form-data; name="seg"; filename="seg.bin"{CRLF}'
                     f"Content-Type: application/octet-stream{CRLF}{CRLF}"
+                    f"Content-Encoding: gzip{CRLF}{CRLF}"
                 ).encode("utf-8")
 
                 tail = f"{CRLF}--{boundary}--{CRLF}".encode("utf-8")
 
-                body = b"".join([head_meta, meta_json.encode("utf-8"), CRLF.encode("utf-8"),head_seg, res_dicom_seg, tail])
+                body = b"".join([head_meta, meta_json.encode("utf-8"), CRLF.encode("utf-8"),head_seg, gzip.compress(res_dicom_seg), tail])
 
                 logger.info(f"Just before Response: {time.time()-start} secs")
                 return Response(content=body, media_type=f"multipart/form-data; boundary={boundary}"
@@ -257,7 +258,7 @@ def run_inference(
         #with open(dicom_seg_file, "rb") as f:
         #    dicom_bytes = f.read()
         #result["dicom_seg"] = dicom_bytes
-        result["dicom_seg"] = gzip.compress(res_img)
+        result["dicom_seg"] = res_img
 
     return send_response(instance.datastore(), result, output, background_tasks)
 
