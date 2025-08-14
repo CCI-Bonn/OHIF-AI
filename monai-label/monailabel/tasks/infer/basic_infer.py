@@ -445,7 +445,8 @@ class BasicInferTask(InferTask):
 
         logger.info(f"rescale_slope: {rescale_slope}")
         logger.info(f"rescale_intercept: {rescale_intercept}")
-
+        before_nnInter = time.time()
+        logger.info(f"Before nnInter: {before_nnInter-begin} secs")
         if nnInter:
             start = time.time()
             img_np = sitk.GetArrayFromImage(img)[None]  # Ensure shape (1, x, y, z)
@@ -711,6 +712,7 @@ class BasicInferTask(InferTask):
             final_result_json["label_name"] = f"nninter_pred_{timestamp}"
 
             logger.info(f"final_result_json info: {final_result_json}")
+            logger.info(f"just before return: {time.time()-start} secs")
             # result_json contains prompt information
             #f'/code/predictions/nninter_{image_series_desc}.nii.gz'
             return raw, final_result_json

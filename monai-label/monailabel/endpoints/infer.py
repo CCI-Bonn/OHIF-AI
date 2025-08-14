@@ -113,6 +113,7 @@ def send_response(datastore, result, output, background_tasks):
         return FileResponse(res_img, media_type=m_type, filename=os.path.basename(res_img))
 
     if output == "dicom_seg":
+        start = time.time()
         res_dicom_seg = result.get("dicom_seg")
         res_prompt_info = json.dumps(result.get("params").get("prompt_info"))
         res_flipped = json.dumps(result.get("params").get("flipped"))
@@ -157,7 +158,7 @@ def send_response(datastore, result, output, background_tasks):
 
                 body = b"".join([head_meta, meta_json.encode("utf-8"), CRLF.encode("utf-8"),head_seg, res_dicom_seg, tail])
 
-                
+                logger.info(f"Just before Response: {time.time()-start} secs")
                 return Response(content=body, media_type=f"multipart/form-data; boundary={boundary}"
                 )
             else:
