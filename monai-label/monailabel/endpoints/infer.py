@@ -158,7 +158,7 @@ def send_response(datastore, result, output, background_tasks):
 
                 tail = f"{CRLF}--{boundary}--{CRLF}".encode("utf-8")
 
-                body = b"".join([head_meta, gzip.compress(meta_json.encode("utf-8")), CRLF.encode("utf-8"),head_seg, gzip.compress(res_dicom_seg), tail])
+                body = b"".join([head_meta, gzip.compress(meta_json.encode("utf-8")), CRLF.encode("utf-8"),head_seg, gzip.compress(res_dicom_seg),CRLF.encode("utf-8"), tail])
 
                 logger.info(f"Just before Response: {time.time()-start} secs")
                 return Response(content=body, media_type=f"multipart/form-data; boundary={boundary}"
