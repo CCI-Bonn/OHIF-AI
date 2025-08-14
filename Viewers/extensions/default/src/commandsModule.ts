@@ -1090,7 +1090,8 @@ const commandsModule = ({
             const afterPost = Date.now();
             console.log(`Just after Post request: ${(afterPost - start)/1000} Seconds`);
             const ct = response.headers["content-type"] as string;
-            const { meta, seg } = parseMultipart(response.data, ct);
+            const { meta, seg } = await parseMultipart(response.data, ct);
+            console.log(`Just after parseMultipart: ${(Date.now() - start)/1000} Seconds`);
             //const arrayBuffer = response.data
             const flipped = meta.flipped.toLowerCase() === "true"
             const nninter_elapsed = meta.nninter_elapsed
@@ -1198,6 +1199,7 @@ const commandsModule = ({
             //}
 
           let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+          console.log(`Just after createAndCacheDerivedLabelmapImages: ${(Date.now() - start)/1000} Seconds`);
           let derivedImages = [];
           if (segImageIds.length > 0){
             derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
@@ -1232,19 +1234,12 @@ const commandsModule = ({
               .voxelManager as csTypes.IVoxelManager<number>;
             let scalarData = voxelManager.getScalarData();
             const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
-            if(segmentNumber !== 10000){
-            const transformed_sliceData = sliceData.map(v => v === 1 ? segmentNumber : v);
             for (let j = 0; j < scalarData.length; j++) {
-              if (transformed_sliceData[j] === segmentNumber) {
+              if (sliceData[j] === 1) {
                 scalarData[j] = segmentNumber;
               }
             }
-            }else{
-              scalarData.set(sliceData);
-            }
-            if(segmentNumber === 1){
-              voxelManager.setScalarData(scalarData);
-            }
+
           }
 
 
@@ -1254,25 +1249,32 @@ const commandsModule = ({
             derivedImages.forEach(image => {
               const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
               const scalarData = voxelManager.getScalarData();
-              // Check if scalarData contains segmentNumber
-              //return !scalarData.some(value => value === segmentNumber);
-              if (scalarData.some(value => value === segmentNumber)){
-                voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
+              // Check if scalarData contains segmentNumber and update in one pass
+              let hasSegment = false;
+              for (let i = 0; i < scalarData.length; i++) {
+                if (scalarData[i] === segmentNumber) {
+                  hasSegment = true;
+                  scalarData[i] = 0;
+                }
+              }
+              
+              // Only update voxelManager if changes were made
+              if (hasSegment) {
+                voxelManager.setScalarData(scalarData);
               }
             });
           }
-          let filteredDerivedImages = derivedImages;
-          //let filteredDerivedImages = derivedImages.filter(image => {
-          //  const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
-          //  const scalarData = voxelManager.getScalarData();
-          //  // Filter out images where all scalarData values are 0
-          //  return !scalarData.every(value => value === 0);
-          //});
+          //let filteredDerivedImages = derivedImages;
+          let filteredDerivedImages = derivedImages.filter(image => {
+            const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
+            const scalarData = voxelManager.getScalarData();
+            return scalarData.some(value => value !== 0);
+          });
           let merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
           
                     
           const derivedImageIds = merged_derivedImages.map(image => image.imageId);  
-          
+          console.log(`Just after derivedImageIds: ${(Date.now() - start)/1000} Seconds`);
           segments[segmentNumber] = {
             segmentIndex: segmentNumber,
             label: label_name,
@@ -1282,79 +1284,12 @@ const commandsModule = ({
 
               modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
 
-              algorithmType: currentDisplaySets.SeriesInstanceUID,//results.segMetadata.seriesInstanceUid,
+              algorithmType: currentDisplaySets.SeriesInstanceUID,
               algorithmName: "nninter_"+nninter_elapsed,
               description: prompt_info,
             }
           };
-          //segments[1] = {
-          //  segmentIndex: 1,
-          //  label: "Segment 1",
-          //  locked: false,
-          //  cachedStats: {
-          //    center: { x: 0, y: 0, z: 0 },
-          //    world: { x: 0, y: 0, z: 0 },
-          //  },
-          //  algorithmType: currentDisplaySets.SeriesInstanceUID,//results.segMetadata.seriesInstanceUid,
-          //  algorithmName: "nninter",
-          //  description: "nninter",
-          //};
-          /*const segmentsInfo = results.segMetadata.data;
-          
 
-          segmentsInfo.forEach((segmentInfo, index) => {
-            if (index === 0) {
-              colorLUT.push([0, 0, 0, 0]);
-              return;
-            }
-
-            const {
-              SegmentedPropertyCategoryCodeSequence,
-              SegmentNumber,
-              SegmentLabel,
-              SegmentAlgorithmType,
-              SegmentAlgorithmName,
-              SegmentDescription,
-              SegmentedPropertyTypeCodeSequence,
-              rgba,
-            } = segmentInfo;
-
-            colorLUT.push(rgba);
-            let segmentIndex = Number(SegmentNumber);
-            if(segmentNumber !== 1){
-              segmentIndex = segmentNumber;
-            }
-              
-            //const centroid = results.centroids?.get(index);
-            const centroid = {
-              image: { x: 0, y: 0, z: 0 },
-              world: { x: 0, y: 0, z: 0 },
-            };
-            const imageCentroidXYZ = centroid?.image || { x: 0, y: 0, z: 0 };
-            const worldCentroidXYZ = centroid?.world || { x: 0, y: 0, z: 0 };
-
-            segments[segmentIndex] = {
-              segmentIndex,
-              label: SegmentLabel || `Segment ${SegmentNumber}`,
-              locked: false,
-              cachedStats: {
-                center: {
-                  image: [imageCentroidXYZ.x, imageCentroidXYZ.y, imageCentroidXYZ.z],
-                  world: [worldCentroidXYZ.x, worldCentroidXYZ.y, worldCentroidXYZ.z],
-                },
-                modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
-                category: SegmentedPropertyCategoryCodeSequence
-                  ? SegmentedPropertyCategoryCodeSequence.CodeMeaning
-                  : '',
-                type: SegmentedPropertyTypeCodeSequence
-                  ? SegmentedPropertyTypeCodeSequence.CodeMeaning
-                  : '',
-                algorithmType: currentDisplaySets.SeriesInstanceUID,//results.segMetadata.seriesInstanceUid,
-                algorithmName: SegmentAlgorithmName,
-                description: SegmentDescription,
-              },
-            };
-          }); */
           // Get the representations for the segmentation to recover the visibility of the segments
           const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId })
           if(segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing){

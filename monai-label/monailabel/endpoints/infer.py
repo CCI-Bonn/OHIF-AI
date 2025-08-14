@@ -142,23 +142,24 @@ def send_response(datastore, result, output, background_tasks):
 
                     # Build multipart body
                 CRLF = "\r\n"
+                CRLF_b = b"\r\n"
                 head_meta = (
                     f"--{boundary}{CRLF}"
                     f'Content-Disposition: form-data; name="meta"; filename="meta.json"{CRLF}'
-                    f"Content-Type: application/json{CRLF}{CRLF}"
+                    f"Content-Type: application/json{CRLF}"
                     f"Content-Encoding: gzip{CRLF}{CRLF}"
                 ).encode("utf-8")
 
                 head_seg = (
                     f"--{boundary}{CRLF}"
                     f'Content-Disposition: form-data; name="seg"; filename="seg.bin"{CRLF}'
-                    f"Content-Type: application/octet-stream{CRLF}{CRLF}"
+                    f"Content-Type: application/octet-stream{CRLF}"
                     f"Content-Encoding: gzip{CRLF}{CRLF}"
                 ).encode("utf-8")
 
-                tail = f"{CRLF}--{boundary}--{CRLF}".encode("utf-8")
+                tail = f"--{boundary}--{CRLF}".encode("utf-8")
 
-                body = b"".join([head_meta, gzip.compress(meta_json.encode("utf-8")), CRLF.encode("utf-8"),head_seg, gzip.compress(res_dicom_seg),CRLF.encode("utf-8"), tail])
+                body = b"".join([head_meta, gzip.compress(meta_json.encode("utf-8")), CRLF_b,head_seg, gzip.compress(res_dicom_seg),CRLF_b, tail])
 
                 logger.info(f"Just before Response: {time.time()-start} secs")
                 return Response(content=body, media_type=f"multipart/form-data; boundary={boundary}"
