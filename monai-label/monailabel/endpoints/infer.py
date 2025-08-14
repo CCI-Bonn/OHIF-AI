@@ -10,6 +10,7 @@
 # limitations under the License.
 
 import json
+import gzip
 import secrets
 import logging
 import os
@@ -256,7 +257,7 @@ def run_inference(
         #with open(dicom_seg_file, "rb") as f:
         #    dicom_bytes = f.read()
         #result["dicom_seg"] = dicom_bytes
-        result["dicom_seg"] = res_img
+        result["dicom_seg"] = gzip.compress(res_img)
 
     return send_response(instance.datastore(), result, output, background_tasks)
 
