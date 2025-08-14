@@ -13,6 +13,7 @@ import copy
 import logging
 import os
 import time
+from datetime import datetime
 from abc import abstractmethod
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
@@ -684,24 +685,35 @@ class BasicInferTask(InferTask):
             # Enjoy!
             pred = results.numpy()
 
-            pred_itk = sitk.GetImageFromArray(pred)
-            pred_itk.CopyInformation(img)
             
-            
-            pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
-            sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}.nii.gz')
+
+            #pred_itk = sitk.GetImageFromArray(pred)
+            #pred_itk.CopyInformation(img)
+            #pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
+            #sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}.nii.gz')
             nninter_elapsed = time.time() - start
             logger.info(f"nninter latency : {nninter_elapsed} (sec)")
 
-
+            pred_uint8 = pred.astype(np.uint8, copy=False)
+            logger.info(f"pred_uint8 shape: {pred_uint8.shape}")
+            raw = pred_uint8.ravel(order="C").tobytes()
+            
+            # final_result_json["dicom_seg"] = raw
             final_result_json["prompt_info"] = result_json
             final_result_json["nninter_elapsed"] = nninter_elapsed
 
-            
+            if instanceNumber > instanceNumber2:
+                final_result_json["flipped"] = True
+            else:
+                final_result_json["flipped"] = False
+
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            final_result_json["label_name"] = f"nninter_pred_{timestamp}"
+
             logger.info(f"final_result_json info: {final_result_json}")
             # result_json contains prompt information
-
-            return f'/code/predictions/nninter_{image_series_desc}.nii.gz', final_result_json
+            #f'/code/predictions/nninter_{image_series_desc}.nii.gz'
+            return raw, final_result_json
 
         
         if "pos_points" in data:
