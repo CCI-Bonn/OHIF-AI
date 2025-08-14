@@ -1,4 +1,7 @@
 // multipart.ts
+// Optional fallback (uncomment the import and the line in gunzip() if you install pako):
+// import { ungzip as pakoUngzip } from "pako";
+
 function uint8ToString(u8: Uint8Array): string {
     return new TextDecoder("utf-8").decode(u8);
   }
@@ -26,9 +29,8 @@ function uint8ToString(u8: Uint8Array): string {
     return m[1].replace(/^"(.*)"$/, "$1"); // handle quoted boundary
   }
   
-  async function gunzipIfNeeded(u8: Uint8Array, headers: Record<string, string>): Promise<Uint8Array> {
-    const enc = (headers["content-encoding"] || "").toLowerCase();
-    if (!enc.includes("gzip")) return u8;
+  async function gunzip(buf: ArrayBuffer | Uint8Array): Promise<Uint8Array> {
+    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
     const DS: any = (globalThis as any).DecompressionStream;
     if (typeof DS === "function") {
       const ds = new DS("gzip");
@@ -36,22 +38,42 @@ function uint8ToString(u8: Uint8Array): string {
       const ab = await new Response(stream).arrayBuffer();
       return new Uint8Array(ab);
     }
-    // No native gunzip; return compressed bytes and let caller handle (e.g., pako.ungzip)
-    return u8;
+    // Fallback: use pako if you installed it
+    // return pakoUngzip(u8);
+    // If no fallback is available, throw to avoid silent JSON.parse errors:
+    throw new Error("Gzip content received but no DecompressionStream (install pako for fallback).");
+  }
+  
+  async function gunzipIfNeeded(u8: Uint8Array, headers: Record<string, string>): Promise<Uint8Array> {
+    const enc = (headers["content-encoding"] || "").toLowerCase();
+    if (!enc.includes("gzip")) return u8;
+    return gunzip(u8);
+  }
+  
+  /** If the WHOLE HTTP response is gzipped, decompress it before parsing multipart */
+  export async function maybeGunzipWholeResponse(
+    bodyBuf: ArrayBuffer,
+    responseHeaders: Record<string, string | string[] | undefined>
+  ): Promise<ArrayBuffer> {
+    const enc = (responseHeaders["content-encoding"] || "").toString().toLowerCase();
+    if (!enc.includes("gzip")) return bodyBuf;
+    const u8 = new Uint8Array(bodyBuf);
+    // If already decompressed by the browser (normal in XHR/fetch), first two bytes won't be 0x1f 0x8b
+    const looksGzip = u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b;
+    if (!looksGzip) return bodyBuf; // nothing to do
+    const unzipped = await gunzip(u8);
+    return unzipped.buffer;
   }
   
   /**
    * Parse a multipart/form-data response body.
-   * - Auto-decompresses per-part gzip for both "meta" (JSON) and "seg" (binary) when Content-Encoding: gzip is present.
-   * - Returns raw headers per part so callers can see original encodings.
+   * - Accepts already-decompressed ArrayBuffer.
+   * - Auto-decompresses per-part gzip for both "meta" (JSON) and "seg" (binary).
    */
   export async function parseMultipart(
     bodyBuf: ArrayBuffer,
     contentType: string
-  ): Promise<{
-    meta: any;                                // parsed JSON (decompressed if needed)
-    seg: Uint8Array;                          // binary bytes after any decompression
-  }> {
+  ): Promise<{ meta: any; seg: Uint8Array }> {
     const boundary = getBoundary(contentType);
     const u8 = new Uint8Array(bodyBuf);
     const boundaryBytes = new TextEncoder().encode(`--${boundary}`);
@@ -62,7 +84,7 @@ function uint8ToString(u8: Uint8Array): string {
     let i = 0;
   
     while (i < u8.length) {
-      // skip inter-part CRLF
+      // skip CRLF between parts
       if (u8[i] === 13 && u8[i + 1] === 10) i += 2;
   
       // final boundary?
@@ -84,7 +106,7 @@ function uint8ToString(u8: Uint8Array): string {
   
       const bodyStart = j + split + 4;
   
-      // find end = position before "\r\n--boundary"
+      // find end before "\r\n--boundary"
       let k = bodyStart;
       let end = -1;
       for (; k + nextMarker.length <= u8.length; k++) {
@@ -97,40 +119,54 @@ function uint8ToString(u8: Uint8Array): string {
       if (end === -1) end = u8.length;
   
       parts.push(u8.slice(j, end)); // headers + CRLFCRLF + body
-      i = end + 2; // over the CRLF preceding the next boundary
+      i = end + 2; // skip CRLF before next boundary
     }
   
     let metaObj: any = null;
-    let metaBytes = new Uint8Array(0);
-    let metaHeaders: Record<string, string> = {};
     let seg = new Uint8Array(0);
-    let segHeaders: Record<string, string> = {};
   
     for (const p of parts) {
       const split = findCRLFCRLF(p);
       if (split < 0) continue;
       const headers = parseHeaders(uint8ToString(p.slice(0, split)));
-      const body = p.slice(split + 4);
+      let body = p.slice(split + 4);
+  
+      // Defensive: if someone accidentally placed header lines into the body, peel them.
+      const headProbe = uint8ToString(body.slice(0, 16));
+      if (/^Content-\w+/i.test(headProbe)) {
+        // peel leaked headers block from body
+        const leakIdx = findCRLFCRLF(body);
+        if (leakIdx > -1) {
+          const leakedHeaderStr = uint8ToString(body.slice(0, leakIdx));
+          const extra = parseHeaders(leakedHeaderStr);
+          Object.assign(headers, extra);
+          body = body.slice(leakIdx + 4);
+        }
+      }
   
       const cd = headers["content-disposition"] || "";
-      const nameMatch = /name="([^"]+)"/i.exec(cd);
-      const name = nameMatch ? nameMatch[1] : "";
+      const m = /name="([^"]+)"/i.exec(cd);
+      const name = m ? m[1] : "";
   
       const ctype = (headers["content-type"] || "").toLowerCase();
   
       if (name === "meta" && ctype.includes("application/json")) {
         const unzipped = await gunzipIfNeeded(body, headers);
-        metaBytes = unzipped;
-        metaObj = JSON.parse(uint8ToString(unzipped));
+        try {
+          metaObj = JSON.parse(uint8ToString(unzipped));
+        } catch (e) {
+          // Helpful debug: show the first few characters
+          const preview = uint8ToString(unzipped.slice(0, 24));
+          throw new Error(`Failed to parse meta JSON (starts with: ${JSON.stringify(preview)})`);
+        }
       } else if (name === "seg" && ctype.includes("application/octet-stream")) {
-        const unzipped = await gunzipIfNeeded(body, headers);
-        seg = unzipped;
+        seg = await gunzipIfNeeded(body, headers);
       }
     }
   
     if (!metaObj) throw new Error("meta part not found");
     if (!seg.length) throw new Error("seg part not found");
   
-    return { meta: metaObj, seg};
+    return { meta: metaObj, seg };
   }
   
