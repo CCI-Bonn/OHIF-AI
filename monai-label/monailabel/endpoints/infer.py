@@ -44,6 +44,7 @@ from monailabel.endpoints.user.auth import RBAC, User
 from monailabel.interfaces.app import MONAILabelApp
 from monailabel.interfaces.utils.app import app_instance
 from monailabel.utils.others.generic import get_mime_type, remove_file
+from monailabel.utils.others.stream import stream_multipart
 
 from monailabel.datastore.utils.dicom import dicom_web_upload_dcm
 
@@ -115,55 +116,22 @@ def send_response(datastore, result, output, background_tasks):
     if output == "dicom_seg":
         start = time.time()
         res_dicom_seg = result.get("dicom_seg")
-        res_prompt_info = json.dumps(result.get("params").get("prompt_info"))
-        res_flipped = json.dumps(result.get("params").get("flipped"))
-        res_nninter_elapsed = json.dumps(result.get("params").get("nninter_elapsed"))
-        res_label_name = result.get("params").get("label_name")
         if res_dicom_seg is None:
             logger.info("No dicom_seg?")
             raise HTTPException(status_code=500, detail="Error processing inference")
         else:
             logger.info("File response!")
             if type(res_dicom_seg) != str:
-                logger.info(f"Prompt info: {res_prompt_info}")
-                logger.info(f"Flipped: {res_flipped}")
-                logger.info(f"NNinter elapsed: {res_nninter_elapsed}")
-                logger.info(f"Label name: {res_label_name}")
-
                 fields = {
-                    "prompt_info": res_prompt_info,
-                    "flipped": res_flipped,
-                    "nninter_elapsed": res_nninter_elapsed,
-                    "label_name": res_label_name
+                    "prompt_info": json.dumps(result.get("params").get("prompt_info")),
+                    "flipped": json.dumps(result.get("params").get("flipped")),
+                    "nninter_elapsed": json.dumps(result.get("params").get("nninter_elapsed")),
+                    "label_name": result.get("params").get("label_name")
                 }
                 
                 boundary = f"monai-{secrets.token_hex(12)}"
                 meta_json = json.dumps(fields, separators=(",", ":"))
-
-                    # Build multipart body
-                CRLF = "\r\n"
-                CRLF_b = b"\r\n"
-                head_meta = (
-                    f"--{boundary}{CRLF}"
-                    f'Content-Disposition: form-data; name="meta"; filename="meta.json"{CRLF}'
-                    f"Content-Type: application/json{CRLF}"
-                    f"Content-Encoding: gzip{CRLF}{CRLF}"
-                ).encode("utf-8")
-
-                head_seg = (
-                    f"--{boundary}{CRLF}"
-                    f'Content-Disposition: form-data; name="seg"; filename="seg.bin"{CRLF}'
-                    f"Content-Type: application/octet-stream{CRLF}"
-                    f"Content-Encoding: gzip{CRLF}{CRLF}"
-                ).encode("utf-8")
-
-                tail = f"--{boundary}--{CRLF}".encode("utf-8")
-
-                body = b"".join([head_meta, gzip.compress(meta_json.encode("utf-8")), CRLF_b,head_seg, gzip.compress(res_dicom_seg),CRLF_b, tail])
-
-                logger.info(f"Just before Response: {time.time()-start} secs")
-                return Response(content=body, media_type=f"multipart/form-data; boundary={boundary}"
-                )
+                return stream_multipart(meta_json, res_dicom_seg)
             else:
                 logger.info("No prompt info?")
                 return Response(res_dicom_seg, media_type="application/json")
@@ -179,8 +147,6 @@ def send_response(datastore, result, output, background_tasks):
 
     return_message = MultipartEncoder(fields=res_fields)
     return Response(content=return_message.to_string(), media_type=return_message.content_type)
-
-
 def run_inference(
     background_tasks: BackgroundTasks,
     model: str,

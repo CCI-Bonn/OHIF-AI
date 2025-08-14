@@ -694,11 +694,6 @@ class BasicInferTask(InferTask):
             #sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}.nii.gz')
             nninter_elapsed = time.time() - start
             logger.info(f"nninter latency : {nninter_elapsed} (sec)")
-
-            pred_uint8 = pred.astype(np.uint8, copy=False)
-            logger.info(f"pred_uint8 shape: {pred_uint8.shape}")
-            raw = pred_uint8.ravel(order="C").tobytes()
-            
             # final_result_json["dicom_seg"] = raw
             final_result_json["prompt_info"] = result_json
             final_result_json["nninter_elapsed"] = nninter_elapsed
@@ -715,7 +710,7 @@ class BasicInferTask(InferTask):
             logger.info(f"just before return: {time.time()-start} secs")
             # result_json contains prompt information
             #f'/code/predictions/nninter_{image_series_desc}.nii.gz'
-            return raw, final_result_json
+            return pred, final_result_json
 
         
         if "pos_points" in data:
