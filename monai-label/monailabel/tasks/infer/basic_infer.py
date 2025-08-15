@@ -10,6 +10,7 @@
 # limitations under the License.
 
 import copy
+import hashlib
 import logging
 import os
 import time
@@ -174,15 +175,14 @@ class BasicInferTask(InferTask):
         self.skip_writer = skip_writer
 
         self._session_used_interactions = {
-            "pos_points": [],
-            "neg_points": [],
-            "pos_boxes": [],
-            "neg_boxes": [],
-            "pos_lassos": [],
-            "neg_lassos": [],
-            "pos_scribbles": [],
-            "neg_scribbles": [],
-            "objects": [],
+            "pos_points": set(),
+            "neg_points": set(),
+            "pos_boxes": set(),
+            "neg_boxes": set(),
+            "pos_lassos": set(),
+            "neg_lassos": set(),
+            "pos_scribbles": set(),
+            "neg_scribbles": set(),
         }
 
         self._networks: Dict = {}
@@ -340,6 +340,16 @@ class BasicInferTask(InferTask):
     def detector(self, data=None) -> Optional[Callable]:
         return None
 
+    # When adding any type of prompt:
+    def add_prompt(self, prompt, prompt_type):
+        prompt_hash = hashlib.md5(np.array(prompt).tobytes()).hexdigest()
+        self._session_used_interactions[prompt_type].add(prompt_hash)
+
+    # When checking any type of prompt:
+    def is_prompt_used(self, prompt, prompt_type):
+        prompt_hash = hashlib.md5(np.array(prompt).tobytes()).hexdigest()
+        return prompt_hash in self._session_used_interactions[prompt_type]
+
     def __call__(
         self, request, callbacks: Union[Dict[CallBackTypes, Any], None] = None
     ) -> Union[Dict, Tuple[str, Dict[str, Any]]]:
@@ -470,32 +480,15 @@ class BasicInferTask(InferTask):
                 for key, lst in self._session_used_interactions.items():
                     lst.clear()
                 session.reset_interactions()
-                logger.info("Only for first object")
                 return f'/code/predictions/init.nii.gz', final_result_json
-                self._session_used_interactions["objects"].append(1)
-            elif 'nextObj' not in data:
-                if 1 not in self._session_used_interactions["objects"]:
-                    for key, lst in self._session_used_interactions.items():
-                        lst.clear()
-                    session.reset_interactions()
-                    logger.info("Only for first object")
-                    self._session_used_interactions["objects"].append(1)         
-            elif data['nextObj'] not in self._session_used_interactions["objects"]:
-                temp_interactions_objects = copy.deepcopy(self._session_used_interactions["objects"])
-                for key, lst in self._session_used_interactions.items():
-                    lst.clear()
-                session.reset_interactions()
-                logger.info("From second object")
-                self._session_used_interactions["objects"] = temp_interactions_objects
-                self._session_used_interactions["objects"].append(data['nextObj'])
 
-            
+            logger.info(f"interactions in _session_used_interactions: {self._session_used_interactions}")
             if len(data['pos_points'])!=0:
                 result_json["pos_points"]=copy.deepcopy(data["pos_points"])
                 
                 for point in data['pos_points']:
-                    if not any(np.array_equal(point, x) for x in self._session_used_interactions["pos_points"]):
-                        self._session_used_interactions["pos_points"].append(point)
+                    if not self.is_prompt_used(point, "pos_points"):
+                        self.add_prompt(point, "pos_points")
                         if instanceNumber > instanceNumber2:
                             point[2]=img_np.shape[1]-1-point[2]
                         session.add_point_interaction(tuple(point[::-1]), include_interaction=True)
@@ -505,8 +498,8 @@ class BasicInferTask(InferTask):
                 result_json["neg_points"]=copy.deepcopy(data["neg_points"])
                 
                 for point in data['neg_points']:
-                    if not any(np.array_equal(point, x) for x in self._session_used_interactions["neg_points"]):
-                        self._session_used_interactions["neg_points"].append(point)
+                    if not self.is_prompt_used(point, "neg_points"):
+                        self.add_prompt(point, "neg_points")
                         if instanceNumber > instanceNumber2:
                             point[2]=img_np.shape[1]-1-point[2]
                         session.add_point_interaction(tuple(point[::-1]), include_interaction=False)
@@ -516,8 +509,8 @@ class BasicInferTask(InferTask):
                 result_json["pos_boxes"]=copy.deepcopy(data["pos_boxes"])
                 
                 for box in data['pos_boxes']:
-                    if not any(np.array_equal(box, x) for x in self._session_used_interactions["pos_boxes"]):
-                        self._session_used_interactions["pos_boxes"].append(box)
+                    if not self.is_prompt_used(box, "pos_boxes"):
+                        self.add_prompt(box, "pos_boxes")
                         if instanceNumber > instanceNumber2:
                             box[0][2]=img_np.shape[1]-1-box[0][2]
                             box[1][2]=img_np.shape[1]-1-box[1][2]
@@ -530,8 +523,8 @@ class BasicInferTask(InferTask):
                 result_json["neg_boxes"]=copy.deepcopy(data["neg_boxes"])
                 
                 for box in data['neg_boxes']:
-                    if not any(np.array_equal(box, x) for x in self._session_used_interactions["neg_boxes"]):
-                        self._session_used_interactions["neg_boxes"].append(box)
+                    if not self.is_prompt_used(box, "neg_boxes"):
+                        self.add_prompt(box, "neg_boxes")
                         if instanceNumber > instanceNumber2:
                             box[0][2]=img_np.shape[1]-1-box[0][2]
                             box[1][2]=img_np.shape[1]-1-box[1][2]
@@ -545,8 +538,8 @@ class BasicInferTask(InferTask):
                 result_json["pos_lassos"]=copy.deepcopy(data["pos_lassos"])
                 
                 for lasso in data['pos_lassos']:
-                    if not any(np.array_equal(lasso, x) for x in self._session_used_interactions["pos_lassos"]):
-                        self._session_used_interactions["pos_lassos"].append(lasso)
+                    if not self.is_prompt_used(lasso, "pos_lassos"):
+                        self.add_prompt(lasso, "pos_lassos")
                         lasso = get_scanline_filled_points_3d(clean_and_densify_polyline(lasso))
                         lassoMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
                         
@@ -568,8 +561,8 @@ class BasicInferTask(InferTask):
                 result_json["neg_lassos"]=copy.deepcopy(data["neg_lassos"])
                 
                 for lasso in data['neg_lassos']:
-                    if not any(np.array_equal(lasso, x) for x in self._session_used_interactions["neg_lassos"]):
-                        self._session_used_interactions["neg_lassos"].append(lasso)
+                    if not self.is_prompt_used(lasso, "neg_lassos"):
+                        self.add_prompt(lasso, "neg_lassos")
                         lasso = get_scanline_filled_points_3d(clean_and_densify_polyline(lasso))
                         lassoMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
                         filled_indices = np.asarray(lasso)
@@ -590,8 +583,8 @@ class BasicInferTask(InferTask):
                 result_json["pos_scribbles"]=copy.deepcopy(data["pos_scribbles"])
                 
                 for scribble in data['pos_scribbles']:
-                    if not any(np.array_equal(scribble, x) for x in self._session_used_interactions["pos_scribbles"]):
-                        self._session_used_interactions["pos_scribbles"].append(scribble)
+                    if not self.is_prompt_used(scribble, "pos_scribbles"):
+                        self.add_prompt(scribble, "pos_scribbles")
                         scribble = clean_and_densify_polyline(scribble)
                         scribbleMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
 
@@ -623,16 +616,18 @@ class BasicInferTask(InferTask):
                             #if z0 < 0 or y0 < 0 or x0 < 0 or z1 > scribbleMask.shape[0] or y1 > scribbleMask.shape[1] or x1 > scribbleMask.shape[2]:
                             #    continue  # Skip out-of-bounds
                             scribbleMask[z0c:z1c, y0c:y1c, x0c:x1c] |= kernel[kz0:kz1, ky0:ky1, kx0:kx1]
-                    
+                        scribble_start = time.time()
                         session.add_scribble_interaction(scribbleMask, include_interaction=True)
+                        logger.info(f"only for add scribble: {time.time()-scribble_start} secs")
+                        logger.info(f"just after add scribble: {time.time()-start} secs")
                         logger.info("Add a scribble")
 
             if len(data['neg_scribbles'])!=0:
                 result_json["neg_scribbles"]=copy.deepcopy(data["neg_scribbles"])
                 
                 for scribble in data['neg_scribbles']:
-                    if not any(np.array_equal(scribble, x) for x in self._session_used_interactions["neg_scribbles"]):
-                        self._session_used_interactions["neg_scribbles"].append(scribble)
+                    if not self.is_prompt_used(scribble, "neg_scribbles"):
+                        self.add_prompt(scribble, "neg_scribbles")
                         scribble = clean_and_densify_polyline(scribble)
                         scribbleMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
 
