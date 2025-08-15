@@ -166,6 +166,10 @@ function uint8ToString(u8: Uint8Array): string {
   
     if (!metaObj) throw new Error("meta part not found");
     if (!seg.length) throw new Error("seg part not found");
+
+    if (typeof metaObj === 'string') {
+      metaObj = JSON.parse(metaObj);
+    }
   
     return { meta: metaObj, seg };
   }

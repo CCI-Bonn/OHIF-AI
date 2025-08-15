@@ -95,11 +95,10 @@ class ResultType(str, Enum):
 
 
 def send_response(datastore, result, output, background_tasks):
-    res_img = result.get("file") if result.get("file") else result.get("label")
-    res_tag = result.get("tag")
+    res_img = result.get("file") if result.get("file") is not None else result.get("label")
     res_json = result.get("params")
 
-    if res_img:
+    if type(res_img) == str:
         if not os.path.exists(res_img):
             res_img = datastore.get_label_uri(res_img, res_tag)
         else:
@@ -107,8 +106,8 @@ def send_response(datastore, result, output, background_tasks):
 
     if output == "json":
         return res_json
-
-    m_type = get_mime_type(res_img)
+    if type(res_img) == str:
+        m_type = get_mime_type(res_img)
 
     if output == "image":
         return FileResponse(res_img, media_type=m_type, filename=os.path.basename(res_img))
@@ -123,10 +122,10 @@ def send_response(datastore, result, output, background_tasks):
             logger.info("File response!")
             if type(res_dicom_seg) != str:
                 fields = {
-                    "prompt_info": json.dumps(result.get("params").get("prompt_info")),
-                    "flipped": json.dumps(result.get("params").get("flipped")),
-                    "nninter_elapsed": json.dumps(result.get("params").get("nninter_elapsed")),
-                    "label_name": result.get("params").get("label_name")
+                    "prompt_info": json.dumps(res_json.get("prompt_info")),
+                    "flipped": json.dumps(res_json.get("flipped")),
+                    "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
+                    "label_name": res_json.get("label_name")
                 }
                 
                 boundary = f"monai-{secrets.token_hex(12)}"
@@ -217,15 +216,23 @@ def run_inference(
         image_path = instance.datastore().get_image_uri(image)
         #suffixes = [".nii", ".nii.gz", ".nrrd"]
         #image_path = [image_uri.replace(suffix, "") for suffix in suffixes if image_uri.endswith(suffix)][0]
-        res_img = result.get("file") if result.get("file") else result.get("label")
-        if res_img == "/code/predictions/reset.nii.gz" or res_img == "/code/predictions/init.nii.gz":
-            result["dicom_seg"] = res_img
-            return send_response(instance.datastore(), result, output, background_tasks)
+        res_img = result.get("file") if result.get("file") is not None else result.get("label")
+        if type(res_img) == str and (res_img == "/code/predictions/reset.nii.gz" or res_img == "/code/predictions/init.nii.gz"):
+            return Response(res_img, media_type="application/json")
         #dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, prompt_json, use_itk=True)
         #with open(dicom_seg_file, "rb") as f:
         #    dicom_bytes = f.read()
         #result["dicom_seg"] = dicom_bytes
-        result["dicom_seg"] = res_img
+        res_json = result.get("params")
+        fields = {
+                    "prompt_info": json.dumps(res_json.get("prompt_info")),
+                    "flipped": json.dumps(res_json.get("flipped")),
+                    "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
+                    "label_name": res_json.get("label_name")
+                }
+        boundary = f"monai-{secrets.token_hex(12)}"
+        meta_json = json.dumps(fields, separators=(",", ":"))
+        return stream_multipart(meta_json, res_img)
 
     return send_response(instance.datastore(), result, output, background_tasks)
 
