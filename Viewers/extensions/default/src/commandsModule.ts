@@ -1229,6 +1229,7 @@ const commandsModule = ({
           if(flipped){
             derivedImages_new.reverse();
           }
+          console.log(`After reverse: ${(Date.now() - start)/1000} Seconds`);
           for (let i = 0; i < derivedImages_new.length; i++) {
             const voxelManager = derivedImages_new[i]
               .voxelManager as csTypes.IVoxelManager<number>;
@@ -1241,6 +1242,7 @@ const commandsModule = ({
             }
 
           }
+          console.log(`After slice assignment: ${(Date.now() - start)/1000} Seconds`);
 
 
           //let filteredDerivedImages = derivedImages;
@@ -1264,6 +1266,7 @@ const commandsModule = ({
               }
             });
           }
+          console.log(`After refinement: ${(Date.now() - start)/1000} Seconds`);
           //let filteredDerivedImages = derivedImages;
           let filteredDerivedImages = derivedImages.filter(image => {
             const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
