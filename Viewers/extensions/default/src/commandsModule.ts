@@ -806,9 +806,13 @@ const commandsModule = ({
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
       const displaySets = displaySetService.activeDisplaySets;
       const displaySetInstanceUID = displaySetInstanceUIDs[0];
-      const currentDisplaySets = displaySets.filter(e => {
-        return e.displaySetInstanceUID == displaySetInstanceUID;
-      })[0];
+      let currentDisplaySets;
+      for (let i = 0; i < displaySets.length; i++) {
+        if (displaySets[i].displaySetInstanceUID == displaySetInstanceUID) {
+          currentDisplaySets = displaySets[i];
+          break; // Exit early once found
+        }
+      }
       if(currentDisplaySets === undefined || currentDisplaySets.Modality === "SEG"){
         return;
       }
@@ -1014,14 +1018,12 @@ const commandsModule = ({
       .map(e => { return e.label })
 
       // Hide the measurements after inference
-      currentMeasurements
-        .filter(e => {
-          return e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true;
-        })
-        .map(e => { return e.uid })
-        .forEach(e => {
-          measurementService.toggleVisibilityMeasurement(e, false);
-        });
+      for (let i = 0; i < currentMeasurements.length; i++) {
+        const e = currentMeasurements[i];
+        if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true) {
+          measurementService.toggleVisibilityMeasurement(e.uid, false);
+        }
+      }
 
       // Force a re-render of the segmentation table after a short delay
       setTimeout(() => {
@@ -1118,17 +1120,21 @@ const commandsModule = ({
 
             let existing = false;
             // Find existing segmentation with matching seriesInstanceUid
-            for (let seg of segs) {
-              let existingseriesInstanceUid = undefined;
-              if(seg.cachedStats?.seriesInstanceUid === undefined){
-                Object.values(seg.segments).forEach(segment => {
-                  if(segment.cachedStats?.algorithmType !== undefined){
+            for (let i = 0; i < segs.length; i++) {
+              const seg = segs[i];
+              let existingseriesInstanceUid = seg.cachedStats?.seriesInstanceUid;
+              
+              if (existingseriesInstanceUid === undefined) {
+                const segments = Object.values(seg.segments);
+                for (let j = 0; j < segments.length; j++) {
+                  const segment = segments[j];
+                  if (segment.cachedStats?.algorithmType !== undefined) {
                     existingseriesInstanceUid = segment.cachedStats.algorithmType;
+                    break;
                   }
-                });
-              } else {
-                existingseriesInstanceUid = seg.cachedStats.seriesInstanceUid;
+                }
               }
+              
               if (existingseriesInstanceUid === currentDisplaySets.SeriesInstanceUID) {
                 existingSegments = seg.segments || {};
                 existingColorLUT = seg.colorLUT || [];
@@ -1162,13 +1168,17 @@ const commandsModule = ({
 
                 let representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId })
                 let visibleSegments = []
-                representations.forEach(representation => {
-                  visibleSegments.push(
-                    ...Object.values(representation.segments).filter(
-                      segment => segment.visible === true
-                    )
-                  );
-                });
+                for (let i = 0; i < representations.length; i++) {
+                  const representation = representations[i];
+                  const segments = Object.values(representation.segments);
+                  
+                  for (let j = 0; j < segments.length; j++) {
+                    const segment = segments[j];
+                    if (segment.visible === true) {
+                      visibleSegments.push(segment);
+                    }
+                  }
+                }
                 if (visibleSegments.length == 1){
                   segmentNumber = visibleSegments[0].segmentIndex;
                 }
@@ -1181,14 +1191,13 @@ const commandsModule = ({
                   });
                 }
               }
-              currentMeasurements
-              .filter(e => {
-                return e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true;
-              })
-              .forEach(e => {
-                e.metadata.SegmentNumber = segmentNumber;
-                e.metadata.segmentationId = segmentationId;
-              });
+              for (let i = 0; i < currentMeasurements.length; i++) {
+                const e = currentMeasurements[i];
+                if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true) {
+                  e.metadata.SegmentNumber = segmentNumber;
+                  e.metadata.segmentationId = segmentationId;
+                }
+              }
             }
 
 
@@ -1235,44 +1244,29 @@ const commandsModule = ({
               .voxelManager as csTypes.IVoxelManager<number>;
             let scalarData = voxelManager.getScalarData();
             const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
-            for (let j = 0; j < scalarData.length; j++) {
-              if (sliceData[j] === 1) {
-                scalarData[j] = segmentNumber;
-              }
-            }
-
+            voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
           }
           console.log(`After slice assignment: ${(Date.now() - start)/1000} Seconds`);
 
 
-          //let filteredDerivedImages = derivedImages;
+          let filteredDerivedImages = []
           // If toolboxState.getRefineNew() is true, exclude derivedImages that contain segmentNumber
           if (!toolboxState.getRefineNew() && derivedImages.length > 0) {
-            derivedImages.forEach(image => {
+            for (let i=0; i<derivedImages.length; i++){
+              let image = derivedImages[i];
               const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
               const scalarData = voxelManager.getScalarData();
-              // Check if scalarData contains segmentNumber and update in one pass
-              let hasSegment = false;
-              for (let i = 0; i < scalarData.length; i++) {
-                if (scalarData[i] === segmentNumber) {
-                  hasSegment = true;
-                  scalarData[i] = 0;
-                }
+              if (scalarData.some(value => value === segmentNumber)){
+                voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
+                continue;
               }
-              
-              // Only update voxelManager if changes were made
-              if (hasSegment) {
-                voxelManager.setScalarData(scalarData);
+              if (scalarData.some(value => value !== 0)){
+                filteredDerivedImages.push(image);
               }
-            });
+            }            
           }
-          console.log(`After refinement: ${(Date.now() - start)/1000} Seconds`);
-          //let filteredDerivedImages = derivedImages;
-          let filteredDerivedImages = derivedImages.filter(image => {
-            const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
-            const scalarData = voxelManager.getScalarData();
-            return scalarData.some(value => value !== 0);
-          });
+          console.log(`After refinement & filteredDerivedImages: ${(Date.now() - start)/1000} Seconds`);
+
           let merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
           
                     
@@ -1352,13 +1346,17 @@ const commandsModule = ({
           await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
           await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
           // Recover the visibility of the segments
-          representations.forEach(representation => {
-            if(Object.keys(representation.segments).length > 0){
-              Object.values(representation.segments).forEach(segment => {
+          for (let i = 0; i < representations.length; i++) {
+            const representation = representations[i];
+            const segments = Object.values(representation.segments);
+            
+            if (segments.length > 0) {
+              for (let j = 0; j < segments.length; j++) {
+                const segment = segments[j];
                 servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, segment.segmentIndex, segment.visible);
-              });
+              }
             }
-          });
+          }
           //commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: segmentationId })
           //await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
           //  segmentationId: segmentationId,
