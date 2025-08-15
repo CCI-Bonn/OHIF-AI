@@ -306,7 +306,7 @@ class MONAILabelApp:
         else:
             result_file_name, result_json = task(request)
 
-        return {"label": label_id, "file": result_file_name, "params": result_json}
+        return {"file": result_file_name, "params": result_json}
 
     def batch_infer(self, request, datastore=None):
         """

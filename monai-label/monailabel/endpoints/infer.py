@@ -95,7 +95,7 @@ class ResultType(str, Enum):
 
 
 def send_response(datastore, result, output, background_tasks):
-    res_img = result.get("file") if result.get("file") is not None else result.get("label")
+    res_img = result.get("file") if result.get("file") is not None
     res_json = result.get("params")
 
     if type(res_img) == str:
