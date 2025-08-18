@@ -125,6 +125,7 @@ def send_response(datastore, result, output, background_tasks):
                     "prompt_info": json.dumps(res_json.get("prompt_info")),
                     "flipped": json.dumps(res_json.get("flipped")),
                     "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
+                    "sam_elapsed": json.dumps(res_json.get("sam_elapsed")),
                     "label_name": res_json.get("label_name")
                 }
                 
@@ -228,6 +229,7 @@ def run_inference(
                     "prompt_info": json.dumps(res_json.get("prompt_info")),
                     "flipped": json.dumps(res_json.get("flipped")),
                     "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
+                    "sam_elapsed": json.dumps(res_json.get("sam_elapsed")),
                     "label_name": res_json.get("label_name")
                 }
         boundary = f"monai-{secrets.token_hex(12)}"

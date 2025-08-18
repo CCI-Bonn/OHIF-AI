@@ -31,6 +31,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   const [liveMode, setLiveMode] = useState(toolboxState.getLiveMode());
   const [posNeg, setPosNeg] = useState(toolboxState.getPosNeg());
   const [refineNew, setRefineNew] = useState(toolboxState.getRefineNew());
+  const [nnInterSam2, setNnInterSam2] = useState(toolboxState.getNnInterSam2());
 
   // Sync local state with global state changes
   useEffect(() => {
@@ -38,6 +39,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
       setLiveMode(toolboxState.getLiveMode());
       setPosNeg(toolboxState.getPosNeg());
       setRefineNew(toolboxState.getRefineNew());
+      setNnInterSam2(toolboxState.getNnInterSam2());
     };
 
     // Update immediately
@@ -138,6 +140,36 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [refineNew]);
+
+  // Keyboard hotkey handler for nnInter/SAM2 toggle
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Check if the pressed key is 'T' or 't'
+      if ((event.key === 'T' || event.key === 't')) {
+        // Only trigger if we're not typing in an input field
+        const activeElement = document.activeElement;
+        const isInputField = activeElement?.tagName === 'INPUT' || 
+                           activeElement?.tagName === 'TEXTAREA' || 
+                           (activeElement as HTMLElement)?.contentEditable === 'true';
+        
+        if (!isInputField) {
+          event.preventDefault();
+          const newNnInterSam2 = !nnInterSam2;
+          setNnInterSam2(newNnInterSam2);
+          toolboxState.setNnInterSam2(newNnInterSam2);
+          console.log('nnInter/SAM2 toggled via hotkey (r):', newNnInterSam2);
+        }
+      }
+    };
+
+    // Add event listener
+    document.addEventListener('keydown', handleKeyDown);
+
+    // Cleanup
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [nnInterSam2]);
 
   const { toolbarButtons: toolboxSections, onInteraction } = useToolbar({
     servicesManager,
@@ -251,6 +283,18 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
                         setRefineNew(checked);
                         toolboxState.setRefineNew(checked);
                         console.log('Refine/New:', checked);
+                      }}
+                     />
+                   </div>
+                   <div className="flex items-center gap-2">
+                     <Label htmlFor="nninter-sam2">nnInter/SAM2</Label>
+                     <Switch
+                       id="nninter-sam2"
+                       checked={nnInterSam2}
+                       onCheckedChange={(checked) => {
+                        setNnInterSam2(checked);
+                        toolboxState.setNnInterSam2(checked);
+                        console.log('nnInter/SAM2:', checked);
                       }}
                      />
                    </div>

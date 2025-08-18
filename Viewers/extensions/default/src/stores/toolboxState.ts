@@ -2,6 +2,7 @@
 let liveMode = false;
 let posNeg = false;
 let refineNew = false;
+let nnInterSam2 = false; // Add new state for nnInter/SAM2 toggle
 
 let shownWarning = false;
 
@@ -22,6 +23,11 @@ export const toolboxState = {
         toolboxState.setPosNeg(false);
         shownWarning = !enabled;
     }
+  },
+  // Add new methods for nnInter/SAM2 toggle
+  getNnInterSam2: () => nnInterSam2,
+  setNnInterSam2: (enabled: boolean) => {
+    nnInterSam2 = enabled;
   },
   getShownWarning: () => shownWarning,
   markShownWarning: () => {

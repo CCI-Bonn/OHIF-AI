@@ -689,14 +689,14 @@ class BasicInferTask(InferTask):
             #f'/code/predictions/nninter_{image_series_desc}.nii.gz'
             return pred, final_result_json
 
-        
-        if "pos_points" in data:
+        #SAM2
+        if nnInter == False:
             start = time.time()
             #result_json["pos_points"]=data["pos_points"]
             result_json["pos_points"]=copy.deepcopy(data["pos_points"])
             result_json["neg_points"]=copy.deepcopy(data["neg_points"])
-            #SAM2
-            #img = sitk.ReadImage(data['image'])
+            result_json["pos_boxes"]=copy.deepcopy(data["pos_boxes"])
+            
             len_z = img.GetSize()[2]
             len_y = img.GetSize()[1]
             len_x = img.GetSize()[0]
@@ -782,14 +782,14 @@ class BasicInferTask(InferTask):
             ann_frame_list = np.unique(np.array(list(map(lambda x: x[2], result_json['pos_points'])), dtype=np.int16))
             ann_frame_list_neg = np.unique(np.array(list(map(lambda x: x[2], result_json['neg_points'])), dtype=np.int16))
 
-            if "boxes" not in result_json:
-                result_json["boxes"] = []            
-            if len(result_json["boxes"])!=0:
+            if "pos_boxes" not in result_json:
+                result_json["pos_boxes"] = []            
+            if len(result_json["pos_boxes"])!=0:
                 #result_json["boxes"]=data["boxes"]
                 #logger.info(f"prompt boxes: {result_json["boxes"]}")
                 # Temp remove pos points
                 #data['pos_points']=[]
-                ann_frame_list_box = np.unique(np.array(list(map(lambda x: x[2], [x for xs in result_json["boxes"] for x in xs])), dtype=np.int16))
+                ann_frame_list_box = np.unique(np.array(list(map(lambda x: x[2], [x for xs in result_json["pos_boxes"] for x in xs])), dtype=np.int16))
                 ann_frame_list = np.unique(np.concatenate((ann_frame_list, ann_frame_list_box, ann_frame_list_neg)))
 
             for i in range(len(ann_frame_list)):
@@ -824,7 +824,7 @@ class BasicInferTask(InferTask):
                 logger.info(f"z axis slice: value: {value}")
                 pos_points = np.array([i[0:2] for i in result_json['pos_points'] if i[2]==value], dtype=np.int16)
                 neg_points = np.array([i[0:2] for i in result_json['neg_points'] if i[2]==value], dtype=np.int16)
-                pre_boxes = np.array([i for i in result_json["boxes"] if i[0][2]==value], dtype=np.int16)
+                pre_boxes = np.array([i for i in result_json["pos_boxes"] if i[0][2]==value], dtype=np.int16)
 
                 if len(neg_points) >0 and len(pos_points) >0:
                     points = np.concatenate((pos_points, neg_points), axis=0)
@@ -882,10 +882,10 @@ class BasicInferTask(InferTask):
 
             for i in video_segments.keys():
                 pred[i]=video_segments[i][1][0].astype(int)
-            pred_itk = sitk.GetImageFromArray(pred)
-            pred_itk.CopyInformation(img)
-            pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
-            sitk.WriteImage(pred_itk, f'/code/predictions/sam_{image_series_desc}.nii.gz')
+            #pred_itk = sitk.GetImageFromArray(pred)
+            #pred_itk.CopyInformation(img)
+            #pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
+            #sitk.WriteImage(pred_itk, f'/code/predictions/sam_{image_series_desc}.nii.gz')
 
             sam_elapsed = time.time() - start
             logger.info(f"sam latency : {sam_elapsed} (sec)")
@@ -893,10 +893,18 @@ class BasicInferTask(InferTask):
             final_result_json["prompt_info"] = result_json
             final_result_json["sam_elapsed"] = sam_elapsed
             
+            if instanceNumber > instanceNumber2:
+                final_result_json["flipped"] = True
+            else:
+                final_result_json["flipped"] = False
+
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            final_result_json["label_name"] = f"sam2_pred_{timestamp}"
+            
             logger.info(f"Result json info: {final_result_json}")
             # result_json contains prompt information
 
-            return f'/code/predictions/sam_{image_series_desc}.nii.gz', final_result_json
+            return pred, final_result_json
 
     def run_pre_transforms(self, data: Dict[str, Any], transforms):
         pre_cache: List[Any] = []
