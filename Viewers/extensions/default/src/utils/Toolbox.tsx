@@ -52,8 +52,8 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   // Keyboard hotkey handler for Live Mode toggle
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if the pressed key is 'L' or 'l' with Ctrl modifier
-      if ((event.key === 'L' || event.key === 'l') && event.ctrlKey && !event.altKey && !event.metaKey) {
+      // Check if the pressed key is 'Q' or 'q'
+      if ((event.key === 'Q' || event.key === 'q')) {
         // Only trigger if we're not typing in an input field
         const activeElement = document.activeElement;
         const isInputField = activeElement?.tagName === 'INPUT' || 
@@ -65,7 +65,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
           const newLiveMode = !liveMode;
           setLiveMode(newLiveMode);
           toolboxState.setLiveMode(newLiveMode);
-          console.log('Live mode toggled via hotkey (Ctrl+L):', newLiveMode);
+          console.log('Live mode toggled via hotkey (q):', newLiveMode);
         }
       }
     };
@@ -82,8 +82,8 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   // Keyboard hotkey handler for Pos/Neg toggle
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if the pressed key is 'P' or 'p' with Ctrl modifier
-      if ((event.key === 'P' || event.key === 'p') && event.ctrlKey && !event.altKey && !event.metaKey) {
+      // Check if the pressed key is 'W' or 'w'
+      if ((event.key === 'W' || event.key === 'w')) {
         // Only trigger if we're not typing in an input field
         const activeElement = document.activeElement;
         const isInputField = activeElement?.tagName === 'INPUT' || 
@@ -95,7 +95,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
           const newPosNeg = !posNeg;
           setPosNeg(newPosNeg);
           toolboxState.setPosNeg(newPosNeg);
-          console.log('Pos/Neg toggled via hotkey (Ctrl+P):', newPosNeg);
+          console.log('Pos/Neg toggled via hotkey (w):', newPosNeg);
         }
       }
     };
@@ -112,8 +112,8 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   // Keyboard hotkey handler for Refine/New toggle
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if the pressed key is 'T' or 't' with Ctrl modifier
-      if ((event.key === 'T' || event.key === 't') && event.ctrlKey && !event.altKey && !event.metaKey) {
+      // Check if the pressed key is 'E' or 'e'
+      if ((event.key === 'E' || event.key === 'e')) {
         // Only trigger if we're not typing in an input field
         const activeElement = document.activeElement;
         const isInputField = activeElement?.tagName === 'INPUT' || 
@@ -125,7 +125,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
           const newRefineNew = !refineNew;
           setRefineNew(newRefineNew);
           toolboxState.setRefineNew(newRefineNew);
-          console.log('Refine/New toggled via hotkey (Ctrl+T):', newRefineNew);
+          console.log('Refine/New toggled via hotkey (e):', newRefineNew);
         }
       }
     };

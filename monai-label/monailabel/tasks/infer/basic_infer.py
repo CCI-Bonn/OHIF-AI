@@ -459,21 +459,12 @@ class BasicInferTask(InferTask):
         logger.info(f"Before nnInter: {before_nnInter-begin} secs")
         if nnInter:
             start = time.time()
-            img_np = sitk.GetArrayFromImage(img)[None]  # Ensure shape (1, x, y, z)
-            if rescale_slope != 1.0 or rescale_intercept != 0.0:
-                img_np = img_np * rescale_slope + rescale_intercept
-            logger.info(f"img shape {img_np.shape}")
-            #img = np.random.rand(1, 3, 128, 160).astype(np.float32)
+            img_np = sitk.GetArrayFromImage(img)[None]
             # Validate input dimensions
             if img_np.ndim != 4:
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
             
             if nnInter == "init":
-                if contrast_window != None and contrast_center !=None:
-                    img_np = img_np.astype(float)
-                    np.clip(img_np, contrast_center-contrast_window/2, contrast_center+contrast_window/2, out=img_np)   
-                    img_np = (img_np - (contrast_center-contrast_window/2))/contrast_window * 255
-                    img_np = img_np.astype(np.uint8)
                 session.set_image(img_np)
                 session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
                 logger.info("Only first time, no image at nnInter or iamge changed")

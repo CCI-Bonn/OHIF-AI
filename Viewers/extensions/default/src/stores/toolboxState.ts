@@ -3,6 +3,8 @@ let liveMode = false;
 let posNeg = false;
 let refineNew = false;
 
+let shownWarning = false;
+
 export const toolboxState = {
   getLiveMode: () => liveMode,
   setLiveMode: (enabled: boolean) => {
@@ -18,6 +20,11 @@ export const toolboxState = {
     if (enabled) {
         commandsManager.run('resetNninter', {clearMeasurements: true});
         toolboxState.setPosNeg(false);
+        shownWarning = !enabled;
     }
+  },
+  getShownWarning: () => shownWarning,
+  markShownWarning: () => {
+    shownWarning = true;
   },
 }; 

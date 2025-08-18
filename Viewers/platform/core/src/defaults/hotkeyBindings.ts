@@ -27,7 +27,7 @@ const bindings = [
   {
     commandName: 'rotateViewportCW',
     label: 'Rotate Right',
-    keys: ['r'],
+    keys: ['ctrl+r'],
     isEditable: true,
   },
   {
@@ -192,19 +192,19 @@ const bindings = [
   {
     commandName: 'nninter',
     label: 'NNInteractive',
-    keys: ['ctrl+n'],
+    keys: ['r'],
     isEditable: true,
   },
   {
     commandName: 'resetNninter',
     label: 'Reset NNInteractive',
-    keys: ['ctrl+r'],
+    keys: ['g'],
     isEditable: true,
   },
   {
     commandName: 'interpolateScrollForMarkerLabelmap',
     label: 'Interpolate Scroll',
-    keys: ['n'],
+    keys: ['ctrl+n'],
     isEditable: true,
   },
   {
@@ -237,34 +237,34 @@ const bindings = [
     commandName: 'setToolActive',
     commandOptions: { toolName: 'Probe2' },
     label: 'Point',
-    keys: ['s'],
+    keys: ['a'],
     isEditable: true,
   },
   {
     commandName: 'setToolActive',
     commandOptions: { toolName: 'RectangleROI2' },
     label: 'Bounding Box',
-    keys: ['d'],
+    keys: ['s'],
     isEditable: true,
   },
   {
     commandName: 'setToolActive',
     commandOptions: { toolName: 'PlanarFreehandROI3' },
     label: 'Lasso',
-    keys: ['f'],
+    keys: ['d'],
     isEditable: true,
   },
   {
     commandName: 'setToolActive',
     commandOptions: { toolName: 'PlanarFreehandROI2' },
     label: 'Scribble',
-    keys: ['g'],
+    keys: ['f'],
     isEditable: true,
   },
   {
     commandName: 'addNewSegment',
     label: 'Add New Segment',
-    keys: ['a'],
+    keys: ['y'],
     isEditable: true,
   },
 ];

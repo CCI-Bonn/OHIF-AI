@@ -1182,13 +1182,14 @@ const commandsModule = ({
                 if (visibleSegments.length == 1){
                   segmentNumber = visibleSegments[0].segmentIndex;
                 }
-                if (visibleSegments.length > 1){
+                if (visibleSegments.length > 1 && !toolboxState.getShownWarning()){
                   uiNotificationService.show({
                     title: 'Overwrite Segment warning',
                     message: segmentNumber + 'will be overwritten. Highest Segment Number will be used, please hide other segments if you want to specify the segment. and Do not forget reset nnInteractive',
                     type: 'warning',
-                    duration: 7000,
+                    duration: 4000,
                   });
+                  toolboxState.markShownWarning();
                 }
               }
               for (let i = 0; i < currentMeasurements.length; i++) {
@@ -1257,7 +1258,11 @@ const commandsModule = ({
               const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
               const scalarData = voxelManager.getScalarData();
               if (scalarData.some(value => value === segmentNumber)){
-                voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
+                const updatedScalarData = scalarData.map(v => v === segmentNumber ? 0 : v)
+                voxelManager.setScalarData(updatedScalarData);
+                if (updatedScalarData.some(value => value !== 0)){
+                  filteredDerivedImages.push(image);
+                }
                 continue;
               }
               if (scalarData.some(value => value !== 0)){
