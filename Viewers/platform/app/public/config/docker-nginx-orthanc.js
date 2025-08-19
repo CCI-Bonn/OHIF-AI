@@ -9,6 +9,7 @@ window.config = {
   showCPUFallbackMessage: true,
   showLoadingIndicator: true,
   disableConfirmationPrompts: true,
+  showPatientInfo: 'disabled',
   measurementTrackingMode: 'none',
   experimentalStudyBrowserSort: false,
   strictZSpacingForVolumeViewport: true,
