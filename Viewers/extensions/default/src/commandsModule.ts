@@ -1361,6 +1361,8 @@ const commandsModule = ({
                 filteredDerivedImages.push(image);
               }
             }            
+          } else if (derivedImages.length > 0){
+            filteredDerivedImages = derivedImages;
           }
           console.log(`After refinement & filteredDerivedImages: ${(Date.now() - start)/1000} Seconds`);
 
