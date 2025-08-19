@@ -1,5 +1,6 @@
 // Simple global state for toolbox settings
-let liveMode = false;
+// Default to true for live mode
+let liveMode = true;
 let posNeg = false;
 let refineNew = false;
 let nnInterSam2 = false; // Add new state for nnInter/SAM2 toggle

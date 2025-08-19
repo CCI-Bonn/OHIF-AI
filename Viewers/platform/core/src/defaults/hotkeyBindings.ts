@@ -244,7 +244,7 @@ const bindings = [
     commandName: 'setToolActive',
     commandOptions: { toolName: 'RectangleROI2' },
     label: 'Bounding Box',
-    keys: ['s'],
+    keys: ['f'],
     isEditable: true,
   },
   {
@@ -258,7 +258,7 @@ const bindings = [
     commandName: 'setToolActive',
     commandOptions: { toolName: 'PlanarFreehandROI2' },
     label: 'Scribble',
-    keys: ['f'],
+    keys: ['s'],
     isEditable: true,
   },
   {
