@@ -600,6 +600,29 @@ const commandsModule = ({
       .filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true; })
       .map(e => { return e.label })
 
+      // Hide the measurements after inference
+      for (let i = 0; i < currentMeasurements.length; i++) {
+        const e = currentMeasurements[i];
+        if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true) {
+          measurementService.toggleVisibilityMeasurement(e.uid, false);
+        }
+      }
+
+      // Force a re-render of the segmentation table after a short delay
+      setTimeout(() => {
+        // This will trigger a re-render of components that depend on measurement state
+        const event = new Event('measurement-state-changed');
+        document.dispatchEvent(event);
+      }, 200);
+      if (pos_points.length == 0 && neg_points.length == 0 && pos_boxes.length == 0 && text_prompts.length == 0){
+        uiNotificationService.show({
+          title: 'Prompt warning',
+          message: 'Only pos/neg points and bbox are available for SAM2',
+          type: 'warning',
+          duration: 4000,
+        });
+        return;
+      }
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
