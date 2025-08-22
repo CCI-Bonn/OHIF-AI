@@ -961,7 +961,6 @@ class SegmentationService extends PubSubService {
    const selectedMeasurements = measurements.filter(e => e.metadata.segmentationId === segmentationId && e.metadata.SegmentNumber === segmentIndex)
    selectedMeasurements.forEach(e => {
     this.servicesManager.services.measurementService.toggleVisibilityMeasurement(e.uid, !e.isVisible)
-    e.metadata.isDisabled = !e.isVisible
    })
    
    // Trigger an event to notify UI components about measurement visibility change

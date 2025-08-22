@@ -642,14 +642,14 @@ const commandsModule = ({
 
       const pos_points = currentMeasurements
         .filter(e => {
-          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => {
           return Object.values(e.data)[0].index;
         });
       const neg_points = currentMeasurements
         .filter(e => {
-          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => {
           return Object.values(e.data)[0].index;
@@ -657,7 +657,7 @@ const commandsModule = ({
 
       const pos_boxes = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'RectangleROI2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'RectangleROI2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => { 
           return Object.values(e.data)[0].pointsInShape 
@@ -668,13 +668,13 @@ const commandsModule = ({
 
 
       const text_prompts = measurementService.getMeasurements()
-      .filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true; })
+      .filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false; })
       .map(e => { return e.label })
 
       // Hide the measurements after inference
       for (let i = 0; i < currentMeasurements.length; i++) {
         const e = currentMeasurements[i];
-        if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true) {
+        if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID) {
           measurementService.toggleVisibilityMeasurement(e.uid, false);
         }
       }
@@ -1148,14 +1148,14 @@ const commandsModule = ({
 
       const pos_points = currentMeasurements
         .filter(e => {
-          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => {
           return Object.values(e.data)[0].index;
         });
       const neg_points = currentMeasurements
         .filter(e => {
-          return e.toolName === 'Probe2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'Probe2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => {
           return Object.values(e.data)[0].index;
@@ -1163,7 +1163,7 @@ const commandsModule = ({
 
       const pos_boxes = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => { 
           return Object.values(e.data)[0].pointsInShape 
@@ -1172,7 +1172,7 @@ const commandsModule = ({
 
       const neg_boxes = currentMeasurements
       .filter(e => { 
-        return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+        return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
       })
       .map(e => { 
         return Object.values(e.data)[0].pointsInShape 
@@ -1181,7 +1181,7 @@ const commandsModule = ({
 
       const pos_lassos = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.boundary 
@@ -1190,7 +1190,7 @@ const commandsModule = ({
 
       const neg_lassos = currentMeasurements
       .filter(e => { 
-        return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+        return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
       })
       .map(e => { 
         return Object.values(e.data)[0]?.boundary 
@@ -1199,7 +1199,7 @@ const commandsModule = ({
 
       const pos_scribbles = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.scribble 
@@ -1208,7 +1208,7 @@ const commandsModule = ({
 
       const neg_scribbles = currentMeasurements
         .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.isDisabled !== true && e.metadata.SegmentNumber === segmentNumber;
+          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => { 
           return Object.values(e.data)[0]?.scribble 
@@ -1222,7 +1222,7 @@ const commandsModule = ({
       // Hide the measurements after inference
       for (let i = 0; i < currentMeasurements.length; i++) {
         const e = currentMeasurements[i];
-        if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.isDisabled !== true) {
+        if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID) {
           measurementService.toggleVisibilityMeasurement(e.uid, false);
         }
       }
