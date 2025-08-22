@@ -5,7 +5,7 @@ let posNeg = false;
 let refineNew = false;
 let nnInterSam2 = false; // Add new state for nnInter/SAM2 toggle
 
-let shownWarning = false;
+let currentActiveSegment = 1;
 
 export const toolboxState = {
   getLiveMode: () => liveMode,
@@ -20,9 +20,8 @@ export const toolboxState = {
   setRefineNew: (enabled: boolean) => {
     refineNew = enabled;
     if (enabled) {
-        commandsManager.run('resetNninter', {clearMeasurements: true});
+        commandsManager.run('resetNninter');
         toolboxState.setPosNeg(false);
-        shownWarning = !enabled;
     }
   },
   // Add new methods for nnInter/SAM2 toggle
@@ -30,8 +29,8 @@ export const toolboxState = {
   setNnInterSam2: (enabled: boolean) => {
     nnInterSam2 = enabled;
   },
-  getShownWarning: () => shownWarning,
-  markShownWarning: () => {
-    shownWarning = true;
+  getCurrentActiveSegment: () => currentActiveSegment,
+  setCurrentActiveSegment: (segment: number) => {
+    currentActiveSegment = segment;
   },
 }; 

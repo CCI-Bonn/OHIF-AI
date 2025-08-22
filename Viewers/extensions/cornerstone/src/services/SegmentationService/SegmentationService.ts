@@ -1214,6 +1214,32 @@ class SegmentationService extends PubSubService {
       console.warn('No center found for segmentation', segmentationId, segmentIndex);
       return;
     }
+    if (typeof center === 'number') {
+          // need to find which viewports are displaying the segmentation
+        const viewportIds = viewportId
+        ? [viewportId]
+        : this.getViewportIdsWithSegmentation(segmentationId);
+
+      viewportIds.forEach(viewportId => {
+        const { viewport } = getEnabledElementByViewportId(viewportId);
+        if (viewport.type === ViewportType.STACK) {
+          (viewport as csTypes.IStackViewport).setImageIdIndex(Math.round(center));
+          viewport.render()
+        } else {
+          console.warn('Does not support other viewports than stack')
+        }
+        highlightSegment &&
+          this.highlightSegment(
+            segmentationId,
+            segmentIndex,
+            viewportId,
+            highlightAlpha,
+            animationLength,
+            highlightHideOthers
+          );
+      });
+      return;
+    }
 
     const { world } = center as { world: csTypes.Point3 };
 

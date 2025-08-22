@@ -156,9 +156,9 @@ function modeFactory({ modeConfiguration }) {
         'RectangleROI2',
         'sam2',
         'nninter',
-        'resetNninter',
-        'jumpToSegment',
-        'toggleCurrentSegment',
+        //'resetNninter',
+        //'jumpToSegment',
+        //'toggleCurrentSegment',
       ]);
       toolbarService.createButtonSection('segmentationToolboxUtilitySection', [
         //'LabelmapSlicePropagation',
