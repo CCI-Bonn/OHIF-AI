@@ -1350,6 +1350,15 @@ function commandsModule({
 
       if (displaySetInstanceUIDs) {
         segmentationService.remove(segmentationId);
+        // update the segmentationId of the measurements fore newly created segmentation
+        measurementService
+        .getMeasurements()
+        .filter(measurement => {
+          return measurement.metadata.segmentationId === segmentationId;
+        })
+        .forEach(measurement => {
+          measurement.metadata.segmentationId = displaySetInstanceUIDs[0];
+        });
         viewportGridService.setDisplaySetsForViewport({
           viewportId: viewportGridService.getActiveViewportId(),
           displaySetInstanceUIDs,

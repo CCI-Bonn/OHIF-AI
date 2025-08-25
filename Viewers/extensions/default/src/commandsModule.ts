@@ -1366,7 +1366,11 @@ const commandsModule = ({
             const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
             if (sliceData.some(v => v === 1)){
               voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
-              z_range.push(i);
+              if (flipped) {
+                z_range.push(derivedImages_new.length - i - 1);
+              } else {
+                z_range.push(i);
+              }
             }
           }
           console.log(`After slice assignment: ${(Date.now() - start)/1000} Seconds`);
