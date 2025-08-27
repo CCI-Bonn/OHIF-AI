@@ -773,7 +773,6 @@ const commandsModule = ({
             
             if (existingseriesInstanceUid === currentDisplaySets.SeriesInstanceUID) {
               existingSegments = activeSegmentation.segments || {};
-              existingColorLUT = activeSegmentation.colorLUT || [];
               segmentationId = activeSegmentation.segmentationId;
               segImageIds = activeSegmentation.representationData.Labelmap.imageIds;
               existing = true;
@@ -1315,7 +1314,6 @@ const commandsModule = ({
             //);
 
             let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
-            let existingColorLUT: number[][] = [];
             
             let segImageIds = [];
 
@@ -1336,7 +1334,6 @@ const commandsModule = ({
               
               if (existingseriesInstanceUid === currentDisplaySets.SeriesInstanceUID) {
                 existingSegments = activeSegmentation.segments || {};
-                existingColorLUT = activeSegmentation.colorLUT || [];
                 segmentationId = activeSegmentation.segmentationId;
                 segImageIds = activeSegmentation.representationData.Labelmap.imageIds;
                 existing = true;
