@@ -24,7 +24,7 @@ const DefaultStatsList = () => {
 
   // Sort namedStats entries by order property
   const sortedStats = Object.entries(namedStats)
-    .filter(([_, stat]) => stat && stat.value !== null)
+    .filter(([_, stat]) => stat && stat.value !== null && stat.name !== 'bidirectional')
     .sort((a, b) => {
       const orderA = a[1]?.order ?? Number.MAX_SAFE_INTEGER;
       const orderB = b[1]?.order ?? Number.MAX_SAFE_INTEGER;

@@ -29,8 +29,15 @@ export const CustomSegmentStatisticsHeader = ({
   if (!namedStats) {
     return null;
   }
+  let bidirectional = namedStats.bidirectional;
 
-  const bidirectional = namedStats.bidirectional;
+  if (!bidirectional) {
+    commandsManager.run('runSegmentBidirectional', {
+      segmentationId,
+      segmentIndex,
+    });
+    bidirectional = namedStats.bidirectional;
+  }
 
   if (!bidirectional) {
     return (
@@ -42,18 +49,11 @@ export const CustomSegmentStatisticsHeader = ({
                 variant="ghost"
                 size="sm"
                 className="text-primary flex items-center gap-2"
-                onClick={() => {
-                  commandsManager.run('runSegmentBidirectional', {
-                    segmentationId,
-                    segmentIndex,
-                  });
-                }}
               >
                 <Icons.ToolBidirectionalSegment className="h-5 w-5" />
-                <span>{t('Compute Largest Bidirectional')}</span>
+                <span>{t('Cannot compute bidirectional measurement')}</span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{t('Add bidirectional measurement')}</TooltipContent>
           </Tooltip>
         </div>
         <Separator className="bg-input" />
@@ -99,7 +99,6 @@ export const CustomSegmentStatisticsHeader = ({
 
                   segmentationService.addOrUpdateSegmentation({
                     segmentationId,
-                    segmentIndex,
                   });
                 }}
               >

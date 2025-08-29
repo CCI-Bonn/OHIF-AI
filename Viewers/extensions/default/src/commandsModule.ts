@@ -25,6 +25,7 @@ import { cache, imageLoader, metaData, Types as csTypes, utilities as csUtils } 
 import { adaptersSEG } from '@cornerstonejs/adapters';
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 import MonaiLabelClient from '../../monai-label/src/services/MonaiLabelClient';
+import { updateSegmentationStats } from '../../cornerstone/src/utils/updateSegmentationStats';
 import axios from 'axios';
 import { toolboxState } from './stores/toolboxState';
 import { parseMultipart } from './utils/multipart';
@@ -1414,10 +1415,10 @@ const commandsModule = ({
               algorithmType: currentDisplaySets.SeriesInstanceUID,
               algorithmName: "nninter_"+nninter_elapsed,
               description: prompt_info,
-              center:  z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0
+              center:  z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0,
             }
           };
-
+          console.log(`Before add or update segs: ${(Date.now() - start)/1000} Seconds`);
           // Get the representations for the segmentation to recover the visibility of the segments
           const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId })
           if(segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing){
@@ -1446,7 +1447,8 @@ const commandsModule = ({
         }else{
           // Comment out at the moment (necessary for hiding previous segments), may need to uncomment some weird bugs.
           // servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
-          
+          const readableText = customizationService.getCustomization('panelSegmentation.readableText');
+
           // Update the segmentation data
           csToolsSegmentation.updateSegmentations([
             {
@@ -1463,7 +1465,18 @@ const commandsModule = ({
               },
             },
           ]);
+          // Update the segmentation stats
+          Promise.resolve().then(() => 
+            updateSegmentationStats({
+              segmentation: activeSegmentation,
+              segmentationId,
+              readableText,
+            })
+          ).catch(error => {
+            console.warn('Failed to update segmentation stats:', error);
+          });  
           }
+          console.log(`After add and update segs: ${(Date.now() - start)/1000} Seconds`);
           servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
           toolboxState.setCurrentActiveSegment(segmentNumber);
           await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
@@ -1472,6 +1485,7 @@ const commandsModule = ({
           if(toolboxState.getRefineNew()){
             toolboxState.setRefineNew(false);
           }
+          console.log(`After Reps: ${(Date.now() - start)/1000} Seconds`);
           // semi-hack: to render segmentation properly on the current image
           let somewhereIndex = 0;
           if(currentImageIdIndex === 0){
@@ -1479,6 +1493,7 @@ const commandsModule = ({
           }
           await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
           await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
+          console.log(`After semi hack: ${(Date.now() - start)/1000} Seconds`);
           // Recover the visibility of the segments
           for (let i = 0; i < representations.length; i++) {
             const representation = representations[i];

@@ -86,12 +86,12 @@ export async function updateSegmentationStats({
 
       if (readableText.volume) {
         // Add volume if it exists but isn't in the array
-        if (segmentStats.volume && !namedStats.volume) {
+        if (segmentStats.volume) {
           namedStats.volume = {
             name: 'volume',
             label: 'Volume',
-            value: segmentStats.volume.value,
-            unit: segmentStats.volume.unit,
+            value: segmentStats.volume.value/1000,
+            unit: 'cm³',//segmentStats.volume.unit,
             order: Object.keys(readableText).indexOf('volume'),
           };
         }

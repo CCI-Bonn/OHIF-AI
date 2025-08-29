@@ -178,12 +178,12 @@ function commandsModule({
       });
 
       // get the active segmentIndex bidirectional annotation and jump to it
-      const activeBidirectional = bidirectionalData.find(
-        measurement => measurement.segmentIndex === targetIndex
-      );
-      commandsManager.run('jumpToMeasurement', {
-        uid: activeBidirectional.annotationUID,
-      });
+      // const activeBidirectional = bidirectionalData.find(
+      //   measurement => measurement.segmentIndex === targetIndex
+      // );
+      // commandsManager.run('jumpToMeasurement', {
+      //   uid: activeBidirectional.annotationUID,
+      // });
     },
     interpolateLabelmap: () => {
       const { segmentationId, segmentIndex } = _getActiveSegmentationInfo();
