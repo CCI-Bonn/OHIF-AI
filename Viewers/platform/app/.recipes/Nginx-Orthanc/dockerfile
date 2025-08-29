@@ -32,6 +32,9 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/cursors/eleme
 
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/helpers/clearSegmentValue.js
+
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getSegmentLargestBidirectional.js
+
 RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
 # To change color of negative prompts
@@ -48,6 +51,9 @@ COPY ./backup/esm/elementCursor.js /usr/src/app/node_modules/@cornerstonejs/tool
 
 COPY ./backup/esm/SegmentationRenderingEngine.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/
 COPY ./backup/esm/clearSegmentValue.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/helpers/
+
+COPY ./backup/esm/getSegmentLargestBidirectional.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getSegmentLargestBidirectional.js
+
 COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
 # Copy the rest of the application code

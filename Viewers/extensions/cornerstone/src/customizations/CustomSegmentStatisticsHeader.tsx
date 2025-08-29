@@ -1,5 +1,5 @@
 import * as cornerstoneTools from '@cornerstonejs/tools';
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Separator, Button, Tooltip, TooltipTrigger, TooltipContent, Icons } from '@ohif/ui-next';
 import { useTranslation } from 'react-i18next';
 import { roundNumber } from '@ohif/core/src/utils';
@@ -20,6 +20,9 @@ export const CustomSegmentStatisticsHeader = ({
   const { servicesManager, commandsManager } = useSystem();
   const { segmentationService } = servicesManager.services;
   const { t } = useTranslation('SegmentationTable');
+  
+  // Add state to track if bidirectional has been computed
+  const [bidirectionalComputed, setBidirectionalComputed] = useState(false);
 
   const segmentation = segmentationService.getSegmentation(segmentationId);
   const segment = segmentation.segments[segmentIndex];
@@ -29,17 +32,20 @@ export const CustomSegmentStatisticsHeader = ({
   if (!namedStats) {
     return null;
   }
-  let bidirectional = namedStats.bidirectional;
+  
 
-  if (!bidirectional) {
-    commandsManager.run('runSegmentBidirectional', {
-      segmentationId,
-      segmentIndex,
-    });
-    bidirectional = namedStats.bidirectional;
-  }
+  // Use useEffect to run bidirectional computation only once
+  useEffect(() => {
+    if (!namedStats.bidirectional && !bidirectionalComputed) {
+      setBidirectionalComputed(true);
+      commandsManager.run('runSegmentBidirectional', {
+        segmentationId,
+        segmentIndex,
+      });
+    }
+  }, [namedStats.bidirectional, bidirectionalComputed, segmentationId, segmentIndex, commandsManager]);
 
-  if (!bidirectional) {
+  if (!namedStats.bidirectional) {
     return (
       <div className="-mt-2 space-y-2">
         <div className="flex">
@@ -48,10 +54,9 @@ export const CustomSegmentStatisticsHeader = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="text-primary flex items-center gap-2"
+                className="text-primary flex items-center px-0"
               >
-                <Icons.ToolBidirectionalSegment className="h-5 w-5" />
-                <span>{t('Cannot compute bidirectional measurement')}</span>
+                <span>{t('Can\'t compute bidirectional measurement')}</span>
               </Button>
             </TooltipTrigger>
           </Tooltip>
@@ -60,6 +65,7 @@ export const CustomSegmentStatisticsHeader = ({
       </div>
     );
   }
+  const bidirectional = namedStats.bidirectional;
 
   const { value, unit } = bidirectional;
   const maxMajor = value.maxMajor;
