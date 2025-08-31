@@ -14,6 +14,7 @@ from PIL import Image
 from tqdm import tqdm
 
 import SimpleITK as sitk
+from skimage.transform import resize
 
 
 def get_sdpa_settings():
@@ -336,25 +337,26 @@ def load_medical_slices(
     #else:
     #    raise NotImplementedError("Only JPEG frames are supported at this moment")
 
-    img = video_path if isinstance(video_path, sitk.Image) else sitk.ReadImage(video_path)
-    img_z = img.GetSize()[2]
-    img_y = img.GetSize()[1]
-    img_x = img.GetSize()[0]
-    new_size = [1024, 1024, img_z]
-    reference_image = sitk.Image(new_size, img.GetPixelIDValue())
-    reference_image.SetOrigin(img.GetOrigin())
-    reference_image.SetDirection(img.GetDirection())
-    reference_image.SetSpacing(
-        [
-            sz * spc / nsz
-            for nsz, sz, spc in zip(new_size, img.GetSize(), img.GetSpacing())
-        ]
-    )
-
-    # Resample without any smoothing.
-    #sitk.Show(sitk.Resample(grid_image, reference_image), "resampled without smoothing")
-    img = sitk.Resample(img, reference_image)#, centered_transform, sitk.sitkLinear, 0.0)
-    img_npy = sitk.GetArrayFromImage(img)
+    #img = video_path if isinstance(video_path, sitk.Image) else sitk.ReadImage(video_path)
+    #img_z = img.GetSize()[2]
+    #img_y = img.GetSize()[1]
+    #img_x = img.GetSize()[0]
+    #new_size = [1024, 1024, img_z]
+    #reference_image = sitk.Image(new_size, img.GetPixelIDValue())
+    #reference_image.SetOrigin(img.GetOrigin())
+    #reference_image.SetDirection(img.GetDirection())
+    #reference_image.SetSpacing(
+    #    [
+    #        sz * spc / nsz
+    #        for nsz, sz, spc in zip(new_size, img.GetSize(), img.GetSpacing())
+    #    ]
+    #)
+#
+    ## Resample without any smoothing.
+    ##sitk.Show(sitk.Resample(grid_image, reference_image), "resampled without smoothing")
+    #img = sitk.Resample(img, reference_image)#, centered_transform, sitk.sitkLinear, 0.0)
+    img_npy = resize(video_path, (video_path.shape[0], 1024, 1024),order=1, mode='reflect', anti_aliasing=True)
+    #img_npy = video_path #sitk.GetArrayFromImage(img)
 
 
 
@@ -376,8 +378,8 @@ def load_medical_slices(
     images = images.to(torch.float32)
     images = torch.unsqueeze(images, 1).expand(-1, 3,-1,-1).clone()
 
-    video_height = img_y
-    video_width = img_x
+    video_height = video_path.shape[1]
+    video_width = video_path.shape[2]
 
     # normalize by mean and std
     images -= mean_np#torch.mean(images)

@@ -446,20 +446,40 @@ class BasicInferTask(InferTask):
             image_series_desc = dcm_img_sample[0x0008103e].value
             
         # --- Load Input Image (Example with SimpleITK) ---
-        reader.SetFileNames(dicom_filenames)
-        #reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
-        img = reader.Execute()
+        #reader.SetFileNames(dicom_filenames)
+        ##reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
+        #img = reader.Execute()
+#
+        #rescale_slope = float(img.GetMetaData("0028|1053")) if img.HasMetaDataKey("0028|1053") else 1.0
+        #rescale_intercept = float(img.GetMetaData("0028|1052")) if img.HasMetaDataKey("0028|1052") else 0.0
+#
+        #logger.info(f"rescale_slope: {rescale_slope}")
+        #logger.info(f"rescale_intercept: {rescale_intercept}")
+        # --- Load Input Image (Example with PyDICOM) ---
+        dsets = [dcmread(f, force=True) for f in dicom_filenames]
+        # Sanity: dimensions
+        rows = {int(getattr(d, "Rows", 0)) for d in dsets}
+        cols = {int(getattr(d, "Columns", 0)) for d in dsets}
+        if len(rows) != 1 or len(cols) != 1:
+            raise ValueError(f"Inconsistent slice shapes: Rows={rows}, Cols={cols}")
+        # Stack pixels
+        vol_slices = []
+        invert_monochrome1=False
+        for ds in dsets:
+            arr = ds.pixel_array  # needs pylibjpeg/openjpeg or GDCM if compressed
+            if invert_monochrome1 and getattr(ds, "PhotometricInterpretation", "") == "MONOCHROME1":
+                bits = int(getattr(ds, "BitsStored", arr.dtype.itemsize * 8))
+                maxv = (1 << bits) - 1
+                arr = (maxv - arr).astype(arr.dtype, copy=False)
+            vol_slices.append(arr)
+        img = np.stack(vol_slices, axis=0)  # (Z,Y,X)
 
-        rescale_slope = float(img.GetMetaData("0028|1053")) if img.HasMetaDataKey("0028|1053") else 1.0
-        rescale_intercept = float(img.GetMetaData("0028|1052")) if img.HasMetaDataKey("0028|1052") else 0.0
 
-        logger.info(f"rescale_slope: {rescale_slope}")
-        logger.info(f"rescale_intercept: {rescale_intercept}")
         before_nnInter = time.time()
         logger.info(f"Before nnInter: {before_nnInter-begin} secs")
         if nnInter:
             start = time.time()
-            img_np = sitk.GetArrayFromImage(img)[None]
+            img_np = img[None]
             # Validate input dimensions
             if img_np.ndim != 4:
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
@@ -697,9 +717,9 @@ class BasicInferTask(InferTask):
             result_json["neg_points"]=copy.deepcopy(data["neg_points"])
             result_json["pos_boxes"]=copy.deepcopy(data["pos_boxes"])
             
-            len_z = img.GetSize()[2]
-            len_y = img.GetSize()[1]
-            len_x = img.GetSize()[0]
+            len_z = img.shape[0]
+            len_y = img.shape[1]
+            len_x = img.shape[2]
             logger.info(f"len Z Y X: {len_z}, {len_y}, {len_x}")
             
             file_name = data['image'].split('/')[-1]
@@ -722,7 +742,7 @@ class BasicInferTask(InferTask):
                     text = data["texts"]#]"a organ. a bone. a heart"
                     logger.info(f"text prompt: {text}")
 
-                    img_np_3d = sitk.GetArrayFromImage(img)
+                    img_np_3d = img #sitk.GetArrayFromImage(img)
                     img_z = img_np_3d.shape[0]
                     img_y = img_np_3d.shape[1]
                     img_x = img_np_3d.shape[2]
@@ -793,21 +813,6 @@ class BasicInferTask(InferTask):
                 ann_frame_list = np.unique(np.concatenate((ann_frame_list, ann_frame_list_box, ann_frame_list_neg)))
 
             for i in range(len(ann_frame_list)):
-
-                reader = sitk.ImageSeriesReader()
-                dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
-                dcm_img_sample = dcmread(dicom_filenames[0], stop_before_pixels=True)
-                dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
-                
-                instanceNumber = None
-                instanceNumber2 = None
-
-                if 0x00200013 in dcm_img_sample.keys():
-                    instanceNumber = dcm_img_sample[0x00200013].value
-                logger.info(f"Prompt First InstanceNumber: {instanceNumber}")
-                if 0x00200013 in dcm_img_sample_2.keys():
-                    instanceNumber2 = dcm_img_sample_2[0x00200013].value
-                logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
 
                 if instanceNumber < instanceNumber2:
                     ann_frame_idx = ann_frame_list[i]
