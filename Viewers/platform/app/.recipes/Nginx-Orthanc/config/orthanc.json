@@ -34,7 +34,9 @@
   "RegisteredUsers": {
     "test": "test"
   },
-  "DicomModalities": {},
+  "DicomModalities": {
+    "XNAT": [ "XNAT", "172.18.0.4", 8104 ]
+  },
   "DicomModalitiesInDatabase": false,
   "DicomAlwaysAllowEcho": true,
   "DicomAlwaysAllowStore": true,

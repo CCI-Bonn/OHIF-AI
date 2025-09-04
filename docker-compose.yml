@@ -19,7 +19,7 @@ services:
       - ./Viewers/platform/app/.recipes/Nginx-Orthanc/logs/nginx:/var/logs/nginx
     ports:
       - '1025:1025' # SSL
-      - '80:1026' # Web
+      - '1026:1026' # Web
     depends_on:
       #   - keycloak
       - orthanc
@@ -64,7 +64,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['7:1']
+      #        device_ids: ['7:1']
               capabilities: [gpu]  # Request GPUs for this service
     shm_size: '10gb' #runtime: nvidia  # Use NVIDIA runtime
     ports:
@@ -73,3 +73,56 @@ services:
       - ohif_viewer
       - orthanc
     restart: on-failure
+  
+  xnat-web:
+    container_name: xnat-web
+    build:
+      context: ./xnat-docker/xnat
+      args:
+        XNAT_VERSION: ${XNAT_VERSION}
+        XNAT_SMTP_ENABLED: ${XNAT_SMTP_ENABLED}
+        XNAT_SMTP_HOSTNAME: ${XNAT_SMTP_HOSTNAME}
+        XNAT_SMTP_PORT: ${XNAT_SMTP_PORT}
+        XNAT_SMTP_AUTH: ${XNAT_SMTP_AUTH}
+        XNAT_SMTP_USERNAME: ${XNAT_SMTP_USERNAME}
+        XNAT_SMTP_PASSWORD: ${XNAT_SMTP_PASSWORD}
+        XNAT_SMTP_START_TLS: ${XNAT_SMTP_START_TLS}
+        XNAT_DATASOURCE_DRIVER: ${XNAT_DATASOURCE_DRIVER}
+        XNAT_DATASOURCE_URL: ${XNAT_DATASOURCE_URL}
+        XNAT_DATASOURCE_USERNAME: ${XNAT_DATASOURCE_USERNAME}
+        XNAT_DATASOURCE_PASSWORD: ${XNAT_DATASOURCE_PASSWORD}
+        TOMCAT_XNAT_FOLDER: ${TOMCAT_XNAT_FOLDER}
+        XNAT_ROOT: ${XNAT_ROOT}
+        XNAT_HOME: ${XNAT_HOME}
+        XNAT_EMAIL: ${XNAT_EMAIL}
+    ports:
+      - 8104:8104
+    volumes:
+      - ./xnat-docker/xnat/plugins:${XNAT_HOME}/plugins
+      - ./xnat-docker/xnat-data/home/logs:${XNAT_HOME}/logs
+      - ./xnat-docker/xnat-data/archive:${XNAT_ROOT}/archive
+      - ./xnat-docker/xnat-data/build:${XNAT_ROOT}/build
+      - ./xnat-docker/xnat-data/cache:${XNAT_ROOT}/cache
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - xnat-db
+    environment:
+      - CATALINA_OPTS=-Xms${XNAT_MIN_HEAP} -Xmx${XNAT_MAX_HEAP} -Dxnat.home=${XNAT_HOME}
+      - XNAT_HOME=${XNAT_HOME}
+
+  xnat-db:
+    container_name: xnat-db
+    image: postgres:${PG_VERSION}
+    expose:
+      - 5432
+    volumes:
+      - ./xnat-docker/postgres-data:/var/lib/postgresql/data
+      # 
+      - ./xnat-docker/postgres:/docker-entrypoint-initdb.d
+    environment:
+      - TZ=Europe/Berlin
+      - POSTGRES_PASSWORD=${XNAT_DATASOURCE_ADMIN_PASSWORD}
+      - POSTGRES_DB=${XNAT_DATASOURCE_NAME}
+      # variables for the sql script
+      - XNAT_DATASOURCE_USERNAME=${XNAT_DATASOURCE_USERNAME}
+      - XNAT_DATASOURCE_PASSWORD=${XNAT_DATASOURCE_PASSWORD}
