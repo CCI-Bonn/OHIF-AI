@@ -50,8 +50,8 @@ import requests
 from PIL import Image
 #from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection 
 
-sam2_checkpoint = "/code/checkpoints/sam2_hiera_large.pt"
-model_cfg = "sam2_hiera_l.yaml"
+sam2_checkpoint = "/code/checkpoints/sam2.1_hiera_tiny.pt"
+model_cfg = "configs/sam2.1/sam2.1_hiera_t.yaml"
 
 #from transformers import BertConfig, BertModel
 #from transformers import AutoTokenizer
@@ -105,7 +105,7 @@ checkpoint = '/code/checkpoints/best_coco_bbox_mAP_epoch_11_dilated_b_l_k_curr_t
 # Initialize the DetInferencer
 #inferencer = DetInferencer(model=config_path, weights=checkpoint, palette='random')
 
-predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
+predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, vos_optimized=False)
 
 logger = logging.getLogger(__name__)
 
@@ -770,10 +770,11 @@ class BasicInferTask(InferTask):
                         boxes_text = [int_list_with_z[i:i + 2] for i in range(0, len(int_list_with_z), 2)]
                         logger.info(f"boxes from text: {boxes_text}")
                         data['boxes']=boxes_text[:1]
-
-                inference_state = predictor.init_state(video_path=img, clip_low=contrast_center-contrast_window/2, clip_high=contrast_center+contrast_window/2)
+                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    inference_state = predictor.init_state(video_path=img, clip_low=contrast_center-contrast_window/2, clip_high=contrast_center+contrast_window/2)
             else:    
-                inference_state = predictor.init_state(video_path=img)
+                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    inference_state = predictor.init_state(video_path=img)
             #predictor.reset_state(inference_state)
             #breakpoint()
             ann_obj_id = 1
@@ -844,7 +845,8 @@ class BasicInferTask(InferTask):
                     boxes = pre_boxes[:,:,:-1].reshape(pre_boxes.shape[0],-1)
                     logger.info(f"ann_frame_list: {ann_frame_list}")
                     logger.info(f"ann_frame_idx: {ann_frame_idx}")
-                    _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+                    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
                         inference_state=inference_state,
                         frame_idx=ann_frame_idx,
                         obj_id=ann_obj_id,
@@ -853,7 +855,8 @@ class BasicInferTask(InferTask):
                         box=boxes
                     )
                 else:
-                    _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+                    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
                         inference_state=inference_state,
                         frame_idx=ann_frame_idx,
                         obj_id=ann_obj_id,
@@ -867,16 +870,18 @@ class BasicInferTask(InferTask):
                         for i, out_obj_id in enumerate(out_obj_ids)
                     }
             if "one" not in data:
-                for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state, reverse=False):
-                    video_segments[out_frame_idx] = {
-                        out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
-                        for i, out_obj_id in enumerate(out_obj_ids)
-                    }
-                for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state, reverse=True):
-                    video_segments[out_frame_idx] = {
-                        out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
-                        for i, out_obj_id in enumerate(out_obj_ids)
-                    }
+                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state, reverse=False):
+                        video_segments[out_frame_idx] = {
+                            out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                            for i, out_obj_id in enumerate(out_obj_ids)
+                        }
+                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state, reverse=True):
+                        video_segments[out_frame_idx] = {
+                            out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                            for i, out_obj_id in enumerate(out_obj_ids)
+                        }
 
             pred = np.zeros((len_z, len_y, len_x))
 

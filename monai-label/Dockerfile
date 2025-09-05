@@ -34,8 +34,10 @@ RUN pip install "git+https://github.com/lvis-dataset/lvis-api.git"
 COPY ./monai-label/. ./
 
 ENV WEIGHTS_DIR="/code/checkpoints/"
-ENV WEIGHTS_URL="https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt"
-
+# SAM2 weights
+#ENV WEIGHTS_URL="https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt"
+# SAM2.1 weights
+ENV WEIGHTS_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
 RUN wget --directory-prefix ${WEIGHTS_DIR} ${WEIGHTS_URL}
 
 #ENV GD_URL="https://download.openmmlab.com/mmdetection/v3.0/mm_grounding_dino/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth"
