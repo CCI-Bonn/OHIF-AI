@@ -1,4 +1,4 @@
-# OHIF-SAM2
+# OHIF-AI
 
 [Paper, ISBI 2025](https://ieeexplore.ieee.org/document/10981119)
 
