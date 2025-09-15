@@ -159,6 +159,15 @@ function commandsModule({
 
         measurement.annotationUID = annotation.annotationUID;
 
+        const isVisible = cornerstoneTools.annotation.visibility.isAnnotationVisible(
+          annotation.annotationUID
+        );
+        if (isVisible) {
+          cornerstoneTools.annotation.visibility.setAnnotationVisibility(
+            annotation.annotationUID,
+            !isVisible
+          );
+        }
         // Update segmentation stats
         const updatedSegmentation = updateSegmentBidirectionalStats({
           segmentationId: targetId,
