@@ -29,7 +29,7 @@ const panelGroupDefinition = {
   right: {
     panelId: 'viewerLayoutResizableRightPanel',
     initialExpandedWidth: rightPanelInitialExpandedWidth,
-    minimumExpandedOffsetWidth: rightPanelInitialExpandedWidth + expandedInsideBorderSize,
+    minimumExpandedOffsetWidth: 145 + expandedInsideBorderSize,
     initialExpandedOffsetWidth: rightPanelInitialExpandedWidth + expandedInsideBorderSize,
     collapsedOffsetWidth: collapsedWidth + collapsedInsideBorderSize + collapsedOutsideBorderSize,
   },

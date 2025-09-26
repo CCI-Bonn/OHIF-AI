@@ -63,7 +63,10 @@ const commandsModule = ({
   measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENT_ADDED,
     (evt) => {
-      if (toolboxState.getLiveMode()) {
+      if (toolboxState.getLiveMode() &&
+      ['Probe2', 'PlanarFreehandROI2', 'PlanarFreehandROI3', 'RectangleROI2'].includes(
+        evt.measurement.toolName
+      )) {
         console.log('Live mode enabled, triggering nninter() for new measurement');
         // Use setTimeout to ensure the measurement is fully processed
         setTimeout(() => {
