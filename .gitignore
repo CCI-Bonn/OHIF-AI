@@ -4,6 +4,15 @@ Viewers/platform/app/node_modules
 Viewers/platform/cli/node_modules
 Viewers/platform/core/node_modules
 Viewers/addOns/externals/devDependencies/node_modules
+Viewers/extensions/cornerstone-dicom-pmap/node_modules
+Viewers/extensions/cornerstone-dicom-seg/node_modules/
+Viewers/extensions/cornerstone/node_modules/
+Viewers/modes/basic-dev-mode/node_modules/
+Viewers/modes/basic-test-mode/node_modules/
+Viewers/modes/longitudinal/node_modules/
+Viewers/modes/preclinical-4d/node_modules/
+Viewers/modes/tmtv/node_modules/
+Viewers/platform/ui-next/node_modules/
 
 # Secrets
 Viewers/platform/app/.recipes/Nginx-Orthanc/config/.htpasswd
@@ -11,6 +20,7 @@ Viewers/platform/app/.recipes/Nginx-Orthanc/config/.htpasswd
 # Output
 Viewers/build
 Viewers/dist
+Viewers/platform/app/dist/
 Viewers/docs/_book
 Viewers/src/version.js
 Viewers/junit.xml
