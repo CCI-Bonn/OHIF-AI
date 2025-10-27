@@ -670,10 +670,10 @@ const commandsModule = ({
 
 
 
-
-      const text_prompts = measurementService.getMeasurements()
-      .filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false; })
-      .map(e => { return e.label })
+      //Disable text prompts for SAM2
+      const text_prompts = []//currentMeasurements
+      //.filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
+      //.map(e => { return e.label })
 
       // Hide the measurements after inference
       for (let i = 0; i < currentMeasurements.length; i++) {
@@ -809,24 +809,39 @@ const commandsModule = ({
 
 
           let filteredDerivedImages = []
-          // If toolboxState.getRefineNew() is true, exclude derivedImages that contain segmentNumber
+          const imgLength = imageIds.length;
+          let updatedIndices = new Set<number>();
+
+          // If toolboxState.getRefineNew() is false (Refine), exclude derivedImages that contain segmentNumber
+          // Each derivedImage is binary mask of a single slice ([0],[0,1],[0,2],[0,3].. etc)
+          // derivedImages size is imgLength * the number of segment
+          // We need to filter out the derivedImages block that contain segmentNumber (consists of [0] or [0, segmentNumber] masks)
+          // If filter out which contains segmentNumber and all [0] masks, it can lead to incorrect calculation of the segment. e.g. bidirectional measurement
           if (!toolboxState.getRefineNew() && derivedImages.length > 0) {
+            let addFlag = true;
             for (let i=0; i<derivedImages.length; i++){
-              let image = derivedImages[i];
+              const image = derivedImages[i];
               const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
               const scalarData = voxelManager.getScalarData();
               if (scalarData.some(value => value === segmentNumber)){
                 const updatedScalarData = scalarData.map(v => v === segmentNumber ? 0 : v)
                 voxelManager.setScalarData(updatedScalarData);
-                if (updatedScalarData.some(value => value !== 0)){
-                  filteredDerivedImages.push(image);
+                if (addFlag) {
+                  for (let j = 0; j < imgLength; j++) {
+                    updatedIndices.add(Math.floor(i / imgLength) * imgLength + j);
+                  }
+                  addFlag = false;
                 }
-                continue;
+
               }
-              if (scalarData.some(value => value !== 0)){
-                filteredDerivedImages.push(image);
+            }
+            for (let i = 0; i < derivedImages.length; i++) {
+              if (!updatedIndices.has(i)) {
+                filteredDerivedImages.push(derivedImages[i]);
               }
             }            
+          } else if (derivedImages.length > 0) {
+            filteredDerivedImages = derivedImages;
           }
           console.log(`After refinement & filteredDerivedImages: ${(Date.now() - start)/1000} Seconds`);
 
@@ -1218,9 +1233,10 @@ const commandsModule = ({
       })
       .filter(Boolean)
 
-      const text_prompts = currentMeasurements
-      .filter(e => { return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID})
-      .map(e => { return e.label })
+      //Disable text prompts for nninteractive
+      const text_prompts = [] //currentMeasurements
+      //.filter(e => { return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID})
+      //.map(e => { return e.label })
 
       // Hide the measurements after inference
       for (let i = 0; i < currentMeasurements.length; i++) {

@@ -963,11 +963,6 @@ class SegmentationService extends PubSubService {
     this.servicesManager.services.measurementService.toggleVisibilityMeasurement(e.uid, !e.isVisible)
    })
    
-   // Trigger an event to notify UI components about measurement visibility change
-   this._broadcastEvent(this.EVENTS.MEASUREMENT_VISIBILITY_CHANGED, {
-     segmentationId,
-     segmentIndex
-   });
   }
 
   public getSegmentMeasurementVisibility(segmentationId: string, segmentIndex: number): boolean {
@@ -975,7 +970,7 @@ class SegmentationService extends PubSubService {
    const selectedMeasurements = measurements.filter(e => e.metadata.segmentationId === segmentationId && e.metadata.SegmentNumber === segmentIndex)
    
    if (selectedMeasurements.length === 0) {
-     return true; // Default to visible if no measurements found
+     return false; // Default to visible if no measurements found
    }
    
    // Return true if any measurement is visible, false if all are hidden

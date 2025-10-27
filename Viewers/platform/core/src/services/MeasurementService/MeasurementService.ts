@@ -1,6 +1,7 @@
 import log from '../../log';
 import guid from '../../utils/guid';
 import { PubSubService } from '../_shared/pubSubServiceInterface';
+import { visibility as csVisibility } from '@cornerstonejs/tools/annotation';
 
 /**
  * Measurement source schema
@@ -509,6 +510,18 @@ class MeasurementService extends PubSubService {
       }
 
       measurement.source = source;
+      // Make the measurement hidden when the annotation is initially loaded (created)
+      if (sourceAnnotationDetail.annotation.metadata.toolLoad === true && isUpdate === false) {
+      if (
+        csVisibility.isAnnotationVisible(sourceAnnotationDetail.annotation.annotationUID) === true
+      ) {
+        csVisibility.setAnnotationVisibility(
+          sourceAnnotationDetail.annotation.annotationUID,
+          false
+        );
+      }
+      measurement.isVisible = false;
+    }
     } catch (error) {
       // Todo: handle other
       this.unmappedMeasurements.set(sourceAnnotationDetail.uid, {
