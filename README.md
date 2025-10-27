@@ -49,27 +49,15 @@ You can select which model to use:
 
 ## Demo Video
 
-[![OHIF-SAM2 Demo](https://img.youtube.com/vi/oNDI-WBMWC0/0.jpg)](https://youtu.be/oNDI-WBMWC0)
+[![OHIF-AI Demo](https://img.youtube.com/vi/z3aq3yd-KRA/0.jpg)](https://youtu.be/z3aq3yd-KRA)
 
-[![Text prompt Demo](https://img.youtube.com/vi/lCZE3y52nec/0.jpg)](https://youtu.be/lCZE3y52nec)
 
 ## Highlights
 
-- All prompts (Positive, Negative Points and Bounding Boxes) from SAM2 are supported. 
-
-- Text prompt is additionally supported thanks to [GroundingDino](https://github.com/IDEA-Research/GroundingDINO) and [mmDetection](https://github.com/open-mmlab/mmdetection) Team.
-
-- Two SAM2 buttons are available: SAM2_one (faster) for the slices where prompts are given, SAM2 for all slices via propagation.
-
-- Multiple labels are supported - click nextObj button once it is done with the current label
 
 ## Updates
 
-- Integrated Text prompt
 
-- OHIF upgrade: 3.10-beta.48, cornerstone 2.0 -> Support partially 3D segmentation rendering
-
-- Fixed flipping segmentation issue
 
 ## Prerequisite
 
@@ -86,7 +74,7 @@ You can select which model to use:
 
 ## Next steps
 
-- Support SAM2 for any label anytime: Currently, if a user pass to the next Obj, the user cannot reuse SAM2 for the old label, only manually edit
+
 
 ## (potential) FAQ
 
