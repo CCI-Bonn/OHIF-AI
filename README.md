@@ -15,6 +15,7 @@ The tool provides 4 different prompt types for segmentation (shown in red boxes 
 
 ![All Prompts](docs/images/all_prompts.png)
 
+
 ### Running Inference
 
 After providing prompts, you can run inference by clicking one of the manual inference buttons located next to the red box:
@@ -22,6 +23,9 @@ After providing prompts, you can run inference by clicking one of the manual inf
 - **nnInteractive inference**: Click to run nnInteractive
 
 **Live Mode**: To avoid manually clicking the inference button every time, you can enable **Live Mode**. Once enabled, the model will automatically segment the target structure on every prompt you provide.
+
+![Output](docs/images/output.png)
+
 
 ### Positive and Negative Prompts
 
