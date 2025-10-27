@@ -75,7 +75,6 @@ You can select which model to use:
 ## Next steps
 
 
-
 ## (potential) FAQ
 
 - Q: Load library (libnvidia-ml.so) failed from NVIDIA Container Toolkit
