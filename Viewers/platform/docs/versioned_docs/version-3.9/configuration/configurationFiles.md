@@ -192,7 +192,6 @@ if auth headers are used, a preflight request is required.
 - `allowMultiSelectExport`: (default to false), if set to true, the user will be able to select the datasource to export the report to.
 - `activateViewportBeforeInteraction`: (default to true), if set to false, tools can be used directly without the need to click and activate the viewport.
 - `autoPlayCine`: (default to false), if set to true, data sets with the DICOM frame time tag (i.e. (0018,1063)) will auto play when displayed
-- `addWindowLevelActionMenu`: (default to true), if set to false, the window level action menu item is NOT added to the viewport action corners
 - `dangerouslyUseDynamicConfig`: Dynamic config allows user to pass `configUrl` query string. This allows to load config without recompiling application. If the `configUrl` query string is passed, the worklist and modes will load from the referenced json rather than the default .env config. If there is no `configUrl` path provided, the default behaviour is used and there should not be any deviation from current user experience.<br/>
 Points to consider while using `dangerouslyUseDynamicConfig`:<br/>
   - User have to enable this feature by setting `dangerouslyUseDynamicConfig.enabled:true`. By default it is `false`.
@@ -307,6 +306,44 @@ reasons:
 
 However, if you would like to get compressed data in a specific transfer syntax, you can modify the `acceptHeader` configuration or
 `requestTransferSyntaxUID` configuration.
+
+## Default Initial Query
+The default initial query for the worklist can be set as a session key in the configuration file.
+For example, the following configuration automatically searches for patient names containing `Test`.
+
+```javascript
+if (!window.location.search) {
+  window.sessionStorage.setItem(
+    'queryFilterValues',
+    JSON.stringify({
+      patientName: 'Test',
+    })
+  );
+}
+```
+
+### Query For Studies From Today
+Querying for a computed date range can be done by computing the date range
+in the config file, see e2e.js for an example, reproduced below.  To use this,
+enter the query criteria '?today' as the full search criteria.
+
+```javascript
+if (window.location.search === '?today') {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  window.sessionStorage.setItem(
+    'queryFilterValues',
+    JSON.stringify({
+      studyDate: {
+        startDate: `${now.getFullYear()}${month < 10 ? '0' + month : month}${day < 10 ? '0' + day : day}`,
+        endDate: null,
+      },
+    })
+  );
+}
+```
+
 
 ## Environment Variables
 

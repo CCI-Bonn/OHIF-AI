@@ -29,24 +29,19 @@ export default class MonaiLabelClient {
     // url.searchParams.append('output', 'image');
     url = url.toString();
 
-
     if (result_extension) {
       params.result_extension = result_extension;
       params.result_dtype = 'uint16';
       params.result_compress = false;
-      params.studyInstanceUID = new URLSearchParams(window.location.search).get("StudyInstanceUIDs")
+      params.studyInstanceUID = new URLSearchParams(window.location.search).get(
+        'StudyInstanceUIDs'
+      );
     }
 
     // return the indexes as defined in the config file
-    params.restore_label_idx = false
+    params.restore_label_idx = false;
 
-    return await MonaiLabelClient.api_post(
-      url,
-      params,
-      label,
-      true,
-      'arraybuffer'
-    );
+    return await MonaiLabelClient.api_post(url, params, label, true, 'arraybuffer');
   }
 
   async next_sample(stategy = 'random', params = {}) {
@@ -65,12 +60,7 @@ export default class MonaiLabelClient {
 
     /* debugger; */
 
-    const data = MonaiLabelClient.constructFormDataFromArray(
-      params,
-      label,
-      'label',
-      'label.bin'
-    );
+    const data = MonaiLabelClient.constructFormDataFromArray(params, label, 'label', 'label.bin');
 
     return await MonaiLabelClient.api_put_data(url, data, 'json');
   }
@@ -81,9 +71,7 @@ export default class MonaiLabelClient {
     url = url.toString();
 
     const response = await MonaiLabelClient.api_get(url);
-    return (
-      response && response.status === 200 && response.data.status === 'RUNNING'
-    );
+    return response && response.status === 200 && response.data.status === 'RUNNING';
   }
 
   async run_train(params) {
@@ -150,13 +138,7 @@ export default class MonaiLabelClient {
       .finally(function () {});
   }
 
-  static api_post(
-    url,
-    params,
-    files,
-    form = true,
-    responseType = 'arraybuffer'
-  ) {
+  static api_post(url, params, files, form = true, responseType = 'arraybuffer') {
     const data = form
       ? MonaiLabelClient.constructFormData(params, files)
       : MonaiLabelClient.constructFormOrJsonData(params, files);

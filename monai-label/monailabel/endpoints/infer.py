@@ -10,19 +10,20 @@
 # limitations under the License.
 
 import json
+import secrets
 import logging
 import os
 import pathlib
 import shutil
 import tempfile
+import time
 from enum import Enum
 from datetime import date
 from typing import Optional
 from glob import glob as glob
-import json
 import io
 from copy import deepcopy
-
+import gzip
 import SimpleITK as sitk
 import numpy as np
 
@@ -43,6 +44,7 @@ from monailabel.endpoints.user.auth import RBAC, User
 from monailabel.interfaces.app import MONAILabelApp
 from monailabel.interfaces.utils.app import app_instance
 from monailabel.utils.others.generic import get_mime_type, remove_file
+from monailabel.utils.others.stream import stream_multipart
 
 from monailabel.datastore.utils.dicom import dicom_web_upload_dcm
 
@@ -93,11 +95,10 @@ class ResultType(str, Enum):
 
 
 def send_response(datastore, result, output, background_tasks):
-    res_img = result.get("file") if result.get("file") else result.get("label")
-    res_tag = result.get("tag")
+    res_img = result.get("file")
     res_json = result.get("params")
 
-    if res_img:
+    if type(res_img) == str:
         if not os.path.exists(res_img):
             res_img = datastore.get_label_uri(res_img, res_tag)
         else:
@@ -105,20 +106,35 @@ def send_response(datastore, result, output, background_tasks):
 
     if output == "json":
         return res_json
-
-    m_type = get_mime_type(res_img)
+    if type(res_img) == str:
+        m_type = get_mime_type(res_img)
 
     if output == "image":
         return FileResponse(res_img, media_type=m_type, filename=os.path.basename(res_img))
 
     if output == "dicom_seg":
+        start = time.time()
         res_dicom_seg = result.get("dicom_seg")
         if res_dicom_seg is None:
             logger.info("No dicom_seg?")
             raise HTTPException(status_code=500, detail="Error processing inference")
         else:
             logger.info("File response!")
-            return Response(content=res_dicom_seg, media_type="application/json")
+            if type(res_dicom_seg) != str:
+                fields = {
+                    "prompt_info": json.dumps(res_json.get("prompt_info")),
+                    "flipped": json.dumps(res_json.get("flipped")),
+                    "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
+                    "sam_elapsed": json.dumps(res_json.get("sam_elapsed")),
+                    "label_name": res_json.get("label_name")
+                }
+                
+                boundary = f"monai-{secrets.token_hex(12)}"
+                meta_json = json.dumps(fields, separators=(",", ":"))
+                return stream_multipart(meta_json, res_dicom_seg)
+            else:
+                logger.info("No prompt info?")
+                return Response(res_dicom_seg, media_type="application/json")
             #return FileResponse(res_dicom_seg, media_type="application/dicom", filename=os.path.basename(res_dicom_seg))
 
     res_fields = dict()
@@ -131,8 +147,6 @@ def send_response(datastore, result, output, background_tasks):
 
     return_message = MultipartEncoder(fields=res_fields)
     return Response(content=return_message.to_string(), media_type=return_message.content_type)
-
-
 def run_inference(
     background_tasks: BackgroundTasks,
     model: str,
@@ -200,73 +214,27 @@ def run_inference(
         #elif p.get("label_info") is None:
         #    raise HTTPException(status_code=404, detail="Parameters for DICOM SEG inference cannot be empty!")
         # Transform image uri to id (similar to _to_id in local datastore)
-        image_uri = instance.datastore().get_image_uri(image)
-        suffixes = [".nii", ".nii.gz", ".nrrd"]
-        image_path = [image_uri.replace(suffix, "") for suffix in suffixes if image_uri.endswith(suffix)][0]
-        res_img = result.get("file") if result.get("file") else result.get("label")
-        
-        image_files = glob('{}/*'.format(image_path))
-        dcm_img_sample = dcmread(image_files[0], stop_before_pixels=True)
-        image_series_desc=""
-        if 0x0008103e in dcm_img_sample.keys():
-            image_series_desc = dcm_img_sample[0x0008103e].value
-        image_series_desc = "SAM2_"+ image_series_desc
-        existing_instances = instance.datastore()._client.search_for_series(search_filters={"SeriesDate": date.today().strftime("%Y%m%d"), "SeriesDescription": image_series_desc})
-        old_response = 0
-        if len(existing_instances)>0:
-            res = instance.datastore()._client._http_post("http://ohif_orthanc:1026/pacs/tools/find",'{{"Level":"Series","Query":{{"SeriesInstanceUID":"{seriesID}"}}, "Expand":true}}'.format(seriesID=existing_instances[0]['0020000E']['Value'][0]), headers={'Content-Type': 'text/plain'})
-            if res.status_code == 200:
-                del_series_id = json.loads(res.content)[0]['ID']
-                del_instance_id = json.loads(res.content)[0]['Instances'][0]
-                if 'nextObj' in params:
-                    old_response = instance.datastore()._client._http_get(f"http://ohif_orthanc:1026/pacs/instances/{del_instance_id}/file")
-                    if old_response.status_code == 200:
-                        # Load DICOM data from the binary response content
-                        dicom_old_file = io.BytesIO(old_response.content)
-                    else:
-                        raise Exception(f"Failed to retrieve DICOM file: {old_response.status_code}")    
-                res_del = instance.datastore()._client._http_delete(f"http://ohif_orthanc:1026/pacs/series/{del_series_id}")
-                if res_del.status_code != 200:
-                    breakpoint()
-        dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, prompt_json, use_itk=True)
-        # For nextObj, keep the old dicom SEG and augment with recent predicted dicom SEG
-        if old_response != 0:
-
-            dicom_seg1 = pydicom.dcmread(dicom_old_file)
-            dicom_seg2 = pydicom.dcmread(dicom_seg_file)
-            segmentations = [dicom_seg1, dicom_seg2]
-            
-            # Read the first segmentation file
-            segment_arrays_1, segment_frames_1, metadata_source = read_seg_file(dicom_seg1)
-            
-            # Read the second segmentation file
-            segment_arrays_2, segment_frames_2, _ = read_seg_file(dicom_seg2)
-            
-            # Combine seg pixel array
-            combined_pixel_array = np.concatenate((segment_arrays_1, segment_arrays_2), axis=0)
-            
-            segment_sequence_1 = dicom_seg1.SegmentSequence
-            segment_sequence_2 = dicom_seg2.SegmentSequence
-            # Merge segment sequences and adjust SegmentNumber
-            current_max_label = len(segment_sequence_1)
-            for i, segment in enumerate(segment_sequence_2):
-                segment.SegmentNumber = current_max_label + i + 1
-                segment_sequence_1.append(segment_sequence_2[i])
-
-            all_segments = segment_sequence_1
-            updated_frames_2 = [(segment_index + current_max_label, slice_index, sop_instance_uid) for segment_index, slice_index, sop_instance_uid in segment_frames_2]
-            combined_frames = segment_frames_1 + updated_frames_2
-
-            # Save the combined segmentation
-            combined_segmentation = save_combined_segmentation(
-                combined_pixel_array, all_segments, combined_frames, metadata_source
-            )
-
-            # Save the combined segmentation
-            combined_segmentation.save_as(dicom_seg_file)
-
-        series_id = dicom_web_upload_dcm(dicom_seg_file, instance.datastore()._client)
-        result["dicom_seg"] = series_id
+        image_path = instance.datastore().get_image_uri(image)
+        #suffixes = [".nii", ".nii.gz", ".nrrd"]
+        #image_path = [image_uri.replace(suffix, "") for suffix in suffixes if image_uri.endswith(suffix)][0]
+        res_img = result.get("file") if result.get("file") is not None else result.get("label")
+        if type(res_img) == str and (res_img == "/code/predictions/reset.nii.gz" or res_img == "/code/predictions/init.nii.gz"):
+            return Response(res_img, media_type="application/json")
+        #dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, prompt_json, use_itk=True)
+        #with open(dicom_seg_file, "rb") as f:
+        #    dicom_bytes = f.read()
+        #result["dicom_seg"] = dicom_bytes
+        res_json = result.get("params")
+        fields = {
+                    "prompt_info": json.dumps(res_json.get("prompt_info")),
+                    "flipped": json.dumps(res_json.get("flipped")),
+                    "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
+                    "sam_elapsed": json.dumps(res_json.get("sam_elapsed")),
+                    "label_name": res_json.get("label_name")
+                }
+        boundary = f"monai-{secrets.token_hex(12)}"
+        meta_json = json.dumps(fields, separators=(",", ":"))
+        return stream_multipart(meta_json, res_img)
 
     return send_response(instance.datastore(), result, output, background_tasks)
 

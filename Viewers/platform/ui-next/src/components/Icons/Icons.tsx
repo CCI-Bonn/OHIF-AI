@@ -24,6 +24,7 @@ import IconMPR from './Sources/IconMPR';
 import Info from './Sources/Info';
 import InfoLink from './Sources/InfoLink';
 import InfoSeries from './Sources/InfoSeries';
+import JumpToSlice from './Sources/JumpToSlice';
 import ListView from './Sources/ListView';
 import LoadingSpinner from './Sources/LoadingSpinner';
 import Lock from './Sources/Lock';
@@ -38,6 +39,7 @@ import Pin from './Sources/Pin';
 import PinFill from './Sources/PinFill';
 import Plus from './Sources/Plus';
 import PowerOff from './Sources/PowerOff';
+import Redo from './Sources/Redo';
 import Refresh from './Sources/Refresh';
 import Rename from './Sources/Rename';
 import Series from './Sources/Series';
@@ -46,6 +48,7 @@ import Show from './Sources/Show';
 import SidePanelCloseLeft from './Sources/SidePanelCloseLeft';
 import SidePanelCloseRight from './Sources/SidePanelCloseRight';
 import SortingAscending from './Sources/SortingAscending';
+import SocialGithub from './Sources/SocialGithub';
 import SortingDescending from './Sources/SortingDescending';
 import StatusError from './Sources/StatusError';
 import StatusSuccess from './Sources/StatusSuccess';
@@ -61,6 +64,7 @@ import TabStudies from './Sources/TabStudies';
 import ThumbnailView from './Sources/ThumbnailView';
 import Trash from './Sources/Trash';
 import ToolSam from './Sources/ToolSam';
+import ToolNninter from './Sources/ToolNninter';
 import ToolTarget from './Sources/ToolTarget';
 import ViewportViews from './Sources/ViewportViews';
 import Sorting from './Sources/Sorting';
@@ -71,7 +75,6 @@ import GroupLayers from './Sources/GroupLayers';
 import Database from './Sources/Database';
 import InvestigationalUse from './Sources/InvestigationalUse';
 import IconTransferring from './Sources/IconTransferring';
-import IconDownload from './Sources/IconDownload';
 import Alert from './Sources/Alert';
 import AlertOutline from './Sources/AlertOutline';
 import Clipboard from './Sources/Clipboard';
@@ -91,6 +94,7 @@ import {
   ToolFlipHorizontal,
   ToolFreehandPolygon,
   ToolFreehandRoi,
+  ToolLassoRoi,
   ToolFreehand,
   ToolFusionColor,
   ToolInvert,
@@ -125,6 +129,14 @@ import {
   ToolBrush,
   ToolThreshold,
   ToolShape,
+  ToolLabelmapAssist,
+  ToolPETSegment,
+  ToolInterpolation,
+  ToolBidirectionalSegment,
+  ToolSegmentAnything,
+  ToolContract,
+  ToolExpand,
+  ToolClickSegment,
 } from './Sources/Tools';
 import ActionNewDialog from './Sources/ActionNewDialog';
 import NotificationInfo from './Sources/NotificationInfo';
@@ -186,7 +198,11 @@ import Magnifier from './Sources/Magnifier';
 import LoadingOHIFMark from './Sources/LoadingOHIFMark';
 import ArrowLeftBold from './Sources/ArrowLeftBold';
 import Pencil from './Sources/Pencil';
-//
+import NotificationWarning from './Sources/NotificationWarning';
+import ArrowRight from './Sources/ArrowRight';
+import ChevronLeft from './Sources/ChevronLeft';
+import StatusAlert from './Sources/StatusAlert';
+import Undo from './Sources/Undo';
 //
 //
 type IconProps = React.HTMLAttributes<SVGElement>;
@@ -203,157 +219,157 @@ const ImageWrapper = ({ src, ...props }: { src: string } & ImageIconProps) => {
 };
 
 export const Icons = {
-  CTAAA: (props: ImageIconProps) => (
+  'CT-AAA': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTAAA}
       {...props}
     />
   ),
-  CTAAA2: (props: ImageIconProps) => (
+  'CT-AAA2': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTAAA2}
       {...props}
     />
   ),
-  CTAir: (props: ImageIconProps) => (
+  'CT-Air': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTAir}
       {...props}
     />
   ),
-  CTBone: (props: ImageIconProps) => (
+  'CT-Bone': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTBone}
       {...props}
     />
   ),
-  CTBones: (props: ImageIconProps) => (
+  'CT-Bones': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTBones}
       {...props}
     />
   ),
-  CTCardiac: (props: ImageIconProps) => (
+  'CT-Cardiac': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTCardiac}
       {...props}
     />
   ),
-  CTCardiac2: (props: ImageIconProps) => (
+  'CT-Cardiac2': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTCardiac2}
       {...props}
     />
   ),
-  CTCardiac3: (props: ImageIconProps) => (
+  'CT-Cardiac3': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTCardiac3}
       {...props}
     />
   ),
-  CTChestContrastEnhanced: (props: ImageIconProps) => (
+  'CT-Chest-Contrast-Enhanced': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTChestContrastEnhanced}
       {...props}
     />
   ),
-  CTChestVessels: (props: ImageIconProps) => (
+  'CT-Chest-Vessels': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTChestVessels}
       {...props}
     />
   ),
-  CTCoronaryArteries: (props: ImageIconProps) => (
+  'CT-Coronary-Arteries': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTCoronaryArteries}
       {...props}
     />
   ),
-  CTCoronaryArteries2: (props: ImageIconProps) => (
+  'CT-Coronary-Arteries-2': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTCoronaryArteries2}
       {...props}
     />
   ),
-  CTCoronaryArteries3: (props: ImageIconProps) => (
+  'CT-Coronary-Arteries-3': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTCoronaryArteries3}
       {...props}
     />
   ),
-  CTCroppedVolumeBone: (props: ImageIconProps) => (
+  'CT-Cropped-Volume-Bone': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTCroppedVolumeBone}
       {...props}
     />
   ),
-  CTFat: (props: ImageIconProps) => (
+  'CT-Fat': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTFat}
       {...props}
     />
   ),
-  CTLiverVasculature: (props: ImageIconProps) => (
+  'CT-Liver-Vasculature': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTLiverVasculature}
       {...props}
     />
   ),
-  CTLung: (props: ImageIconProps) => (
+  'CT-Lung': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTLung}
       {...props}
     />
   ),
-  CTMIP: (props: ImageIconProps) => (
+  'CT-MIP': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTMIP}
       {...props}
     />
   ),
-  CTMuscle: (props: ImageIconProps) => (
+  'CT-Muscle': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTMuscle}
       {...props}
     />
   ),
-  CTPulmonaryArteries: (props: ImageIconProps) => (
+  'CT-Pulmonary-Arteries': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTPulmonaryArteries}
       {...props}
     />
   ),
-  CTSoftTissue: (props: ImageIconProps) => (
+  'CT-Soft-Tissue': (props: ImageIconProps) => (
     <ImageWrapper
       src={CTSoftTissue}
       {...props}
     />
   ),
-  DTIFABrain: (props: ImageIconProps) => (
+  'DTI-FA-Brain': (props: ImageIconProps) => (
     <ImageWrapper
       src={DTIFABrain}
       {...props}
     />
   ),
-  MRAngio: (props: ImageIconProps) => (
+  'MR-Angio': (props: ImageIconProps) => (
     <ImageWrapper
       src={MRAngio}
       {...props}
     />
   ),
-  MRDefault: (props: ImageIconProps) => (
+  'MR-Default': (props: ImageIconProps) => (
     <ImageWrapper
       src={MRDefault}
       {...props}
     />
   ),
-  MRMIP: (props: ImageIconProps) => (
+  'MR-MIP': (props: ImageIconProps) => (
     <ImageWrapper
       src={MRMIP}
       {...props}
     />
   ),
-  MRT2Brain: (props: ImageIconProps) => (
+  'MR-T2-Brain': (props: ImageIconProps) => (
     <ImageWrapper
       src={MRT2Brain}
       {...props}
@@ -386,6 +402,7 @@ export const Icons = {
   ToolFlipHorizontal,
   ToolFreehandPolygon,
   ToolFreehandRoi,
+  ToolLassoRoi,
   ToolFreehand,
   ToolFusionColor,
   ToolInvert,
@@ -414,8 +431,6 @@ export const Icons = {
   ToolWindowLevel,
   ToolWindowRegion,
   ToolZoom,
-  ToolSam,
-  ToolTarget,
   LaunchArrow,
   LaunchInfo,
   Upload,
@@ -442,7 +457,6 @@ export const Icons = {
   GearSettings,
   Hide,
   IconMPR,
-  IconDownload,
   Info,
   InfoLink,
   InfoSeries,
@@ -467,6 +481,7 @@ export const Icons = {
   Show,
   SidePanelCloseLeft,
   SidePanelCloseRight,
+  SocialGithub,
   SortingAscending,
   SortingDescending,
   Sorting,
@@ -486,6 +501,23 @@ export const Icons = {
   ViewportViews,
   ChevronClosed,
   ChevronOpen,
+  ChevronRight: (props: IconProps) => {
+    return (
+      <ChevronLeft
+        {...props}
+        className={`${props.className || ''} rotate-180`.trim()}
+      />
+    );
+  },
+  ChevronLeft,
+  ChevronDown: (props: IconProps) => {
+    return (
+      <ChevronLeft
+        {...props}
+        className={`${props.className || ''} -rotate-90`.trim()}
+      />
+    );
+  },
   Alert,
   AlertOutline,
   NotificationInfo,
@@ -500,20 +532,13 @@ export const Icons = {
   Link,
   LoadingOHIFMark,
   ArrowLeft: ChevronClosed,
-  ArrowRight: (props: IconProps) => {
-    return (
-      <ChevronClosed
-        {...props}
-        className="rotate-180"
-      />
-    );
-  },
+  ArrowRight,
   ArrowLeftBold,
   ArrowRightBold: (props: IconProps) => {
     return (
       <ArrowLeftBold
         {...props}
-        className="rotate-180"
+        className={`${props.className || ''} rotate-180`.trim()}
       />
     );
   },
@@ -521,7 +546,7 @@ export const Icons = {
     return (
       <ChevronOpen
         {...props}
-        className="rotate-180"
+        className={`${props.className || ''} -rotate-90`.trim()}
       />
     );
   },
@@ -544,6 +569,13 @@ export const Icons = {
   ToolBrush,
   ToolThreshold,
   ToolShape,
+  ToolLabelmapAssist,
+  ToolSegmentAnything,
+  ToolPETSegment,
+  ToolInterpolation,
+  ToolBidirectionalSegment,
+  ToolContract,
+  ToolExpand,
   ExternalLink,
   OHIFLogoColorDarkBackground,
   Magnifier,
@@ -571,7 +603,15 @@ export const Icons = {
   'checkbox-active': (props: IconProps) => CheckBoxChecked(props),
   'icon-tool-eraser': (props: IconProps) => ToolEraser(props),
   'icon-tool-brush': (props: IconProps) => ToolBrush(props),
+  'icon-labelmap-slice-propagation': (props: IconProps) => ToolLabelmapAssist(props),
+  'icon-marker-labelmap': (props: IconProps) => ToolSegmentAnything(props),
   'icon-tool-threshold': (props: IconProps) => ToolThreshold(props),
+  'icon-tool-click-segment': (props: IconProps) => ToolClickSegment(props),
+  'icon-tool-pet-segment': (props: IconProps) => ToolPETSegment(props),
+  'icon-tool-interpolation': (props: IconProps) => ToolInterpolation(props),
+  'icon-tool-bidirectional-segment': (props: IconProps) => ToolBidirectionalSegment(props),
+  'icon-tool-expand': (props: IconProps) => ToolExpand(props),
+  'icon-tool-contract': (props: IconProps) => ToolContract(props),
   'icon-tool-shape': (props: IconProps) => ToolShape(props),
   link: (props: IconProps) => Link(props),
   'icon-color-lut': (props: IconProps) => IconColorLUT(props),
@@ -593,7 +633,6 @@ export const Icons = {
   'tab-patient-info': (props: IconProps) => TabPatientInfo(props),
   'tab-roi-threshold': (props: IconProps) => TabRoiThreshold(props),
   'icon-mpr': (props: IconProps) => IconMPR(props),
-  'icon-download': (props: IconProps) => IconDownload(props),
   'power-off': (props: IconProps) => PowerOff(props),
   'icon-multiple-patients': (props: IconProps) => MultiplePatients(props),
   'icon-patient': (props: IconProps) => Patient(props),
@@ -611,13 +650,11 @@ export const Icons = {
   'tool-create-threshold': (props: IconProps) => ToolCreateThreshold(props),
   'tool-crosshair': (props: IconProps) => ToolCrosshair(props),
   'dicom-tag-browser': (props: IconProps) => ToolDicomTagBrowser(props),
-  'sam-icon': (props: IconProps) => ToolSam(props),
-  'target-icon': (props: IconProps) => ToolTarget(props),
-  'eye-visible': (props: IconProps) => EyeVisible(props),
   'tool-flip-horizontal': (props: IconProps) => ToolFlipHorizontal(props),
   'tool-freehand-polygon': (props: IconProps) => ToolFreehandPolygon(props),
   'tool-freehand-roi': (props: IconProps) => ToolFreehandRoi(props),
   'icon-tool-freehand-roi': (props: IconProps) => ToolFreehandRoi(props),
+  'icon-tool-lasso-roi': (props: IconProps) => ToolLassoRoi(props),
   'icon-tool-spline-roi': (props: IconProps) => ToolSplineRoi(props),
   'tool-freehand': (props: IconProps) => ToolFreehand(props),
   'tool-fusion-color': (props: IconProps) => ToolFusionColor(props),
@@ -641,6 +678,10 @@ export const Icons = {
   'tool-seg-shape': (props: IconProps) => ToolSegShape(props),
   'tool-seg-threshold': (props: IconProps) => ToolSegThreshold(props),
   'tool-spline-roi': (props: IconProps) => ToolSplineRoi(props),
+  'tool-sam': (props: IconProps) => ToolSam(props),
+  'tool-nninter': (props: IconProps) => ToolNninter(props),
+  'tool-target': (props: IconProps) => ToolTarget(props),
+  'eye-visible': (props: IconProps) => EyeVisible(props),
   'tool-stack-image-sync': (props: IconProps) => ToolStackImageSync(props),
   'tool-stack-scroll': (props: IconProps) => ToolStackScroll(props),
   'toggle-dicom-overlay': (props: IconProps) => ToolToggleDicomOverlay(props),
@@ -658,9 +699,10 @@ export const Icons = {
   'icon-transferring': (props: IconProps) => IconTransferring(props),
   'icon-alert-small': (props: IconProps) => Alert(props),
   'icon-alert-outline': (props: IconProps) => AlertOutline(props),
-  'status-alert': (props: IconProps) => Alert(props),
+  'status-alert': (props: IconProps) => StatusAlert(props),
   info: (props: IconProps) => Info(props),
   'notifications-info': (props: IconProps) => NotificationInfo(props),
+  'notificationwarning-diamond': (props: IconProps) => NotificationWarning(props),
   'content-prev': (props: IconProps) => ContentPrev(props),
   'content-next': (props: IconProps) => ContentNext(props),
   'icon-settings': (props: IconProps) => Settings(props),
@@ -682,7 +724,17 @@ export const Icons = {
   'layout-common-2x3': (props: IconProps) => LayoutCommon2x3(props),
   pencil: (props: IconProps) => Pencil(props),
   'icon-list-view': (props: IconProps) => ListView(props),
+  'chevron-menu': 'chevron-down',
+  'icon-status-alert': (props: IconProps) => Alert(props),
+  'info-link': (props: IconProps) => InfoLink(props),
+  'launch-info': (props: IconProps) => LaunchInfo(props),
+  'old-trash': (props: IconProps) => Trash(props),
+  'tool-point': (props: IconProps) => ToolCircle(props),
+  'tool-freehand-line': (props: IconProps) => ToolFreehand(props),
   clipboard: (props: IconProps) => Clipboard(props),
+  Undo,
+  Redo,
+  JumpToSlice,
 
   /** Adds an icon to the set of icons */
   addIcon: (name: string, icon) => {

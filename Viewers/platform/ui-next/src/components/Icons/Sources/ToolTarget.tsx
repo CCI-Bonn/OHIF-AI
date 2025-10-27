@@ -2,8 +2,8 @@ import React from 'react';
 import type { IconProps } from '../types';
 
 export const ToolTarget = (props: IconProps) => (
-  <svg fill="#000000" height="800px" width="800px" version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" 
-  viewBox="0 0 512 512" {...props}>
+  <svg fill="#000000" height="800px" width="800px" version="1.1" id="Capa_1" className="h-[24px] w-[24px] fill-current" xmlns="http://www.w3.org/2000/svg" 
+  viewBox="0 0 512 512">
 <g>
 	<path d="M504,248h-16.151c-1.985-58.969-25.873-114.121-67.8-156.049S322.969,26.136,264,24.151V8c0-4.418-3.582-8-8-8
 		s-8,3.582-8,8v16.151c-58.969,1.985-114.121,25.872-156.049,67.8S26.136,189.031,24.151,248H8c-4.418,0-8,3.582-8,8s3.582,8,8,8

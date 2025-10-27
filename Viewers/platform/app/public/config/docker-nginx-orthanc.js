@@ -1,6 +1,6 @@
 /** @type {AppTypes.Config} */
 window.config = {
-  routerBasename: '/',
+  routerBasename: null,
   showStudyList: true,
   extensions: [],
   modes: [],
@@ -8,6 +8,9 @@ window.config = {
   showWarningMessageForCrossOrigin: true,
   showCPUFallbackMessage: true,
   showLoadingIndicator: true,
+  disableConfirmationPrompts: true,
+  showPatientInfo: 'disabled',
+  measurementTrackingMode: 'none',
   experimentalStudyBrowserSort: false,
   strictZSpacingForVolumeViewport: true,
   studyPrefetcher: {
@@ -17,6 +20,9 @@ window.config = {
     order: 'closest',
   },
   defaultDataSourceName: 'dicomweb',
+  investigationalUseDialog: {
+    option: 'never',
+  },
   dataSources: [
     {
       namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',

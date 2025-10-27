@@ -50,6 +50,8 @@ function ViewportSegmentationMenu({
   };
 
   const removeSegmentationFromViewport = segmentationId => {
+    // Clear all measurements before removing a segmentation
+    commandsManager.run('resetNninter', { clearMeasurements: true });
     segmentationService.removeSegmentationRepresentations(viewportId, {
       segmentationId,
     });

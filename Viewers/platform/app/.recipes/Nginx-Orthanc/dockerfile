@@ -18,41 +18,43 @@ COPY ./ /usr/src/app/
 RUN yarn config set workspaces-experimental true
 RUN yarn install
 
-# To change color of negative point
+# To change color of negative prompts
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/AnnotationTool.js
 
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/ProbeTool.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
+# Add annotation from the given indices plus the detail rendering setup for each prompt type
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/ProbeTool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/RectangleROITool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/PlanarFreehandROITool.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/renderMethods.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/drawLoop.js
 
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/core/dist/cjs/utilities/sortImageIdsAndGetSpacing.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/sortImageIdsAndGetSpacing.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/cursors/elementCursor.js
 
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/adapters/dist/adapters.es.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/helpers/clearSegmentValue.js
 
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/createLabelmapVolumeForViewport.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/polySeg/Labelmap/labelmapComputationStrategies.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/polySeg/Labelmap/convertContourToLabelmap.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getSegmentLargestBidirectional.js
 
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/utilities/triggerAnnotationRender.js
-#RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/triggerAnnotationRender.js
+RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
-# To change color of negative point
+# To change color of negative prompts
 COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/
 
-#COPY ./backup/cjs/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/tools/annotation/
-#COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+# Add annotation from the given indices plus the detail rendering setup for each prompt type
+COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/PlanarFreehandROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
+COPY ./backup/esm/renderMethods.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
+COPY ./backup/esm/drawLoop.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
 
-#COPY ./backup/cjs/sortImageIdsAndGetSpacing.js /usr/src/app/node_modules/@cornerstonejs/core/dist/cjs/utilities/
-#COPY ./backup/esm/sortImageIdsAndGetSpacing.js /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/
+COPY ./backup/esm/elementCursor.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/cursors/elementCursor.js
 
-#COPY ./backup/adapters/adapters.es.js /usr/src/app/node_modules/@cornerstonejs/adapters/dist/
+COPY ./backup/esm/SegmentationRenderingEngine.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/
+COPY ./backup/esm/clearSegmentValue.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/helpers/
 
-#COPY ./backup/cornerstone2.0_patch/createLabelmapVolumeForViewport.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/
-#COPY ./backup/cornerstone2.0_patch/labelmapComputationStrategies.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/polySeg/Labelmap/
-#COPY ./backup/cornerstone2.0_patch/convertContourToLabelmap.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/polySeg/Labelmap/
+COPY ./backup/esm/getSegmentLargestBidirectional.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getSegmentLargestBidirectional.js
 
-#COPY ./backup/cjs/triggerAnnotationRender.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/cjs/utilities/
-#COPY ./backup/esm/triggerAnnotationRender.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/
+COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
 # Copy the rest of the application code
 

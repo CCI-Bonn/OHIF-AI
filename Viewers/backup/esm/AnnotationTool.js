@@ -1,4 +1,4 @@
-import { BaseVolumeViewport, cache, getEnabledElement, metaData, utilities as csUtils, } from '@cornerstonejs/core';
+import { BaseVolumeViewport, cache, getEnabledElement, metaData, utilities as csUtils, StackViewport, } from '@cornerstonejs/core';
 import { vec2 } from 'gl-matrix';
 import AnnotationDisplayTool from './AnnotationDisplayTool';
 import { isAnnotationLocked } from '../../stateManagement/annotation/annotationLocking';
@@ -157,10 +157,12 @@ class AnnotationTool extends AnnotationDisplayTool {
         const locked = isAnnotationLocked(annotationUID);
         const lineWidth = getStyle('lineWidth');
         const lineDash = getStyle('lineDash');
+        const angleArcLineDash = getStyle('angleArcLineDash');
         let color = getStyle('color');
-        if (annotation.metadata.toolName === 'Probe2') {
+        if (annotation.metadata.neg === true) {
             color = 'rgb(255, 0, 0)';
-          }
+        }
+        const markerSize = getStyle('markerSize');
         const shadow = getStyle('shadow');
         const textboxStyle = this.getLinkedTextBoxStyle(styleSpecifier, annotation);
         return {
@@ -174,6 +176,8 @@ class AnnotationTool extends AnnotationDisplayTool {
             fillOpacity: 0,
             shadow,
             textbox: textboxStyle,
+            markerSize,
+            angleArcLineDash,
         };
     }
     _imagePointNearToolOrHandle(element, annotation, canvasCoords, proximity) {
@@ -260,12 +264,55 @@ class AnnotationTool extends AnnotationDisplayTool {
                 currentAnnotation.invalidated = true;
                 triggerAnnotationModified(currentAnnotation, element, ChangeTypes.History);
             },
+            id: annotationUID,
+            operationType: 'annotation',
         };
         DefaultHistoryMemo.push(annotationMemo);
         return annotationMemo;
     }
     createMemo(element, annotation, options) {
         this.memo ||= AnnotationTool.createAnnotationMemo(element, annotation, options);
+    }
+    static hydrateBase(ToolClass, enabledElement, points, options = {}) {
+        if (!enabledElement) {
+            return null;
+        }
+        const { viewport } = enabledElement;
+        const FrameOfReferenceUID = viewport.getFrameOfReferenceUID();
+        const camera = viewport.getCamera();
+        const viewPlaneNormal = options.viewplaneNormal ?? camera.viewPlaneNormal;
+        const viewUp = options.viewUp ?? camera.viewUp;
+        const instance = options.toolInstance || new ToolClass();
+        let referencedImageId;
+        let finalViewPlaneNormal = viewPlaneNormal;
+        let finalViewUp = viewUp;
+        if (options.referencedImageId) {
+            referencedImageId = options.referencedImageId;
+            finalViewPlaneNormal = undefined;
+            finalViewUp = undefined;
+        }
+        else {
+            if (viewport instanceof StackViewport) {
+                const closestImageIndex = csUtils.getClosestStackImageIndexForPoint(points[0], viewport);
+                if (closestImageIndex !== undefined) {
+                    referencedImageId = viewport.getImageIds()[closestImageIndex];
+                }
+            }
+            else if (viewport instanceof BaseVolumeViewport) {
+                referencedImageId = instance.getReferencedImageId(viewport, points[0], viewPlaneNormal, viewUp);
+            }
+            else {
+                throw new Error('Unsupported viewport type');
+            }
+        }
+        return {
+            FrameOfReferenceUID,
+            referencedImageId,
+            viewPlaneNormal: finalViewPlaneNormal,
+            viewUp: finalViewUp,
+            instance,
+            viewport,
+        };
     }
 }
 AnnotationTool.toolName = 'AnnotationTool';

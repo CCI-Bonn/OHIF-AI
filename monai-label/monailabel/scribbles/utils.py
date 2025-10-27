@@ -12,7 +12,7 @@
 import logging
 
 import numpy as np
-import numpymaxflow
+#import numpymaxflow
 import torch
 from monai.networks.layers import GaussianMixtureModel
 
@@ -26,7 +26,8 @@ def get_eps(data):
 def maxflow(image, prob, lamda=5, sigma=0.1):
     # lamda: weight of smoothing term
     # sigma: std of intensity values
-    return numpymaxflow.maxflow(image, prob, lamda, sigma)
+    #return numpymaxflow.maxflow(image, prob, lamda, sigma)
+    return None
 
 
 def make_iseg_unary(

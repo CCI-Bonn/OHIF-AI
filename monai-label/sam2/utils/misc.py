@@ -8,12 +8,12 @@ import os
 import warnings
 from threading import Thread
 
+import SimpleITK as sitk
 import numpy as np
+
 import torch
 from PIL import Image
 from tqdm import tqdm
-
-import SimpleITK as sitk
 
 
 def get_sdpa_settings():
@@ -70,7 +70,7 @@ def mask_to_box(masks: torch.Tensor):
     compute bounding box given an input mask
 
     Inputs:
-    - masks: [B, 1, H, W] boxes, dtype=torch.Tensor
+    - masks: [B, 1, H, W] masks, dtype=torch.Tensor
 
     Returns:
     - box_coords: [B, 1, 4], contains (x, y) coordinates of top left and bottom right box corners, dtype=torch.Tensor
@@ -108,19 +108,28 @@ class AsyncVideoFrameLoader:
     A list of video frames to be load asynchronously without blocking session start.
     """
 
-    def __init__(self, img_paths, image_size, offload_video_to_cpu, img_mean, img_std):
+    def __init__(
+        self,
+        img_paths,
+        image_size,
+        offload_video_to_cpu,
+        img_mean,
+        img_std,
+        compute_device,
+    ):
         self.img_paths = img_paths
         self.image_size = image_size
         self.offload_video_to_cpu = offload_video_to_cpu
         self.img_mean = img_mean
         self.img_std = img_std
-        # items in `self._images` will be loaded asynchronously
+        # items in `self.images` will be loaded asynchronously
         self.images = [None] * len(img_paths)
         # catch and raise any exceptions in the async loading thread
         self.exception = None
         # video_height and video_width be filled when loading the first image
         self.video_height = None
         self.video_width = None
+        self.compute_device = compute_device
 
         # load the first frame to fill video_height and video_width and also
         # to cache it (since it's most likely where the user will click)
@@ -154,7 +163,7 @@ class AsyncVideoFrameLoader:
         img -= self.img_mean
         img /= self.img_std
         if not self.offload_video_to_cpu:
-            img = img.cuda(non_blocking=True)
+            img = img.to(self.compute_device, non_blocking=True)
         self.images[index] = img
         return img
 
@@ -169,6 +178,48 @@ def load_video_frames(
     img_mean=(0.485, 0.456, 0.406),
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
+    compute_device=torch.device("cuda"),
+):
+    """
+    Load the video frames from video_path. The frames are resized to image_size as in
+    the model and are loaded to GPU if offload_video_to_cpu=False. This is used by the demo.
+    """
+    is_bytes = isinstance(video_path, bytes)
+    is_str = isinstance(video_path, str)
+    is_mp4_path = is_str and os.path.splitext(video_path)[-1] in [".mp4", ".MP4"]
+    if is_bytes or is_mp4_path:
+        return load_video_frames_from_video_file(
+            video_path=video_path,
+            image_size=image_size,
+            offload_video_to_cpu=offload_video_to_cpu,
+            img_mean=img_mean,
+            img_std=img_std,
+            compute_device=compute_device,
+        )
+    elif is_str and os.path.isdir(video_path):
+        return load_video_frames_from_jpg_images(
+            video_path=video_path,
+            image_size=image_size,
+            offload_video_to_cpu=offload_video_to_cpu,
+            img_mean=img_mean,
+            img_std=img_std,
+            async_loading_frames=async_loading_frames,
+            compute_device=compute_device,
+        )
+    else:
+        raise NotImplementedError(
+            "Only MP4 video and JPEG folder are supported at this moment"
+        )
+
+
+def load_video_frames_from_jpg_images(
+    video_path,
+    image_size,
+    offload_video_to_cpu,
+    img_mean=(0.485, 0.456, 0.406),
+    img_std=(0.229, 0.224, 0.225),
+    async_loading_frames=False,
+    compute_device=torch.device("cuda"),
 ):
     """
     Load the video frames from a directory of JPEG files ("<frame_index>.jpg" format).
@@ -181,7 +232,15 @@ def load_video_frames(
     if isinstance(video_path, str) and os.path.isdir(video_path):
         jpg_folder = video_path
     else:
-        raise NotImplementedError("Only JPEG frames are supported at this moment")
+        raise NotImplementedError(
+            "Only JPEG frames are supported at this moment. For video files, you may use "
+            "ffmpeg (https://ffmpeg.org/) to extract frames into a folder of JPEG files, such as \n"
+            "```\n"
+            "ffmpeg -i <your_video>.mp4 -q:v 2 -start_number 0 <output_dir>/'%05d.jpg'\n"
+            "```\n"
+            "where `-q:v` generates high-quality JPEG frames and `-start_number 0` asks "
+            "ffmpeg to start the JPEG file from 00000.jpg."
+        )
 
     frame_names = [
         p
@@ -198,7 +257,12 @@ def load_video_frames(
 
     if async_loading_frames:
         lazy_images = AsyncVideoFrameLoader(
-            img_paths, image_size, offload_video_to_cpu, img_mean, img_std
+            img_paths,
+            image_size,
+            offload_video_to_cpu,
+            img_mean,
+            img_std,
+            compute_device,
         )
         return lazy_images, lazy_images.video_height, lazy_images.video_width
 
@@ -206,9 +270,41 @@ def load_video_frames(
     for n, img_path in enumerate(tqdm(img_paths, desc="frame loading (JPEG)")):
         images[n], video_height, video_width = _load_img_as_tensor(img_path, image_size)
     if not offload_video_to_cpu:
-        images = images.cuda()
-        img_mean = img_mean.cuda()
-        img_std = img_std.cuda()
+        images = images.to(compute_device)
+        img_mean = img_mean.to(compute_device)
+        img_std = img_std.to(compute_device)
+    # normalize by mean and std
+    images -= img_mean
+    images /= img_std
+    return images, video_height, video_width
+
+
+def load_video_frames_from_video_file(
+    video_path,
+    image_size,
+    offload_video_to_cpu,
+    img_mean=(0.485, 0.456, 0.406),
+    img_std=(0.229, 0.224, 0.225),
+    compute_device=torch.device("cuda"),
+):
+    """Load the video frames from a video file."""
+    import decord
+
+    img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
+    img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
+    # Get the original video height and width
+    decord.bridge.set_bridge("torch")
+    video_height, video_width, _ = decord.VideoReader(video_path).next().shape
+    # Iterate over all frames in the video
+    images = []
+    for frame in decord.VideoReader(video_path, width=image_size, height=image_size):
+        images.append(frame.permute(2, 0, 1))
+
+    images = torch.stack(images, dim=0).float() / 255.0
+    if not offload_video_to_cpu:
+        images = images.to(compute_device)
+        img_mean = img_mean.to(compute_device)
+        img_std = img_std.to(compute_device)
     # normalize by mean and std
     images -= img_mean
     images /= img_std
@@ -232,9 +328,10 @@ def fill_holes_in_mask_scores(mask, max_area):
     except Exception as e:
         # Skip the post-processing step on removing small holes if the CUDA kernel fails
         warnings.warn(
-            f"{e}\n\nSkipping the post-processing step due to the error above. "
-            "Consider building SAM 2 with CUDA extension to enable post-processing (see "
-            "https://github.com/facebookresearch/segment-anything-2/blob/main/INSTALL.md).",
+            f"{e}\n\nSkipping the post-processing step due to the error above. You can "
+            "still use SAM 2 and it's OK to ignore the error above, although some post-processing "
+            "functionality may be limited (which doesn't affect the results in most cases; see "
+            "https://github.com/facebookresearch/sam2/blob/main/INSTALL.md).",
             category=UserWarning,
             stacklevel=2,
         )
@@ -253,78 +350,11 @@ def concat_points(old_point_inputs, new_points, new_labels):
 
     return {"point_coords": points, "point_labels": labels}
 
-class Async3DImageLoader:
-    """
-    A list of axial slices to be load asynchronously without blocking session start.
-    """
-
-    def __init__(self, img_path, offload_video_to_cpu):
-        self.img_path = img_path
-        img = sitk.ReadImage(img_path)
-        img_npy = sitk.GetArrayFromImage(img)
-
-        img_z = img_npy.shape[0]
-        img_y = img_npy.shape[1]
-        img_x = img_npy.shape[2]
-
-        self.image_size = [img_y, img_x]
-        self.offload_video_to_cpu = offload_video_to_cpu
-        #self.img_mean = img_mean
-        #self.img_std = img_std
-        # items in `self._images` will be loaded asynchronously
-        self.images = torch.from_numpy(img_npy) #[None] * len(img_paths)
-        self.length = img_z
-        self.img_y = img_y
-        self.img_x = img_x
-        # catch and raise any exceptions in the async loading thread
-        self.exception = None
-        # video_height and video_width be filled when loading the first image
-        self.video_height = None
-        self.video_width = None
-
-        # load the first frame to fill video_height and video_width and also
-        # to cache it (since it's most likely where the user will click)
-        self.__getitem__(0)
-
-        # load the rest of frames asynchronously without blocking the session start
-        def _load_frames():
-            try:
-                for n in tqdm(range(self.length), desc="slice loading (nii.gz)"):
-                    self.__getitem__(n)
-            except Exception as e:
-                self.exception = e
-
-        self.thread = Thread(target=_load_frames, daemon=True)
-        self.thread.start()
-
-    def __getitem__(self, index):
-        if self.exception is not None:
-            raise RuntimeError("Failure in frame loading thread") from self.exception
-
-        img = self.images[index,:,:]
-        #if img is not None:
-        #    return img
-
-        #img, video_height, video_width = _load_img_as_tensor(
-        #    self.img_paths[index], self.image_size
-        #)
-        img = torch.unsqueeze(img, 0).expand(3,-1,-1)
-        self.video_height = self.img_y
-        self.video_width = self.img_x
-        # normalize by mean and std
-        img -= torch.mean(img)
-        img /= torch.std(img)
-        if not self.offload_video_to_cpu:
-            img = img.cuda(non_blocking=True)
-        self.images[index,:,:] = img
-        return img
-
-    def __len__(self):
-        return self.length
-
 def load_medical_slices(
     video_path,
+    image_size,
     offload_video_to_cpu,
+    compute_device,
     clip_low=None,
     clip_high=None
 ):
@@ -336,11 +366,12 @@ def load_medical_slices(
     #else:
     #    raise NotImplementedError("Only JPEG frames are supported at this moment")
 
-    img = sitk.ReadImage(video_path)
+    img = video_path if isinstance(video_path, sitk.Image) else sitk.ReadImage(video_path)
     img_z = img.GetSize()[2]
     img_y = img.GetSize()[1]
     img_x = img.GetSize()[0]
-    new_size = [1024, 1024, img_z]
+    #new_size = [1024, 1024, img_z]
+    new_size = [image_size, image_size, img_z]
     reference_image = sitk.Image(new_size, img.GetPixelIDValue())
     reference_image.SetOrigin(img.GetOrigin())
     reference_image.SetDirection(img.GetDirection())
@@ -360,21 +391,6 @@ def load_medical_slices(
 
     #img_npy = img_npy.resize((512, 512))
 
-    file_name = video_path.split('/')[-1]
-
-    frame_names = []
-
-    for i in range(img_z):
-        frame_names.append(f"{file_name}_{i}")
-    #frame_names = [
-    #    p
-    #    for p in os.listdir(jpg_folder)
-    #    if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
-    #]
-    #frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
-    num_frames = len(frame_names)
-    if num_frames == 0:
-        raise RuntimeError(f"no images found in {jpg_folder}")
     #For CT normalization percentile (0.5, 99.5)
     img_npy = img_npy.astype(float)
     percentile_00_5,percentile_99_5 = np.percentile(img_npy, np.array((0.5, 99.5)))
@@ -384,19 +400,21 @@ def load_medical_slices(
     else:
         np.clip(img_npy, percentile_00_5, percentile_99_5, out=img_npy)
     
-    std_np = np.std(img_npy)
-    mean_np = np.mean(img_npy)
+    #std_np = np.std(img_npy)
+    #mean_np = np.mean(img_npy)
 
     images = torch.from_numpy(img_npy)
     images = images.to(torch.float32)
+    img_mean = images.mean()
+    img_std = images.std()
     images = torch.unsqueeze(images, 1).expand(-1, 3,-1,-1).clone()
 
     video_height = img_y
     video_width = img_x
 
     # normalize by mean and std
-    images -= mean_np#torch.mean(images)
-    images /= std_np#torch.std(images)
+    #images -= mean_np#torch.mean(images)
+   # images /= std_np#torch.std(images)
     #images = torch.zeros(num_frames, 3, img_y, img_x, dtype=torch.float32)
     #img_paths = [os.path.join(jpg_folder, frame_name) for frame_name in frame_names]
     #img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
@@ -411,11 +429,15 @@ def load_medical_slices(
     
     #for n, img_path in enumerate(tqdm(img_paths, desc="frame loading (JPEG)")):
     #    images[n], video_height, video_width = _load_img_as_tensor(img_path, image_size)
+    if not offload_video_to_cpu:
+        images = images.to(compute_device)
+        img_mean = img_mean.to(compute_device)
+        img_std = img_std.to(compute_device)
     #if not offload_video_to_cpu:
     #    images = images.cuda()
     #    img_mean = img_mean.cuda()
     #    img_std = img_std.cuda()
-    ## normalize by mean and std
-    #images -= img_mean
-    #images /= img_std
+    # normalize by mean and std
+    images -= img_mean
+    images /= img_std
     return images, video_height, video_width
