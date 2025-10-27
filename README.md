@@ -86,7 +86,9 @@ You can select which model to use:
 
 ## How to Cite
 
-[Paper, ISBI 2025](https://ieeexplore.ieee.org/document/10981119)
+[OHIF-SAM2](https://ieeexplore.ieee.org/document/10981119)
+[nnInteractive](https://arxiv.org/abs/2503.08373)
+[SAM2](https://arxiv.org/abs/2408.00714)
 
 ```bibtex
 @INPROCEEDINGS{10981119,
@@ -99,4 +101,24 @@ You can select which model to use:
   pages={1-5},
   keywords={Image segmentation;Limiting;Grounding;Foundation models;Biological system modeling;Radiology;Biomedical imaging;Web-Based Medical Imaging;Foundation Model;Segmentation;Artificial Intelligence},
   doi={10.1109/ISBI60581.2025.10981119}}
+
+@misc{isensee2025nninteractiveredefining3dpromptable,
+      title={nnInteractive: Redefining 3D Promptable Segmentation}, 
+      author={Fabian Isensee and Maximilian Rokuss and Lars Krämer and Stefan Dinkelacker and Ashis Ravindran and Florian Stritzke and Benjamin Hamm and Tassilo Wald and Moritz Langenberg and Constantin Ulrich and Jonathan Deissler and Ralf Floca and Klaus Maier-Hein},
+      year={2025},
+      eprint={2503.08373},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2503.08373}, 
+}
+
+@misc{ravi2024sam2segmentimages,
+      title={SAM 2: Segment Anything in Images and Videos}, 
+      author={Nikhila Ravi and Valentin Gabeur and Yuan-Ting Hu and Ronghang Hu and Chaitanya Ryali and Tengyu Ma and Haitham Khedr and Roman Rädle and Chloe Rolland and Laura Gustafson and Eric Mintun and Junting Pan and Kalyan Vasudev Alwala and Nicolas Carion and Chao-Yuan Wu and Ross Girshick and Piotr Dollár and Christoph Feichtenhofer},
+      year={2024},
+      eprint={2408.00714},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2408.00714}, 
+}
 ```
