@@ -1,5 +1,7 @@
 import math
 import numpy as np
+import signal
+from contextlib import contextmanager
 
 def clean_and_densify_polyline(polyline, max_segment_length=1):
     if not polyline or len(polyline) < 2:
@@ -142,3 +144,22 @@ def calculate_dice(pred_mask, gt_mask, smooth=1e-6):
     dice_score = (2.0 * intersection_any_overlap + smooth) / (pred_nonzero.sum() + gt_nonzero.sum() + smooth)
     
     return dice_score
+
+class TimeoutError(Exception):
+    """Custom timeout exception"""
+    pass
+
+@contextmanager
+def timeout_context(seconds):
+    """Context manager for timeout protection using signal.alarm"""
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Operation timed out after {seconds} seconds")
+    
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)

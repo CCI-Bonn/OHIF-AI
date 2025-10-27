@@ -32,6 +32,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   const [posNeg, setPosNeg] = useState(toolboxState.getPosNeg());
   const [refineNew, setRefineNew] = useState(toolboxState.getRefineNew());
   const [nnInterSam2, setNnInterSam2] = useState(toolboxState.getNnInterSam2());
+  const [medSam2, setMedSam2] = useState(toolboxState.getMedSam2());
 
   // Sync local state with global state changes
   useEffect(() => {
@@ -40,6 +41,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
       setPosNeg(toolboxState.getPosNeg());
       setRefineNew(toolboxState.getRefineNew());
       setNnInterSam2(toolboxState.getNnInterSam2());
+      setMedSam2(toolboxState.getMedSam2());
     };
 
     // Update immediately
@@ -298,6 +300,19 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
                       }}
                      />
                    </div>
+                   {/* Uncomment the below to use MedSAM2
+                   <div className="flex items-center gap-2">
+                     <Label htmlFor="medsam2">MedSAM2</Label>
+                     <Switch
+                       id="medsam2"
+                       checked={medSam2}
+                       onCheckedChange={(checked) => {
+                        setMedSam2(checked);
+                        toolboxState.setMedSam2(checked);
+                        console.log('MedSAM2:', checked);
+                      }}
+                     />
+                   </div> */}
                  </div>
                 )}
               <div

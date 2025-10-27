@@ -24,8 +24,8 @@ ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"/usr/local/nvidia/lib64"
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install -e /install/.
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install emoji ddd-dataset
-RUN pip install "git+https://github.com/lvis-dataset/lvis-api.git"
+#RUN pip install emoji ddd-dataset
+#RUN pip install "git+https://github.com/lvis-dataset/lvis-api.git"
 
 #RUN mim install mmengine
 #RUN mim install "mmcv>=2.0.0rc4,<2.2.0"
@@ -39,6 +39,10 @@ ENV WEIGHTS_DIR="/code/checkpoints/"
 # SAM2.1 weights
 ENV WEIGHTS_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
 RUN wget --directory-prefix ${WEIGHTS_DIR} ${WEIGHTS_URL}
+
+# MEDSAM2 (Jun Ma) weights
+ENV MEDSAM2_WEIGHTS_URL="https://huggingface.co/wanglab/MedSAM2/resolve/main/MedSAM2_latest.pt"
+RUN wget --directory-prefix ${WEIGHTS_DIR} ${MEDSAM2_WEIGHTS_URL}
 
 #ENV GD_URL="https://download.openmmlab.com/mmdetection/v3.0/mm_grounding_dino/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth"
 

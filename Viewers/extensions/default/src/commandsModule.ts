@@ -554,6 +554,10 @@ const commandsModule = ({
     },
 
     async sam2() {
+      let medsam2 = false;
+      if (toolboxState.getMedSam2()) {
+        medsam2 = true;
+      }
       const start = Date.now();
       
       const segs = servicesManager.services.segmentationService.getSegmentations()
@@ -711,6 +715,7 @@ const commandsModule = ({
         pos_boxes: pos_boxes,
         texts: text_prompts,
         nninter: false,
+        medsam2: medsam2,
       };
 
       let data = MonaiLabelClient.constructFormData(params, null);

@@ -31,6 +31,7 @@ from monai.utils import deprecated
 
 import pathlib
 from pydicom.filereader import dcmread
+import traceback
 
 from monailabel.interfaces.exception import MONAILabelError, MONAILabelException
 from monailabel.interfaces.tasks.infer_v2 import InferTask, InferType
@@ -38,9 +39,9 @@ from monailabel.interfaces.utils.transform import dump_data, run_transforms
 from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
-from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline, spherical_kernel, calculate_dice
+from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline, spherical_kernel, calculate_dice, timeout_context
 
-from sam2.build_sam import build_sam2_video_predictor
+from sam2.build_sam import build_sam2_video_predictor, build_sam2_video_predictor_npz
 
 #from mmdet.apis import DetInferencer
 #from mmdet.evaluation import get_classes
@@ -52,6 +53,8 @@ from PIL import Image
 
 sam2_checkpoint = "/code/checkpoints/sam2.1_hiera_tiny.pt"
 model_cfg = "configs/sam2.1/sam2.1_hiera_t.yaml"
+medsam2_checkpoint = "/code/checkpoints/MedSAM2_latest.pt"
+medsam2_model_cfg = "configs/sam2.1/sam2.1_hiera_t512.yaml"
 
 #from transformers import BertConfig, BertModel
 #from transformers import AutoTokenizer
@@ -97,15 +100,16 @@ session = nnInteractiveInferenceSession(
 model_path = os.path.join(DOWNLOAD_DIR, MODEL_NAME)
 session.initialize_from_trained_model_folder(model_path)
 
-# Choose to use a config
-config_path = '/code/dino_configs/dino.py'
+# Config for the text prompt detector, it is disabled for now
+#config_path = '/code/dino_configs/dino.py'
 # Setup a checkpoint file to load
-checkpoint = '/code/checkpoints/best_coco_bbox_mAP_epoch_11_dilated_b_l_k_curr_teach_7+5.pth'
+#checkpoint = '/code/checkpoints/best_coco_bbox_mAP_epoch_11_dilated_b_l_k_curr_teach_7+5.pth'
 #checkpoint = '/code/checkpoints/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth'
 # Initialize the DetInferencer
 #inferencer = DetInferencer(model=config_path, weights=checkpoint, palette='random')
 
-predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, vos_optimized=False)
+predictor_sam2 = build_sam2_video_predictor(model_cfg, sam2_checkpoint, vos_optimized=False)
+predictor_med = build_sam2_video_predictor_npz(medsam2_model_cfg, medsam2_checkpoint, vos_optimized=False)
 
 logger = logging.getLogger(__name__)
 
@@ -399,7 +403,6 @@ class BasicInferTask(InferTask):
             for key, lst in self._session_used_interactions.items():
                     lst.clear()
             session.reset_interactions()
-            session.set_target_buffer(torch.zeros(session.original_image_shape[1:], dtype=torch.uint8))
             logger.info("Reset nninter")
             return f'/code/predictions/reset.nii.gz', final_result_json
 
@@ -474,6 +477,40 @@ class BasicInferTask(InferTask):
                 return f'/code/predictions/init.nii.gz', final_result_json
 
             logger.info(f"interactions in _session_used_interactions: {self._session_used_interactions}")
+
+            def _safe_interaction(perform_callable):
+                try:
+                    if session.original_image_shape == None or session.preprocessed_image == None:
+                        session.set_image(img_np)
+                        session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+                        
+                        # Wait until session.preprocessed_image is not None
+                        max_wait_time = 5.0  # Maximum wait time in seconds
+                        wait_interval = 0.1   # Check every 100ms
+                        waited_time = 0.0
+                        
+                        while session.preprocessed_image is None and waited_time < max_wait_time:
+                            time.sleep(wait_interval)
+                            waited_time += wait_interval
+                        
+                        if session.preprocessed_image is None:
+                            logger.warning(f"Session preprocessed_image still None after {max_wait_time}s wait")
+                            return False
+                        else:
+                            logger.info(f"Session preprocessed_image ready after {waited_time:.2f}s")
+                            
+                    with timeout_context(seconds=3):
+                        perform_callable()
+                    return True
+                except Exception as e:
+                    logger.error(f"Error during interaction: {e}")
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
+                    try:
+                        session._reset_session()
+                    except Exception as reset_error:
+                        logger.error(f"Failed to reset session: {reset_error}")
+                    return False
+            
             if len(data['pos_points'])!=0:
                 result_json["pos_points"]=copy.deepcopy(data["pos_points"])
                 
@@ -482,7 +519,8 @@ class BasicInferTask(InferTask):
                         self.add_prompt(point, "pos_points")
                         if instanceNumber > instanceNumber2:
                             point[2]=img_np.shape[1]-1-point[2]
-                        session.add_point_interaction(tuple(point[::-1]), include_interaction=True)
+                        if not _safe_interaction(lambda: session.add_point_interaction(tuple(point[::-1]), include_interaction=True)):
+                            return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add pos points")
                                 
             if len(data['neg_points'])!=0:
@@ -493,7 +531,8 @@ class BasicInferTask(InferTask):
                         self.add_prompt(point, "neg_points")
                         if instanceNumber > instanceNumber2:
                             point[2]=img_np.shape[1]-1-point[2]
-                        session.add_point_interaction(tuple(point[::-1]), include_interaction=False)
+                        if not _safe_interaction(lambda: session.add_point_interaction(tuple(point[::-1]), include_interaction=False)):
+                            return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add neg points")
 
             if len(data['pos_boxes'])!=0:
@@ -507,7 +546,11 @@ class BasicInferTask(InferTask):
                             box[1][2]=img_np.shape[1]-1-box[1][2]
                         box[0]=box[0][::-1]
                         box[1]=box[1][::-1]
-                        session.add_bbox_interaction([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], include_interaction=True)
+                        if not _safe_interaction(lambda: session.add_bbox_interaction(
+                            [[box[0][0], box[1][0] + 1], [box[0][1], box[1][1]], [box[0][2], box[1][2]]],
+                            include_interaction=True
+                        )):
+                            return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add a box")            
 
             if len(data['neg_boxes'])!=0:
@@ -521,7 +564,11 @@ class BasicInferTask(InferTask):
                             box[1][2]=img_np.shape[1]-1-box[1][2]
                         box[0]=box[0][::-1]
                         box[1]=box[1][::-1]
-                        session.add_bbox_interaction([[box[0][0],box[1][0]+1],[box[0][1],box[1][1]],[box[0][2],box[1][2]]], include_interaction=False)
+                        if not _safe_interaction(lambda: session.add_bbox_interaction(
+                            [[box[0][0], box[1][0] + 1], [box[0][1], box[1][1]], [box[0][2], box[1][2]]],
+                            include_interaction=False
+                        )):
+                            return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add a box")            
 
 
@@ -545,7 +592,8 @@ class BasicInferTask(InferTask):
                         )
                         # Apply only valid indices
                         lassoMask[z[valid], y[valid], x[valid]] = 1
-                        session.add_lasso_interaction(lassoMask, include_interaction=True)
+                        if not _safe_interaction(lambda: session.add_lasso_interaction(lassoMask, include_interaction=True)):
+                            return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add a lasso")                
             
             if len(data['neg_lassos'])!=0:
@@ -567,7 +615,8 @@ class BasicInferTask(InferTask):
                         )
                         # Apply only valid indices
                         lassoMask[z[valid], y[valid], x[valid]] = 1
-                        session.add_lasso_interaction(lassoMask, include_interaction=False)
+                        if not _safe_interaction(lambda: session.add_lasso_interaction(lassoMask, include_interaction=False)):
+                            return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add a lasso")  
             
             if len(data['pos_scribbles'])!=0:
@@ -608,7 +657,8 @@ class BasicInferTask(InferTask):
                             #    continue  # Skip out-of-bounds
                             scribbleMask[z0c:z1c, y0c:y1c, x0c:x1c] |= kernel[kz0:kz1, ky0:ky1, kx0:kx1]
                         scribble_start = time.time()
-                        session.add_scribble_interaction(scribbleMask, include_interaction=True)
+                        if not _safe_interaction(lambda: session.add_scribble_interaction(scribbleMask, include_interaction=True)):
+                            return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info(f"only for add scribble: {time.time()-scribble_start} secs")
                         logger.info(f"just after add scribble: {time.time()-start} secs")
                         logger.info("Add a scribble")
@@ -653,7 +703,8 @@ class BasicInferTask(InferTask):
                             #    continue  # Skip out-of-bounds
                             scribbleMask[z0c:z1c, y0c:y1c, x0c:x1c] |= kernel[kz0:kz1, ky0:ky1, kx0:kx1]
                     
-                        session.add_scribble_interaction(scribbleMask, include_interaction=False)
+                        if not _safe_interaction(lambda: session.add_scribble_interaction(scribbleMask, include_interaction=False)):
+                            return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add a scribble")
 
             # --- Retrieve Results ---
@@ -691,6 +742,11 @@ class BasicInferTask(InferTask):
 
         #SAM2
         if nnInter == False:
+            medsam2 = data['medsam2']
+            if medsam2:
+                predictor = predictor_med
+            else:
+                predictor = predictor_sam2
             start = time.time()
             #result_json["pos_points"]=data["pos_points"]
             result_json["pos_points"]=copy.deepcopy(data["pos_points"])
@@ -904,7 +960,10 @@ class BasicInferTask(InferTask):
                 final_result_json["flipped"] = False
 
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            final_result_json["label_name"] = f"sam2_pred_{timestamp}"
+            if medsam2:
+                final_result_json["label_name"] = f"medsam2_pred_{timestamp}"
+            else:
+                final_result_json["label_name"] = f"sam2_pred_{timestamp}"
             
             logger.info(f"Result json info: {final_result_json}")
             # result_json contains prompt information

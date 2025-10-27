@@ -4,7 +4,7 @@ let liveMode = true;
 let posNeg = false;
 let refineNew = false;
 let nnInterSam2 = false; // Add new state for nnInter/SAM2 toggle
-
+let medSam2 = false; // Add new state for MedSAM2 toggle
 let currentActiveSegment = 1;
 
 export const toolboxState = {
@@ -28,6 +28,10 @@ export const toolboxState = {
   getNnInterSam2: () => nnInterSam2,
   setNnInterSam2: (enabled: boolean) => {
     nnInterSam2 = enabled;
+  },
+  getMedSam2: () => medSam2,
+  setMedSam2: (enabled: boolean) => {
+    medSam2 = enabled;
   },
   getCurrentActiveSegment: () => currentActiveSegment,
   setCurrentActiveSegment: (segment: number) => {

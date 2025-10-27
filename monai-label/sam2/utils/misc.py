@@ -352,6 +352,7 @@ def concat_points(old_point_inputs, new_points, new_labels):
 
 def load_medical_slices(
     video_path,
+    image_size,
     offload_video_to_cpu,
     compute_device,
     clip_low=None,
@@ -369,7 +370,8 @@ def load_medical_slices(
     img_z = img.GetSize()[2]
     img_y = img.GetSize()[1]
     img_x = img.GetSize()[0]
-    new_size = [1024, 1024, img_z]
+    #new_size = [1024, 1024, img_z]
+    new_size = [image_size, image_size, img_z]
     reference_image = sitk.Image(new_size, img.GetPixelIDValue())
     reference_image.SetOrigin(img.GetOrigin())
     reference_image.SetDirection(img.GetDirection())
