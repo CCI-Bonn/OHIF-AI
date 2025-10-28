@@ -101,6 +101,42 @@ Choose which segmentation model to use:
 
 ## Getting Started
 
-1. Run:
-   ```bash
-   bash start.sh
+- Run bash start.sh
+- Go to http://localhost:1026
+- Upload all DICOM files in sample-data
+
+
+## Next steps 
+
+## (potential) FAQ - Q: Load library (libnvidia-ml.so) failed from NVIDIA Container Toolkit - A: Run sudo apt-get install --reinstall docker-ce [Reference](https://github.com/NVIDIA/nvidia-container-toolkit/issues/305) - Q: Failed to initialize NVML: Unknown Error Or No CUDA available - A: Edit no-cgroups = falsein /etc/nvidia-container-runtime/config.toml [Reference](https://forums.developer.nvidia.com/t/nvida-container-toolkit-failed-to-initialize-nvml-unknown-error/286219/2) ## How to Cite [OHIF-SAM2](https://ieeexplore.ieee.org/document/10981119) [nnInteractive](https://arxiv.org/abs/2503.08373) [SAM2](https://arxiv.org/abs/2408.00714)
+bibtex
+@INPROCEEDINGS{10981119,
+  author={Cho, Jaeyoung and Rastogi, Aditya and Liu, Jingyu and Schlamp, Kai and Vollmuth, Philipp},
+  booktitle={2025 IEEE 22nd International Symposium on Biomedical Imaging (ISBI)}, 
+  title={OHIF -SAM2: Accelerating Radiology Workflows with Meta Segment Anything Model 2}, 
+  year={2025},
+  volume={},
+  number={},
+  pages={1-5},
+  keywords={Image segmentation;Limiting;Grounding;Foundation models;Biological system modeling;Radiology;Biomedical imaging;Web-Based Medical Imaging;Foundation Model;Segmentation;Artificial Intelligence},
+  doi={10.1109/ISBI60581.2025.10981119}}
+
+@misc{isensee2025nninteractiveredefining3dpromptable,
+      title={nnInteractive: Redefining 3D Promptable Segmentation}, 
+      author={Fabian Isensee and Maximilian Rokuss and Lars Krämer and Stefan Dinkelacker and Ashis Ravindran and Florian Stritzke and Benjamin Hamm and Tassilo Wald and Moritz Langenberg and Constantin Ulrich and Jonathan Deissler and Ralf Floca and Klaus Maier-Hein},
+      year={2025},
+      eprint={2503.08373},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2503.08373}, 
+}
+
+@misc{ravi2024sam2segmentimages,
+      title={SAM 2: Segment Anything in Images and Videos}, 
+      author={Nikhila Ravi and Valentin Gabeur and Yuan-Ting Hu and Ronghang Hu and Chaitanya Ryali and Tengyu Ma and Haitham Khedr and Roman Rädle and Chloe Rolland and Laura Gustafson and Eric Mintun and Junting Pan and Kalyan Vasudev Alwala and Nicolas Carion and Chao-Yuan Wu and Ross Girshick and Piotr Dollár and Christoph Feichtenhofer},
+      year={2024},
+      eprint={2408.00714},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2408.00714}, 
+}
