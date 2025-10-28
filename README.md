@@ -57,6 +57,22 @@ Choose which segmentation model to use:
 - **nnInteractive**: Supports all prompt types (point, scribble, lasso, bounding box)  
 - **SAM2**: Currently supports positive/negative points and positive bounding box only  
 
+### Keyboard Shortcuts
+
+For faster workflow, you can use the following keyboard shortcuts:
+
+**Prompt Types:**
+- **a** - Point
+- **s** - Scribble
+- **d** - Lasso
+- **f** - Bounding box
+
+**Mode Controls:**
+- **q** - Toggle Live Mode
+- **w** - Toggle Positive/Negative
+- **e** - Toggle Refine/New
+- **t** - Toggle nnInteractive/SAM2
+
 ## Demo Video
 
 [![OHIF-AI Demo](https://img.youtube.com/vi/z3aq3yd-KRA/0.jpg)](https://youtu.be/z3aq3yd-KRA)
