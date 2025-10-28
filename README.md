@@ -101,24 +101,29 @@ Choose which segmentation model to use:
 
 ## Getting Started
 
-- Run bash start.sh
+- Run `bash start.sh`
 - Go to http://localhost:1026
 - Upload all DICOM files in sample-data
 
 
-## Next steps 
+## Next steps
 
-## (potential) FAQ 
+
+## (potential) FAQ
 
 - Q: Load library (libnvidia-ml.so) failed from NVIDIA Container Toolkit
-- A: Run sudo apt-get install --reinstall docker-ce [Reference](https://github.com/NVIDIA/nvidia-container-toolkit/issues/305)
+- A: Run `sudo apt-get install --reinstall docker-ce ` [Reference](https://github.com/NVIDIA/nvidia-container-toolkit/issues/305)
 
-- Q: Failed to initialize NVML: Unknown Error Or No CUDA available
-- A: Edit no-cgroups = falsein /etc/nvidia-container-runtime/config.toml [Reference](https://forums.developer.nvidia.com/t/nvida-container-toolkit-failed-to-initialize-nvml-unknown-error/286219/2)
+- Q: `Failed to initialize NVML: Unknown Error` Or `No CUDA available``
+- A: Edit `no-cgroups = false`in `/etc/nvidia-container-runtime/config.toml` [Reference](https://forums.developer.nvidia.com/t/nvida-container-toolkit-failed-to-initialize-nvml-unknown-error/286219/2)
 
+## How to Cite
 
-## How to Cite [OHIF-SAM2](https://ieeexplore.ieee.org/document/10981119) [nnInteractive](https://arxiv.org/abs/2503.08373) [SAM2](https://arxiv.org/abs/2408.00714)
-bibtex
+[OHIF-SAM2](https://ieeexplore.ieee.org/document/10981119)
+[nnInteractive](https://arxiv.org/abs/2503.08373)
+[SAM2](https://arxiv.org/abs/2408.00714)
+
+```bibtex
 @INPROCEEDINGS{10981119,
   author={Cho, Jaeyoung and Rastogi, Aditya and Liu, Jingyu and Schlamp, Kai and Vollmuth, Philipp},
   booktitle={2025 IEEE 22nd International Symposium on Biomedical Imaging (ISBI)}, 
@@ -149,3 +154,4 @@ bibtex
       primaryClass={cs.CV},
       url={https://arxiv.org/abs/2408.00714}, 
 }
+```
