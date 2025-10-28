@@ -108,7 +108,16 @@ Choose which segmentation model to use:
 
 ## Next steps 
 
-## (potential) FAQ - Q: Load library (libnvidia-ml.so) failed from NVIDIA Container Toolkit - A: Run sudo apt-get install --reinstall docker-ce [Reference](https://github.com/NVIDIA/nvidia-container-toolkit/issues/305) - Q: Failed to initialize NVML: Unknown Error Or No CUDA available - A: Edit no-cgroups = falsein /etc/nvidia-container-runtime/config.toml [Reference](https://forums.developer.nvidia.com/t/nvida-container-toolkit-failed-to-initialize-nvml-unknown-error/286219/2) ## How to Cite [OHIF-SAM2](https://ieeexplore.ieee.org/document/10981119) [nnInteractive](https://arxiv.org/abs/2503.08373) [SAM2](https://arxiv.org/abs/2408.00714)
+## (potential) FAQ 
+
+- Q: Load library (libnvidia-ml.so) failed from NVIDIA Container Toolkit
+- A: Run sudo apt-get install --reinstall docker-ce [Reference](https://github.com/NVIDIA/nvidia-container-toolkit/issues/305)
+
+- Q: Failed to initialize NVML: Unknown Error Or No CUDA available
+- A: Edit no-cgroups = falsein /etc/nvidia-container-runtime/config.toml [Reference](https://forums.developer.nvidia.com/t/nvida-container-toolkit-failed-to-initialize-nvml-unknown-error/286219/2)
+
+
+## How to Cite [OHIF-SAM2](https://ieeexplore.ieee.org/document/10981119) [nnInteractive](https://arxiv.org/abs/2503.08373) [SAM2](https://arxiv.org/abs/2408.00714)
 bibtex
 @INPROCEEDINGS{10981119,
   author={Cho, Jaeyoung and Rastogi, Aditya and Liu, Jingyu and Schlamp, Kai and Vollmuth, Philipp},
