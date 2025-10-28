@@ -4,8 +4,6 @@
 
 By combining the capabilities of large foundation models with the familiar OHIF interface, users can guide AI segmentation using simple visual prompts — such as **points**, **scribbles**, **lassos**, or **bounding boxes** — to delineate anatomical structures or regions of interest within 2D or 3D DICOM images. The integration supports iterative refinement, live inference, and model selection, offering a flexible framework for researchers and clinicians to explore next-generation segmentation workflows without leaving the web environment.
 
----
-
 ## How to use?
 
 ### Segmentation Prompts
@@ -21,8 +19,6 @@ The tool provides four different prompt types for segmentation (shown in red box
 
 ![All Prompts](docs/images/all_prompts.png)
 
----
-
 ### Running Inference
 
 After providing prompts, you can run inference by clicking one of the manual inference buttons located next to the red box:
@@ -34,8 +30,6 @@ After providing prompts, you can run inference by clicking one of the manual inf
 
 ![Output](docs/images/output.png)
 
----
-
 ### Positive and Negative Prompts
 
 You can exclude certain structures from your segmentation by toggling on the **neg.** (negative) button before providing prompts.
@@ -46,7 +40,6 @@ You can exclude certain structures from your segmentation by toggling on the **n
 **Negative Point Example:**  
 ![Point Positive and Negative](docs/images/point_pos_neg.png)
 
----
 
 ### Refine vs. New Segment
 
@@ -57,8 +50,6 @@ Use the **Refine/New** toggle to control segmentation behavior:
 
 You can revisit and edit existing segments by clicking on the target segment in the segmentation list.
 
----
-
 ### Model Selection
 
 Choose which segmentation model to use:
@@ -66,13 +57,9 @@ Choose which segmentation model to use:
 - **nnInteractive**: Supports all prompt types (point, scribble, lasso, bounding box)  
 - **SAM2**: Currently supports positive/negative points and positive bounding box only  
 
----
-
 ## Demo Video
 
 [![OHIF-AI Demo](https://img.youtube.com/vi/z3aq3yd-KRA/0.jpg)](https://youtu.be/z3aq3yd-KRA)
-
----
 
 ## Highlights
 
@@ -80,8 +67,6 @@ Choose which segmentation model to use:
 - Support for multiple prompt types and models  
 - Dockerized setup for easy deployment  
 - Integration with modern foundation models for radiology  
-
----
 
 ## Updates
 
@@ -96,8 +81,6 @@ Choose which segmentation model to use:
   - Docker: `27.3.1`  
   - NVIDIA Container Toolkit: `1.16.2`  
   - CUDA Version: `12.6`
-
----
 
 ## Getting Started
 
