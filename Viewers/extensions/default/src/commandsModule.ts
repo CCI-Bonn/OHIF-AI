@@ -554,6 +554,7 @@ const commandsModule = ({
     },
 
     async sam2() {
+      const overlap = false
       let medsam2 = false;
       if (toolboxState.getMedSam2()) {
         medsam2 = true;
@@ -788,10 +789,11 @@ const commandsModule = ({
             }
           }
           
-
+          let merged_derivedImages = [];
+          let z_range = [];
+          if(overlap){
           let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
           console.log(`Just after createAndCacheDerivedLabelmapImages: ${(Date.now() - start)/1000} Seconds`);
-          let z_range =[]
           let derivedImages = [];
           if (segImageIds.length > 0){
             derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
@@ -849,8 +851,48 @@ const commandsModule = ({
             filteredDerivedImages = derivedImages;
           }
           console.log(`After refinement & filteredDerivedImages: ${(Date.now() - start)/1000} Seconds`);
+          merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
+        } else {
+          if (segImageIds.length == 0){
+            let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
 
-          let merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
+            if(flipped){
+              derivedImages_new.reverse();
+            }
+            console.log(`After reverse: ${(Date.now() - start)/1000} Seconds`);
+            for (let i = 0; i < derivedImages_new.length; i++) {
+              const voxelManager = derivedImages_new[i]
+                .voxelManager as csTypes.IVoxelManager<number>;
+              let scalarData = voxelManager.getScalarData();
+              const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
+              if (sliceData.some(v => v === 1)){
+                voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
+                if (flipped) {
+                  z_range.push(derivedImages_new.length - i - 1);
+                } else {
+                  z_range.push(i);
+                }
+              }
+            }
+            merged_derivedImages = derivedImages_new
+          } else {
+            merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
+            for (let i = 0; i < merged_derivedImages.length; i++) {
+              const voxelManager = merged_derivedImages[i]
+                .voxelManager as csTypes.IVoxelManager<number>;
+              let scalarData = voxelManager.getScalarData();
+              const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
+              if (sliceData.some(v => v === 1)){
+                voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
+                if (flipped) {
+                  z_range.push(merged_derivedImages.length - i - 1);
+                } else {
+                  z_range.push(i);
+                }
+              }
+            }
+          }
+        }
           
                     
           const derivedImageIds = merged_derivedImages.map(image => image.imageId);  
@@ -1080,6 +1122,7 @@ const commandsModule = ({
     },
 
     async nninter() {
+      const overlap = false
       const start = Date.now();
       
       const { activeViewportId, viewports } = viewportGridService.getState();
@@ -1332,12 +1375,6 @@ const commandsModule = ({
 
 
 
-            //const results = await adaptersSEG.Cornerstone3D.Segmentation.createFromDICOMSegBuffer(
-            //  imageIds,
-            //  arrayBuffer,
-            //  { metadataProvider: metaData, tolerance: 0.001 }
-            //);
-
             let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
             
             let segImageIds = [];
@@ -1366,9 +1403,10 @@ const commandsModule = ({
             }
 
 
-
+          let merged_derivedImages = [];
+          let z_range = [];
+          if(overlap){
           let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
-          let z_range =[]
           console.log(`Just after createAndCacheDerivedLabelmapImages: ${(Date.now() - start)/1000} Seconds`);
           let derivedImages = [];
           if (segImageIds.length > 0){
@@ -1434,7 +1472,50 @@ const commandsModule = ({
           }
           console.log(`After refinement & filteredDerivedImages: ${(Date.now() - start)/1000} Seconds`);
 
-          let merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
+          merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
+        } else {
+          if (segImageIds.length == 0){
+            let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+
+            if(flipped){
+              derivedImages_new.reverse();
+            }
+            console.log(`After reverse: ${(Date.now() - start)/1000} Seconds`);
+            for (let i = 0; i < derivedImages_new.length; i++) {
+              const voxelManager = derivedImages_new[i]
+                .voxelManager as csTypes.IVoxelManager<number>;
+              let scalarData = voxelManager.getScalarData();
+              const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
+              if (sliceData.some(v => v === 1)){
+                voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
+                if (flipped) {
+                  z_range.push(derivedImages_new.length - i - 1);
+                } else {
+                  z_range.push(i);
+                }
+              }
+            }
+            merged_derivedImages = derivedImages_new
+          } else {
+            merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
+            for (let i = 0; i < merged_derivedImages.length; i++) {
+              const voxelManager = merged_derivedImages[i]
+                .voxelManager as csTypes.IVoxelManager<number>;
+              let scalarData = voxelManager.getScalarData();
+              const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
+              if (sliceData.some(v => v === 1)){
+                voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
+                if (flipped) {
+                  z_range.push(merged_derivedImages.length - i - 1);
+                } else {
+                  z_range.push(i);
+                }
+              }
+            }
+
+          }
+          
+        }
           
                     
           const derivedImageIds = merged_derivedImages.map(image => image.imageId);  
