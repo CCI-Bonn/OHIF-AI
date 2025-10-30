@@ -6,7 +6,7 @@ import { useSystem } from '@ohif/core/src';
 
 export default function PanelSegmentation({ children }: withAppTypes) {
   const { commandsManager, servicesManager } = useSystem();
-  const { customizationService, displaySetService, measurementService } = servicesManager.services;
+  const { customizationService, displaySetService, measurementService, uiNotificationService } = servicesManager.services;
 
   const { segmentationsWithRepresentations, disabled } =
     useActiveViewportSegmentationRepresentations({
@@ -51,32 +51,54 @@ export default function PanelSegmentation({ children }: withAppTypes) {
       commandsManager.run('editSegmentColor', { segmentationId, segmentIndex });
     },
     onSegmentDelete: (segmentationId, segmentIndex) => {
-      const measurementUIDs = measurementService
-      .getMeasurements()
-      .filter(
-        e =>
-          e?.metadata?.segmentationId === segmentationId &&
-          e?.metadata?.SegmentNumber === segmentIndex
-      )
-      .map(e => e?.uid);
-    if (measurementUIDs.length > 0) {
-      measurementService.removeMany(measurementUIDs);
-    }
-    commandsManager.run('resetNninter', { clearMeasurements: false });
+      const deletePromise = new Promise<void>((resolve, reject) => {
+        setTimeout(() => {
+          try {
+            const measurementUIDs = measurementService
+              .getMeasurements()
+              .filter(
+                e =>
+                  e?.metadata?.segmentationId === segmentationId &&
+                  e?.metadata?.SegmentNumber === segmentIndex
+              )
+              .map(e => e?.uid);
+            if (measurementUIDs.length > 0) {
+              measurementService.removeMany(measurementUIDs);
+            }
+            commandsManager.run('resetNninter', { clearMeasurements: false });
 
-    // When loaded existing segDisplaySet, need to remove the segment from the displaySet
-    const segDisplaySet = displaySetService.getDisplaySetByUID(segmentationId);
-    const data = segDisplaySet?.segMetadata?.data;
-    // Keep undefined entries; only remove matching segment objects
-    if (Array.isArray(data)) {
-      for (let i = data.length - 1; i >= 0; i--) {
-        const e = data[i];
-        if (e?.SegmentNumber === segmentIndex) {
-          data.splice(i, 1); // removes the element in-place
-        }
-      }
-    }
-      commandsManager.run('deleteSegment', { segmentationId, segmentIndex });
+            // When loaded existing segDisplaySet, need to remove the segment from the displaySet
+            const segDisplaySet = displaySetService.getDisplaySetByUID(segmentationId);
+            const data = segDisplaySet?.segMetadata?.data;
+            // Keep undefined entries; only remove matching segment objects
+            if (Array.isArray(data)) {
+              for (let i = data.length - 1; i >= 0; i--) {
+                const e = data[i];
+                if (e?.SegmentNumber === segmentIndex) {
+                  data.splice(i, 1);
+                }
+              }
+            }
+
+            commandsManager.run('deleteSegment', { segmentationId, segmentIndex });
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        }, 100);
+      });
+
+      uiNotificationService.show({
+        title: `Deleting ${segmentIndex}`,
+        message: `Deleting segment ${segmentIndex}...`,
+        type: 'info',
+        promise: deletePromise,
+        promiseMessages: {
+          loading: `Deleting ${segmentIndex}...`,
+          success: () => `Deleted ${segmentIndex} successfully`,
+          error: error => `Delete ${segmentIndex} failed: ${error?.message || 'Unknown error'}`,
+        },
+      });
     },
     onToggleSegmentVisibility: (segmentationId, segmentIndex, type) => {
       commandsManager.run('toggleSegmentVisibility', { segmentationId, segmentIndex, type });

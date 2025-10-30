@@ -21,11 +21,12 @@ interface ButtonProps {
  * and display various tools and their corresponding options
  */
 export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; title: string }) {
-  const { servicesManager } = useSystem();
+  const { servicesManager, commandsManager } = useSystem();
   const { t } = useTranslation();
 
   const { toolbarService, customizationService } = servicesManager.services;
   const [showConfig, setShowConfig] = useState(false);
+  const [locked, setLocked] = useState(false);
 
   // Local state for UI updates
   const [liveMode, setLiveMode] = useState(toolboxState.getLiveMode());
@@ -143,6 +144,23 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
     };
   }, [refineNew]);
 
+  // When locked, force Pan tool active, disable live prompts, and collapse section
+  useEffect(() => {
+    if (locked) {
+      try {
+        // Disable live mode to avoid unintended inference
+        if (liveMode) {
+          setLiveMode(false);
+          toolboxState.setLiveMode(false);
+        }
+        // Activate Pan tool
+        commandsManager?.run?.('setToolActive', { toolName: 'Pan' });
+      } catch (e) {
+        // no-op
+      }
+    }
+  }, [locked]);
+
   // Keyboard hotkey handler for nnInter/SAM2 toggle
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -220,15 +238,47 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
 
   // Define the interaction handler once.
   const handleInteraction = ({ itemId }: { itemId: string }) => {
+    if (locked && itemId !== 'Pan') {
+      // Prevent tool changes when locked; keep Pan active
+      commandsManager?.run?.('setToolActive', { toolName: 'Pan' });
+      return;
+    }
     onInteraction?.({ itemId });
   };
 
   const CustomConfigComponent = customizationService.getCustomization(`${buttonSectionId}.config`);
+  
+  const isAIToolBox = buttonSectionId === "aiToolBox";
+  const shouldCollapse = isAIToolBox && locked;
 
   return (
-    <PanelSection>
-      <PanelSection.Header className="flex items-center justify-between">
-        <span>{t(title)}</span>
+    <PanelSection key={isAIToolBox ? `toolbox-${locked}` : buttonSectionId} defaultOpen={!shouldCollapse}>
+      <PanelSection.Header 
+        className="flex items-center justify-between"
+      >
+        <span className={classnames("flex items-center gap-2", { 
+          "pointer-events-none": shouldCollapse 
+        })}>
+          <span className="pointer-events-auto">{t(title)}</span>
+          {isAIToolBox && (
+            <button
+              type="button"
+              className={classnames('ml-2 h-5 w-5 text-primary hover:opacity-80 pointer-events-auto cursor-pointer')}
+              onClick={e => {
+                e.stopPropagation();
+                const next = !locked;
+                setLocked(next);
+                if (next) {
+                  commandsManager?.run?.('setToolActive', { toolName: 'Pan' });
+                }
+              }}
+              aria-label={locked ? 'Unlock tools' : 'Lock tools'}
+              title={locked ? 'Unlock tools' : 'Lock tools'}
+            >
+              <Icons.Lock className={classnames('h-4 w-4', { 'opacity-40': !locked })} />
+            </button>
+          )}
+        </span>
         {CustomConfigComponent && (
           <div className="ml-auto mr-2">
             <Icons.Settings
@@ -242,6 +292,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
         )}
       </PanelSection.Header>
 
+      {!shouldCollapse && (
       <PanelSection.Content className="bg-muted flex-shrink-0 border-none">
         {showConfig && <CustomConfigComponent />}
         {toolboxSections.map(section => {
@@ -349,6 +400,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
           </div>
         )}
       </PanelSection.Content>
+      )}
     </PanelSection>
   );
 }
