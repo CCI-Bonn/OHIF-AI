@@ -57,7 +57,7 @@ Choose which segmentation model to use:
 - **nnInteractive**: Supports all prompt types (point, scribble, lasso, bounding box)  
 - **SAM2**: Currently supports positive/negative points and positive bounding box only  
 
-### Keyboard Shortcuts
+## Keyboard Shortcuts
 
 For faster workflow, you can use the following keyboard shortcuts:
 
