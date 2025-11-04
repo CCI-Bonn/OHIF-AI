@@ -58,18 +58,20 @@ class ProbeTool extends AnnotationTool {
         };
         this._addNewAnnotationFromIndex = (element, idxPos, neg = false, SegmentNumber, segmentationId) => {
             const enabledElement = getEnabledElement(element);
-            const { viewport } = enabledElement;
+            const { viewport, renderingEngine } = enabledElement;
             const worldPos = viewport.getImageData().imageData.indexToWorld(idxPos)
             this.isDrawing = true;
             const annotation = (this.constructor).createAnnotation({ metadata: viewport.getViewReference({sliceIndex: idxPos[2]}) }, {
                 data: {
                     handles: { points: [[...worldPos]] },
+                    cachedStats: {[this.getTargetId(viewport)]: {}},
                 },
             });
             annotation.metadata.neg = neg;
             annotation.metadata.SegmentNumber = SegmentNumber;
             annotation.metadata.segmentationId = segmentationId;
             annotation.metadata.toolLoad = true;
+            this._calculateCachedStats(annotation, renderingEngine, enabledElement);
             addAnnotation(annotation, element);
             const viewportIdsToRender = getViewportIdsWithToolToRender(element, this.getToolName());
             this.editData = {

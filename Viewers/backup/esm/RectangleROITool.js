@@ -81,7 +81,7 @@ class RectangleROITool extends AnnotationTool {
         };
         this._addNewAnnotationFromIndex = (element, idxPos, neg = false, SegmentNumber, segmentationId) => {
             const enabledElement = getEnabledElement(element);
-            const { viewport } = enabledElement;
+            const { viewport, renderingEngine } = enabledElement;
         
             const tl = viewport.getImageData().imageData.indexToWorld(idxPos[0])
             const tr = viewport.getImageData().imageData.indexToWorld([idxPos[1][0],idxPos[0][1],idxPos[0][2]])
@@ -108,12 +108,15 @@ class RectangleROITool extends AnnotationTool {
                             },
                         },
                     },
+                    cachedStats: {[this.getTargetId(viewport)]: {}},
                 },
             });
             annotation.metadata.neg = neg;
             annotation.metadata.SegmentNumber = SegmentNumber;
             annotation.metadata.segmentationId = segmentationId;
             annotation.metadata.toolLoad = true;
+            const { viewPlaneNormal, viewUp } = viewport.getCamera();
+            this._calculateCachedStats(annotation, viewPlaneNormal, viewUp, renderingEngine, enabledElement);
             addAnnotation(annotation, element);
             const viewportIdsToRender = getViewportIdsWithToolToRender(element, this.getToolName());
             this.editData = {

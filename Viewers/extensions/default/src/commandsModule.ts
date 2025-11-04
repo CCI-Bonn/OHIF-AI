@@ -906,6 +906,9 @@ const commandsModule = ({
                 }
               }
             }
+            if(flipped){
+              derivedImages_new.reverse();
+            }
             merged_derivedImages = derivedImages_new
           } else {
             merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
@@ -914,6 +917,12 @@ const commandsModule = ({
                 .voxelManager as csTypes.IVoxelManager<number>;
               let scalarData = voxelManager.getScalarData();
               const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
+              if (!toolboxState.getRefineNew()){
+                if (scalarData.some(v => v === segmentNumber)){
+                  voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
+                  scalarData = voxelManager.getScalarData();
+                }
+              }
               if (sliceData.some(v => v === 1)){
                 voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
                 if (flipped) {
@@ -1535,14 +1544,26 @@ const commandsModule = ({
                 }
               }
             }
+            if(flipped){
+              derivedImages_new.reverse();
+            }
             merged_derivedImages = derivedImages_new
           } else {
             merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
+            if(flipped){
+              merged_derivedImages.reverse();
+            }
             for (let i = 0; i < merged_derivedImages.length; i++) {
               const voxelManager = merged_derivedImages[i]
                 .voxelManager as csTypes.IVoxelManager<number>;
               let scalarData = voxelManager.getScalarData();
               const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
+              if (!toolboxState.getRefineNew()){
+                if (scalarData.some(v => v === segmentNumber)){
+                  voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
+                  scalarData = voxelManager.getScalarData();
+                }
+              }
               if (sliceData.some(v => v === 1)){
                 voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
                 if (flipped) {
@@ -1551,6 +1572,9 @@ const commandsModule = ({
                   z_range.push(i);
                 }
               }
+            }
+            if(flipped){
+              merged_derivedImages.reverse();
             }
 
           }
