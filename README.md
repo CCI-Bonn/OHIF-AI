@@ -164,7 +164,14 @@ For faster workflow, you can use the following keyboard shortcuts:
 - `q` - Toggle Live Mode
 - `w` - Toggle Positive/Negative
 - `e` - Toggle Refine/New
+- `r` - Run inference (if live mode off)
 - `t` - Toggle nnInteractive/SAM2
+
+<a href="docs/images/hotkeys.png" target="_blank">
+  <img src="docs/images/hotkeys.png" alt="List of hotkeys" width="700">
+</a>
+
+You can view other keyboard shortcuts and customize them in the **Settings** menu (located in the top-right corner). Select **Preferences** to access the hotkey configuration panel.
 
 ---
 
