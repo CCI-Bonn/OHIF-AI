@@ -115,6 +115,7 @@ After providing prompts, you can run inference by clicking one of the manual inf
 <a href="docs/images/output.png" target="_blank">
   <img src="docs/images/output.png" alt="Output" width="700">
 </a>
+
 ### Positive and Negative Prompts
 
 You can exclude certain structures from your segmentation by toggling on the **neg.** (negative) button before providing prompts.
