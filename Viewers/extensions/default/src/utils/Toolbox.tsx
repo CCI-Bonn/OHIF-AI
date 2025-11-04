@@ -25,8 +25,10 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   const { t } = useTranslation();
 
   const { toolbarService, customizationService } = servicesManager.services;
+  const isAIToolBox = buttonSectionId === 'aiToolBox';
   const [showConfig, setShowConfig] = useState(false);
-  const [locked, setLocked] = useState(false);
+  const [isLocked, setIsLocked] = useState(toolboxState.getLocked());
+  const hotkeysDisabled = isAIToolBox && isLocked;
 
   // Local state for UI updates
   const [liveMode, setLiveMode] = useState(toolboxState.getLiveMode());
@@ -43,6 +45,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
       setRefineNew(toolboxState.getRefineNew());
       setNnInterSam2(toolboxState.getNnInterSam2());
       setMedSam2(toolboxState.getMedSam2());
+      setIsLocked(toolboxState.getLocked());
     };
 
     // Update immediately
@@ -56,6 +59,10 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
 
   // Keyboard hotkey handler for Live Mode toggle
   useEffect(() => {
+    if (hotkeysDisabled) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       // Check if the pressed key is 'Q' or 'q'
       if ((event.key === 'Q' || event.key === 'q')) {
@@ -82,10 +89,14 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [liveMode]);
+  }, [liveMode, hotkeysDisabled]);
 
   // Keyboard hotkey handler for Pos/Neg toggle
   useEffect(() => {
+    if (hotkeysDisabled) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       // Check if the pressed key is 'W' or 'w'
       if ((event.key === 'W' || event.key === 'w')) {
@@ -112,10 +123,14 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [posNeg]);
+  }, [posNeg, hotkeysDisabled]);
 
   // Keyboard hotkey handler for Refine/New toggle
   useEffect(() => {
+    if (hotkeysDisabled) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       // Check if the pressed key is 'E' or 'e'
       if ((event.key === 'E' || event.key === 'e')) {
@@ -142,11 +157,11 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [refineNew]);
+  }, [refineNew, hotkeysDisabled]);
 
   // When locked, force Pan tool active, disable live prompts, and collapse section
   useEffect(() => {
-    if (locked) {
+    if (isLocked) {
       try {
         // Disable live mode to avoid unintended inference
         if (liveMode) {
@@ -159,10 +174,14 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
         // no-op
       }
     }
-  }, [locked]);
+  }, [isLocked]);
 
   // Keyboard hotkey handler for nnInter/SAM2 toggle
   useEffect(() => {
+    if (hotkeysDisabled) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       // Check if the pressed key is 'T' or 't'
       if ((event.key === 'T' || event.key === 't')) {
@@ -189,7 +208,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [nnInterSam2]);
+  }, [nnInterSam2, hotkeysDisabled]);
 
   const { toolbarButtons: toolboxSections, onInteraction } = useToolbar({
     servicesManager,
@@ -238,7 +257,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
 
   // Define the interaction handler once.
   const handleInteraction = ({ itemId }: { itemId: string }) => {
-    if (locked && itemId !== 'Pan') {
+    if (isAIToolBox && isLocked && itemId !== 'Pan') {
       // Prevent tool changes when locked; keep Pan active
       commandsManager?.run?.('setToolActive', { toolName: 'Pan' });
       return;
@@ -247,12 +266,10 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   };
 
   const CustomConfigComponent = customizationService.getCustomization(`${buttonSectionId}.config`);
-  
-  const isAIToolBox = buttonSectionId === "aiToolBox";
-  const shouldCollapse = isAIToolBox && locked;
+  const shouldCollapse = isAIToolBox && isLocked;
 
   return (
-    <PanelSection key={isAIToolBox ? `toolbox-${locked}` : buttonSectionId} defaultOpen={!shouldCollapse}>
+    <PanelSection key={isAIToolBox ? `toolbox-${isLocked}` : buttonSectionId} defaultOpen={!shouldCollapse}>
       <PanelSection.Header 
         className="flex items-center justify-between"
       >
@@ -266,16 +283,17 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
               className={classnames('ml-2 h-5 w-5 text-primary hover:opacity-80 pointer-events-auto cursor-pointer')}
               onClick={e => {
                 e.stopPropagation();
-                const next = !locked;
-                setLocked(next);
+                const next = !isLocked;
+                setIsLocked(next);
+                toolboxState.setLocked(next);
                 if (next) {
                   commandsManager?.run?.('setToolActive', { toolName: 'Pan' });
                 }
               }}
-              aria-label={locked ? 'Unlock tools' : 'Lock tools'}
-              title={locked ? 'Unlock tools' : 'Lock tools'}
+              aria-label={isLocked ? 'Unlock tools' : 'Lock tools'}
+              title={isLocked ? 'Unlock tools' : 'Lock tools'}
             >
-              <Icons.Lock className={classnames('h-4 w-4', { 'opacity-40': !locked })} />
+              <Icons.Lock className={classnames('h-4 w-4', { 'opacity-40': !isLocked })} />
             </button>
           )}
         </span>
@@ -301,8 +319,8 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
 
           return (
             <React.Fragment key={sectionId}>
-                               {buttonSectionId === "aiToolBox" && (
-                 <div className="flex justify-center items-center gap-4 py-2 px-1">
+              {isAIToolBox && (
+                <div className="flex justify-center items-center gap-4 py-2 px-1">
                    <div className="flex items-center gap-2">
                      <Label htmlFor="live-mode">Live Mode</Label>
                      <Switch

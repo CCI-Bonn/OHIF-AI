@@ -70,6 +70,10 @@ const commandsModule = ({
         console.log('Live mode enabled, triggering nninter() for new measurement');
         // Use setTimeout to ensure the measurement is fully processed
         setTimeout(() => {
+          if (toolboxState.getLocked()) {
+            return;
+          }
+
           if (!toolboxState.getNnInterSam2()) {
             commandsManager.run('nninter');
           } else {
@@ -84,6 +88,30 @@ const commandsModule = ({
   const contextMenuController = new ContextMenuController(servicesManager, commandsManager);
 
   const actions = {
+    setAiToolActive: ({ toolName }: { toolName: string }) => {
+      if (!toolName) {
+        return;
+      }
+
+      if (toolboxState.getLocked() && toolName !== 'Pan') {
+        return commandsManager.run('setToolActive', { toolName: 'Pan' });
+      }
+
+      return commandsManager.run('setToolActive', { toolName });
+    },
+
+    runAiSegmentation: () => {
+      if (toolboxState.getLocked()) {
+        return;
+      }
+
+      if (toolboxState.getNnInterSam2()) {
+        return commandsManager.run('sam2');
+      }
+
+      return commandsManager.run('nninter');
+    },
+
     /**
      * Runs a command in multi-monitor mode.  No-op if not multi-monitor.
      */
@@ -554,6 +582,10 @@ const commandsModule = ({
     },
 
     async sam2() {
+      if (toolboxState.getLocked()) {
+        return;
+      }
+
       const overlap = false
       let medsam2 = false;
       if (toolboxState.getMedSam2()) {
@@ -1064,6 +1096,10 @@ const commandsModule = ({
 
     },
     async resetNninter(options: {clearMeasurements: boolean} = {clearMeasurements: false}){
+      if (toolboxState.getLocked()) {
+        return;
+      }
+
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
@@ -1122,6 +1158,10 @@ const commandsModule = ({
     },
 
     async nninter() {
+      if (toolboxState.getLocked()) {
+        return;
+      }
+
       const overlap = false
       const start = Date.now();
       
@@ -1786,6 +1826,8 @@ const commandsModule = ({
     setViewportGridLayout: actions.setViewportGridLayout,
     toggleOneUp: actions.toggleOneUp,
     openDICOMTagViewer: actions.openDICOMTagViewer,
+    setAiToolActive: actions.setAiToolActive,
+    runAiSegmentation: actions.runAiSegmentation,
     sam2: actions.sam2,
     initNninter: actions.initNninter,
     resetNninter: actions.resetNninter,
