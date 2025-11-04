@@ -8,7 +8,7 @@
 
 OHIF-AI integrates state-of-the-art interactive segmentation models such as **nnInteractive** and **SAM2** into the **OHIF Viewer**, enabling convenient and accurate real-time, prompt-based segmentation of medical images directly in the browser.
 
-By combining the capabilities of large foundation models with the familiar OHIF interface, users can guide AI segmentation using simple visual prompts — such as **points**, **scribbles**, **lassos**, or **bounding boxes** — to delineate anatomical structures or regions of interest within 2D or 3D DICOM images. The integration supports iterative refinement, live inference, and model selection, offering a flexible framework for researchers and clinicians to explore next-generation segmentation workflows without leaving the web environment.
+By combining the capabilities of large foundation models with the familiar [OHIF](https://ohif.org/) interface, users can guide AI segmentation using simple visual prompts — such as **points**, **scribbles**, **lassos**, or **bounding boxes** — to delineate anatomical structures or regions of interest within 2D or 3D DICOM images. The integration supports iterative refinement, live inference, and model selection, offering a flexible framework for researchers and clinicians to explore next-generation segmentation workflows without leaving the web environment.
 
 ---
 
