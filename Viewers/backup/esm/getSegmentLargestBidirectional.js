@@ -25,7 +25,17 @@ export async function getSegmentLargestBidirectional({ segmentationId, segmentIn
     //    console.error(new Error('No bidirectional data found'));
     //}
     //triggerWorkerProgress(WorkerTypes.COMPUTE_LARGEST_BIDIRECTIONAL, 100);
-    return bidirectionalData;
+    
+    return bidirectionalData.map(measurement => {
+        let referencedImageId = undefined;
+    if (operationData?.imageVoxelManager && measurement.sliceIndex !== undefined) {
+        referencedImageId = operationData.imageVoxelManager.getImageIds()[measurement.sliceIndex];
+    }
+        return {
+          ...measurement,
+          referencedImageId: referencedImageId,
+        };
+      });
 }
 async function calculateVolumeBidirectional({ operationData, indices, mode }) {
     const strategyData = prepareVolumeStrategyDataForWorker(operationData);

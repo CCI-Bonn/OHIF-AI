@@ -145,7 +145,7 @@ function commandsModule({
 
       // Process each bidirectional measurement
       bidirectionalData.forEach(measurement => {
-        const { segmentIndex, majorAxis, minorAxis } = measurement;
+        const { segmentIndex, majorAxis, minorAxis, referencedImageId } = measurement;
 
         // Create annotation
         const annotation = cornerstoneTools.SegmentBidirectionalTool.hydrate(
@@ -154,6 +154,7 @@ function commandsModule({
           {
             segmentIndex,
             segmentationId: targetId,
+            referencedImageId: referencedImageId,
           }
         );
 

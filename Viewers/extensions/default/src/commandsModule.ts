@@ -912,6 +912,9 @@ const commandsModule = ({
             merged_derivedImages = derivedImages_new
           } else {
             merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
+            if(flipped){
+              merged_derivedImages.reverse();
+            }
             for (let i = 0; i < merged_derivedImages.length; i++) {
               const voxelManager = merged_derivedImages[i]
                 .voxelManager as csTypes.IVoxelManager<number>;
@@ -931,6 +934,9 @@ const commandsModule = ({
                   z_range.push(i);
                 }
               }
+            }
+            if(flipped){
+              merged_derivedImages.reverse();
             }
           }
         }

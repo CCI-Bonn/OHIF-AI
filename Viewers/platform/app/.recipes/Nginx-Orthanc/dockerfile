@@ -36,8 +36,11 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManageme
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getSegmentLargestBidirectional.js
 #RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getStatistics.js
 #RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/utilsForWorker.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/workers/computeWorker.js
 #RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/segmentation/strategies/utils/getStrategyData.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getOrCreateImageVolume.js
+
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/VoxelManager.js
 
 RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
@@ -59,8 +62,10 @@ COPY ./backup/esm/clearSegmentValue.js /usr/src/app/node_modules/@cornerstonejs/
 COPY ./backup/esm/getSegmentLargestBidirectional.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getSegmentLargestBidirectional.js
 #COPY ./backup/esm/getStatistics.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getStatistics.js
 #COPY ./backup/esm/utilsForWorker.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/utilsForWorker.js
+COPY ./backup/esm/computeWorker.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/workers/computeWorker.js
 #COPY ./backup/esm/getStrategyData.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/segmentation/strategies/utils/getStrategyData.js
 COPY ./backup/esm/getOrCreateImageVolume.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getOrCreateImageVolume.js
+COPY ./backup/esm/VoxelManager.js /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/VoxelManager.js
 COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
 # Copy the rest of the application code
