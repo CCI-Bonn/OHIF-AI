@@ -456,7 +456,15 @@ export default class VoxelManager {
         });
         // Should return imageIds which is used to create this voxel manager
         voxelManager.getImageIds = () => {
-            return imageIds
+            if (imageIds.length > 0 && imageIds[0].startsWith('derived:')) {
+            //segmentation imageIds, find referenced imageIds
+            const referencedImageIds = imageIds.map(imageId => {
+                const image = cache.getImage(imageId);
+                return image.referencedImageId;
+            });
+            return referencedImageIds;
+            }
+            return imageIds;
         };
         voxelManager.getMiddleSliceData = () => {
             const middleSliceIndex = Math.floor(dimensions[2] / 2);

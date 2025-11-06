@@ -28,9 +28,10 @@ export async function getSegmentLargestBidirectional({ segmentationId, segmentIn
     
     return bidirectionalData.map(measurement => {
         let referencedImageId = undefined;
-    if (operationData?.imageVoxelManager && measurement.sliceIndex !== undefined) {
-        referencedImageId = operationData.imageVoxelManager.getImageIds()[measurement.sliceIndex];
-    }
+        if (operationData?.segmentationVoxelManager && measurement.sliceIndex !== undefined) {
+            referencedImageId =
+              operationData.segmentationVoxelManager.getImageIds()[measurement.sliceIndex];
+          }
         return {
           ...measurement,
           referencedImageId: referencedImageId,
