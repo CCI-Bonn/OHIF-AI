@@ -339,7 +339,7 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
       madeInClient
     ) => {
       const enableStudyLazyLoad = false;
-      wadoDicomWebClient.headers = generateWadoHeader();
+
       // data is all SOPInstanceUIDs
       const data = await retrieveStudyMetadata(
         wadoDicomWebClient,
@@ -350,7 +350,7 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
         sortFunction,
         dicomWebConfig
       );
-
+      wadoDicomWebClient.headers = generateWadoHeader();
       // first naturalize the data
       const naturalizedInstancesMetadata = data.map(naturalizeDataset);
 
@@ -413,7 +413,6 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
       returnPromises = false
     ) => {
       const enableStudyLazyLoad = true;
-      wadoDicomWebClient.headers = generateWadoHeader();
       // Get Series
       const { preLoadData: seriesSummaryMetadata, promises: seriesPromises } =
         await retrieveStudyMetadata(
@@ -425,7 +424,7 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
           sortFunction,
           dicomWebConfig
         );
-
+      wadoDicomWebClient.headers = generateWadoHeader();
       /**
        * Adds the retrieve bulkdata function to naturalized DICOM data.
        * This is done recursively, for sub-sequences.
