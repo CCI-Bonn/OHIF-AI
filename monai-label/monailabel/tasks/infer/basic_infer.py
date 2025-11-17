@@ -16,6 +16,7 @@ import os
 import time
 from datetime import datetime
 from abc import abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -177,6 +178,11 @@ class BasicInferTask(InferTask):
         self.roi_size = roi_size
         self.train_mode = train_mode
         self.skip_writer = skip_writer
+
+        self._session_image: Dict[str, Any] = {
+            "seriesInstanceUID": None,
+        }
+
 
         self._session_used_interactions = {
             "pos_points": set(),
@@ -409,6 +415,8 @@ class BasicInferTask(InferTask):
         img = None
         
         dicom_dir = data['image'].split('.nii.gz')[0]
+        seriesInstanceUID = dicom_dir.split("/")[-1]
+        logger.info(f"Series Instance UID: {seriesInstanceUID}")
 
         reader = sitk.ImageSeriesReader()
         dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
@@ -453,11 +461,6 @@ class BasicInferTask(InferTask):
         #reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
         img = reader.Execute()
 
-        rescale_slope = float(img.GetMetaData("0028|1053")) if img.HasMetaDataKey("0028|1053") else 1.0
-        rescale_intercept = float(img.GetMetaData("0028|1052")) if img.HasMetaDataKey("0028|1052") else 0.0
-
-        logger.info(f"rescale_slope: {rescale_slope}")
-        logger.info(f"rescale_intercept: {rescale_intercept}")
         before_nnInter = time.time()
         logger.info(f"Before nnInter: {before_nnInter-begin} secs")
         if nnInter:
@@ -468,9 +471,15 @@ class BasicInferTask(InferTask):
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
             
             if nnInter == "init":
-                session.set_image(img_np)
-                session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
-                logger.info("Only first time, no image at nnInter or iamge changed")
+                if seriesInstanceUID is not None and self._session_image["seriesInstanceUID"] != seriesInstanceUID:
+                    self._session_image["seriesInstanceUID"] = seriesInstanceUID
+                    try:
+                        logger.info("Only first time, no image at nnInter or iamge changed")
+                        session.set_image(img_np)
+                        session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+                    except Exception as init_error:
+                        logger.error(f"Failed to initialize session: {init_error}")
+                        logger.info("Prefer fail!!")
                 for key, lst in self._session_used_interactions.items():
                     lst.clear()
                 session.reset_interactions()
@@ -480,9 +489,18 @@ class BasicInferTask(InferTask):
 
             def _safe_interaction(perform_callable):
                 try:
-                    if session.original_image_shape == None or session.preprocessed_image == None:
-                        session.set_image(img_np)
-                        session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+                    if session.original_image_shape is None or session.preprocessed_image is None:
+                        # Edge cases: a) a lot of requests are pending, while changing layouts b) without proper image initialization
+                        # For these cases, if possible, directly update the iamge and target buffer on the fly.
+                        # If that's not possible, shutdown the executor and assign new one.
+                        logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
+                        logger.info("Set image and target buffer before interaction")
+                        if seriesInstanceUID is not None and self._session_image["seriesInstanceUID"] != seriesInstanceUID:
+                            logger.info("Series Instance UID changed -> update")
+                            self._session_image["seriesInstanceUID"] = seriesInstanceUID
+                        if session.executor._work_queue.qsize() == 0 and session.preprocess_future is None:
+                            session.set_image(img_np)
+                            session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
                         
                         # Wait until session.preprocessed_image is not None
                         max_wait_time = 5.0  # Maximum wait time in seconds
@@ -495,17 +513,27 @@ class BasicInferTask(InferTask):
                         
                         if session.preprocessed_image is None:
                             logger.warning(f"Session preprocessed_image still None after {max_wait_time}s wait")
+                            logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
+                            logger.warning("Shutdown executor and assign again")
+                            session.executor.shutdown(wait=False, cancel_futures=True)
+                            session.executor = ThreadPoolExecutor(max_workers=2)
+                            session._reset_session()
+                            logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
                             return False
                         else:
                             logger.info(f"Session preprocessed_image ready after {waited_time:.2f}s")
-                            
-                    with timeout_context(seconds=3):
+                    logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")        
+                    with timeout_context(seconds=5):
                         perform_callable()
                     return True
                 except Exception as e:
                     logger.error(f"Error during interaction: {e}")
                     logger.error(f"Full traceback: {traceback.format_exc()}")
                     try:
+                        logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
+                        logger.warning("Shutdown executor and assign again")
+                        session.executor.shutdown(wait=False, cancel_futures=True)
+                        session.executor = ThreadPoolExecutor(max_workers=2)
                         session._reset_session()
                     except Exception as reset_error:
                         logger.error(f"Failed to reset session: {reset_error}")
