@@ -207,9 +207,12 @@ class SAM2VideoPredictor(SAM2Base):
                 )
             if not isinstance(box, torch.Tensor):
                 box = torch.tensor(box, dtype=torch.float32, device=points.device)
-            box_coords = box.reshape(1, 2, 2)
-            box_labels = torch.tensor([2, 3], dtype=torch.int32, device=labels.device)
-            box_labels = box_labels.reshape(1, 2)
+            num_boxes = box.shape[0]
+            box_coords = box.view(num_boxes, 2, 2)
+            box_coords = box_coords.reshape(1, -1, 2)
+            box_labels = torch.tensor([2, 3], dtype=torch.int32, device=labels.device).repeat(num_boxes)
+            box_labels = box_labels.unsqueeze(0)
+            
             points = torch.cat([box_coords, points], dim=1)
             labels = torch.cat([box_labels, labels], dim=1)
 
