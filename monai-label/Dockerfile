@@ -16,13 +16,20 @@ RUN apt update -y && apt install -y openslide-tools build-essential python3-pip 
 
 WORKDIR /code
 RUN mkdir -p /install
+RUN mkdir -p /install-3
+
 COPY ./monai-label/requirements.txt ./
 COPY ./sam2/. /install/
+COPY ./sam3/. /install-3/
+
+RUN mkdir -p /code/assets
+COPY ./sam3/assets/bpe_simple_vocab_16e6.txt.gz /code/assets/
 #ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH":/usr/lib/x86_64-linux-gnu:"
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"/usr/local/nvidia/lib64"
 
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install -e /install/.
+RUN pip install -e /install-3/.
 RUN pip install --no-cache-dir -r requirements.txt
 #RUN pip install emoji ddd-dataset
 #RUN pip install "git+https://github.com/lvis-dataset/lvis-api.git"
