@@ -218,7 +218,7 @@ def run_inference(
         #suffixes = [".nii", ".nii.gz", ".nrrd"]
         #image_path = [image_uri.replace(suffix, "") for suffix in suffixes if image_uri.endswith(suffix)][0]
         res_img = result.get("file") if result.get("file") is not None else result.get("label")
-        if type(res_img) == str and (res_img == "/code/predictions/reset.nii.gz" or res_img == "/code/predictions/init.nii.gz"):
+        if type(res_img) == str and (res_img == "/code/predictions/reset.nii.gz" or res_img == "/code/predictions/init.nii.gz" or res_img == "/code/predictions/sam3_not_found.nii.gz"):
             return Response(res_img, media_type="application/json")
         #dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, prompt_json, use_itk=True)
         #with open(dicom_seg_file, "rb") as f:

@@ -115,9 +115,14 @@ session.initialize_from_trained_model_folder(model_path)
 
 predictor_sam2 = build_sam2_video_predictor(model_cfg, sam2_checkpoint, vos_optimized=False)
 
-sam3_model = build_sam3_video_model(checkpoint_path=sam3_checkpoint)
-predictor_sam3 = sam3_model.tracker
-predictor_sam3.backbone = sam3_model.detector.backbone
+if os.path.exists(sam3_checkpoint):
+    sam3_model = build_sam3_video_model(checkpoint_path=sam3_checkpoint)
+    predictor_sam3 = sam3_model.tracker
+    predictor_sam3.backbone = sam3_model.detector.backbone
+else:
+    print(f"Warning: SAM3 checkpoint not found at {sam3_checkpoint}, skipping SAM3 model initialization")
+    sam3_model = None
+    predictor_sam3 = None
 
 predictor_med = build_sam2_video_predictor_npz(medsam2_model_cfg, medsam2_checkpoint, vos_optimized=False)
 
@@ -783,7 +788,11 @@ class BasicInferTask(InferTask):
             if medsam2 == 'medsam2':
                 predictor = predictor_med
             elif medsam2 == 'sam3':
-                predictor = predictor_sam3
+                if predictor_sam3 is None:
+                    logger.error(f"SAM3 model not available. Checkpoint not found at {sam3_checkpoint}.")
+                    return f"/code/predictions/sam3_not_found.nii.gz", final_result_json
+                else:
+                    predictor = predictor_sam3
             else:
                 predictor = predictor_sam2
             start = time.time()

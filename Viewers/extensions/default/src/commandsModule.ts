@@ -783,10 +783,20 @@ const commandsModule = ({
         const response = await segmentationPromise;
         console.debug(response);
         if (response.status === 200) {
-
           const afterPost = Date.now();
           console.log(`Just after Post request: ${(afterPost - start)/1000} Seconds`);
           const ct = response.headers["content-type"] as string;
+
+          if (ct.includes('application/json') && new TextDecoder("utf-8").decode(response.data).includes("sam3_not_found.nii.gz")){
+            uiNotificationService.show({
+              title: 'SAM3 not found',
+              message: 'SAM3 model not found, please check the checkpoint path',
+              type: 'warning',
+              duration: 4000,
+            });
+            return;
+          }
+
           const { meta, seg } = await parseMultipart(response.data, ct);
           console.log(`Just after parseMultipart: ${(Date.now() - start)/1000} Seconds`);
           //const arrayBuffer = response.data
