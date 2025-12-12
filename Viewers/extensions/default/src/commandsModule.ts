@@ -81,6 +81,8 @@ const commandsModule = ({
             commandsManager.run('sam2');
           } else if (selectedModel === 'medsam2') {
             commandsManager.run('sam2');
+          } else if (selectedModel === 'sam3') {
+            commandsManager.run('sam2');
           }
         }, 50);
       }
@@ -109,7 +111,7 @@ const commandsModule = ({
       }
 
       const selectedModel = toolboxState.getSelectedModel();
-      if (selectedModel === 'sam2' || selectedModel === 'medsam2') {
+      if (selectedModel === 'sam2' || selectedModel === 'medsam2' || selectedModel === 'sam3') {
         return commandsManager.run('sam2');
       }
 
@@ -592,7 +594,7 @@ const commandsModule = ({
 
       const overlap = false
       const selectedModel = toolboxState.getSelectedModel();
-      const medsam2 = selectedModel === 'medsam2';
+      const medsam2 = selectedModel //Check at monailabel server;
       const start = Date.now();
       
       const segs = servicesManager.services.segmentationService.getSegmentations()

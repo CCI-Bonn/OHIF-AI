@@ -3,7 +3,7 @@
 let liveMode = true;
 let posNeg = false;
 let refineNew = false;
-let selectedModel: 'nnInteractive' | 'sam2' | 'medsam2' = 'nnInteractive'; // Model selection: nnInteractive, SAM2, or MedSAM2
+let selectedModel: 'nnInteractive' | 'sam2' | 'medsam2' | 'sam3' = 'nnInteractive'; // Model selection: nnInteractive, SAM2, MedSAM2, or SAM3
 let locked = false;
 let currentActiveSegment = 1;
 
@@ -30,7 +30,7 @@ export const toolboxState = {
   },
   // Model selection methods
   getSelectedModel: () => selectedModel,
-  setSelectedModel: (model: 'nnInteractive' | 'sam2' | 'medsam2') => {
+  setSelectedModel: (model: 'nnInteractive' | 'sam2' | 'medsam2' | 'sam3') => {
     selectedModel = model;
   },
   // Legacy methods for backward compatibility (deprecated)
