@@ -55,6 +55,7 @@ COPY ./monai-label/backup/web.py /usr/local/lib/python3.10/dist-packages/dicomwe
 ENV CUDA_VISIBLE_DEVICES=1
 ENV PATH=$PATH":/code/monailabel/scripts"
 
-RUN monailabel apps --download --name radiology --output /code/apps
+ENV PYTHONPATH=/code:$PYTHONPATH
+RUN python -m monailabel.main apps --download --name radiology --output /code/apps
 EXPOSE 8002
-CMD ["monailabel", "start_server", "--app", "/code/apps/radiology", "--studies", "http://ohif_orthanc:1026/pacs/dicom-web", "--conf", "models", "segmentation", "--conf", "use_pretrained_model", "false", "-p", "8002"]
+CMD ["python", "-m", "monailabel.main", "start_server", "--app", "/code/apps/radiology", "--studies", "http://ohif_orthanc:1026/pacs/dicom-web", "--conf", "models", "segmentation", "--conf", "use_pretrained_model", "false", "-p", "8002"]
