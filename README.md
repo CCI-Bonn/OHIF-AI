@@ -6,7 +6,7 @@
 
 **Interactive AI segmentation for medical imaging, directly in your browser.**
 
-OHIF-AI integrates state-of-the-art interactive segmentation models such as **nnInteractive**, **SAM2**, and **MedSAM2** into the **OHIF Viewer**, enabling convenient and accurate real-time, prompt-based segmentation of medical images directly in the browser.
+OHIF-AI integrates state-of-the-art interactive segmentation models such as **nnInteractive**, **SAM2**, **MedSAM2**, and **SAM3** into the **OHIF Viewer**, enabling convenient and accurate real-time, prompt-based segmentation of medical images directly in the browser.
 
 By combining the capabilities of large foundation models with the familiar <a href="https://ohif.org/" target="_blank">OHIF</a> interface, users can guide AI segmentation using simple visual prompts — such as **points**, **scribbles**, **lassos**, or **bounding boxes** — to delineate anatomical structures or regions of interest within 2D or 3D DICOM images. The integration supports iterative refinement, live inference, and model selection, offering a flexible framework for researchers and clinicians to explore next-generation segmentation workflows without leaving the web environment.
 
@@ -37,7 +37,7 @@ By combining the capabilities of large foundation models with the familiar <a hr
 - 🚀 **Live Mode** - Automatic inference on every prompt
 - 📦 **3D Propagation** - Single prompt automatically segments entire volume
 - 🎯 **Multiple Prompt Types** - Points, scribbles, lassos, and bounding boxes
-- 🤖 **Multiple AI Models** - Choose among nnInteractive, SAM2, and MedSAM2
+- 🤖 **Multiple AI Models** - Choose among nnInteractive, SAM2, MedSAM2, and SAM3
 - 🌐 **Browser-Based** - No installation required, works directly in your web browser
 
 ---
@@ -56,10 +56,31 @@ Click to watch the full demonstration of OHIF-AI in action.
 
 ### Prerequisites
 
+- **OS**: Linux (for Windows, try WSL2)
 - **Docker** (v27.3.1 or later)
 - **NVIDIA Container Toolkit** (v1.16.2 or later)
 - **CUDA** v12.6 or compatible version
 - NVIDIA GPU with appropriate drivers
+
+### Model Checkpoints
+
+Model checkpoints are typically downloaded automatically during setup. However, if you encounter issues with automatic downloads, you can manually download them:
+
+**Automatically Downloaded Models:**
+- **nnInteractive**: [Hugging Face](https://huggingface.co/nnInteractive/nnInteractive)
+- **SAM2** (sam2.1-hiera-tiny): [Hugging Face](https://huggingface.co/facebook/sam2.1-hiera-tiny)
+- **MedSAM2** (MedSAM2_latest): [Hugging Face](https://huggingface.co/wanglab/MedSAM2)
+
+**Manual Download Required:**
+
+**SAM3 Model:**
+1. Request access to the SAM3 model on [Hugging Face](https://huggingface.co/facebook/sam3)
+2. Once access is granted, download the model checkpoint
+3. Place the downloaded file as `sam3.pt` in the `monai-label/checkpoints/` directory
+
+⚠️ **Note:** If the SAM3 checkpoint is not found, you will see a warning message and SAM3 will not be available for use. The application will continue to work with other models (nnInteractive, SAM2, MedSAM2).
+
+![SAM3 Not Found Warning](docs/images/sam3_not_found.png)
 
 ### Quick Start
 
@@ -106,7 +127,7 @@ The tool provides four different prompt types for segmentation (shown in red box
 Choose which segmentation model to use:
 
 - **nnInteractive**: Supports all prompt types (point, scribble, lasso, bounding box)  
-- **SAM2/MedSAM2**: Currently supports positive/negative points and positive bounding boxes only
+- **SAM2/MedSAM2/SAM3**: Currently supports positive/negative points and positive bounding boxes only
 
 💡 Based on preliminary internal testing, nnInteractive provides faster inference and generally feels more real-time and accurate in typical clinical image segmentation tasks.
 
@@ -162,7 +183,7 @@ For faster workflow, you can use the following keyboard shortcuts:
 - `w` - Toggle Positive/Negative
 - `e` - Toggle Refine/New
 - `r` - Run inference (if live mode off)
-- `t` - Circulate nnInteractive -> SAM2 -> MedSAM2
+- `t` - Circulate nnInteractive -> SAM2 -> MedSAM2 -> SAM3
 
 <a href="docs/images/hotkeys.png" target="_blank">
   <img src="docs/images/hotkeys.png" alt="List of hotkeys" width="700">
@@ -251,11 +272,25 @@ If you use OHIF-AI in your research, please cite:
 }
 ```
 
+**SAM3:**
+```bibtex
+@misc{carion2025sam3segmentconcepts,
+      title={SAM 3: Segment Anything with Concepts}, 
+      author={Nicolas Carion and Laura Gustafson and Yuan-Ting Hu and Shoubhik Debnath and Ronghang Hu and Didac Suris and Chaitanya Ryali and Kalyan Vasudev Alwala and Haitham Khedr and Andrew Huang and Jie Lei and Tengyu Ma and Baishan Guo and Arpit Kalla and Markus Marks and Joseph Greer and Meng Wang and Peize Sun and Roman Rädle and Triantafyllos Afouras and Effrosyni Mavroudi and Katherine Xu and Tsung-Han Wu and Yu Zhou and Liliane Momeni and Rishi Hazra and Shuangrui Ding and Sagar Vaze and Francois Porcher and Feng Li and Siyuan Li and Aishwarya Kamath and Ho Kei Cheng and Piotr Dollár and Nikhila Ravi and Kate Saenko and Pengchuan Zhang and Christoph Feichtenhofer},
+      year={2025},
+      eprint={2511.16719},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2511.16719}, 
+}
+```
+
 **Papers:**
 - [OHIF-SAM2 (IEEE ISBI 2025)](https://ieeexplore.ieee.org/document/10981119)
 - [nnInteractive (arXiv)](https://arxiv.org/abs/2503.08373)
 - [SAM2 (arXiv)](https://arxiv.org/abs/2408.00714)
 - [MedSAM2 (arXiv)](https://arxiv.org/abs/2504.03600)
+- [SAM3 (arXiv)](https://arxiv.org/abs/2511.16719)
 
 ---
 
@@ -272,6 +307,7 @@ This project builds upon:
 - [SAM2](https://github.com/facebookresearch/sam2) - Segment Anything Model 2 by Meta
 - [nnInteractive](https://github.com/MIC-DKFZ/nnInteractive) - Interactive 3D Segmentation Framework
 - [MedSAM2](https://github.com/bowang-lab/MedSAM2) - MedSAM2 by Bowang lab
+- [SAM3](https://github.com/facebookresearch/sam3) - Segment Anything Model 3 by Meta
 
 
 

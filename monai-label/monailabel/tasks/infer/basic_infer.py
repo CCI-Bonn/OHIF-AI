@@ -44,6 +44,8 @@ from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_
 
 from sam2.build_sam import build_sam2_video_predictor, build_sam2_video_predictor_npz
 
+from sam3.model_builder import build_sam3_video_model
+
 #from mmdet.apis import DetInferencer
 #from mmdet.evaluation import get_classes
 #from mmcv.visualization import imshow_bboxes
@@ -56,6 +58,8 @@ sam2_checkpoint = "/code/checkpoints/sam2.1_hiera_tiny.pt"
 model_cfg = "configs/sam2.1/sam2.1_hiera_t.yaml"
 medsam2_checkpoint = "/code/checkpoints/MedSAM2_latest.pt"
 medsam2_model_cfg = "configs/sam2.1/sam2.1_hiera_t512.yaml"
+
+sam3_checkpoint = "/code/checkpoints/sam3.pt"
 
 #from transformers import BertConfig, BertModel
 #from transformers import AutoTokenizer
@@ -110,6 +114,16 @@ session.initialize_from_trained_model_folder(model_path)
 #inferencer = DetInferencer(model=config_path, weights=checkpoint, palette='random')
 
 predictor_sam2 = build_sam2_video_predictor(model_cfg, sam2_checkpoint, vos_optimized=False)
+
+if os.path.exists(sam3_checkpoint):
+    sam3_model = build_sam3_video_model(checkpoint_path=sam3_checkpoint)
+    predictor_sam3 = sam3_model.tracker
+    predictor_sam3.backbone = sam3_model.detector.backbone
+else:
+    print(f"Warning: SAM3 checkpoint not found at {sam3_checkpoint}, skipping SAM3 model initialization")
+    sam3_model = None
+    predictor_sam3 = None
+
 predictor_med = build_sam2_video_predictor_npz(medsam2_model_cfg, medsam2_checkpoint, vos_optimized=False)
 
 logger = logging.getLogger(__name__)
@@ -771,8 +785,14 @@ class BasicInferTask(InferTask):
         #SAM2
         if nnInter == False:
             medsam2 = data['medsam2']
-            if medsam2:
+            if medsam2 == 'medsam2':
                 predictor = predictor_med
+            elif medsam2 == 'sam3':
+                if predictor_sam3 is None:
+                    logger.error(f"SAM3 model not available. Checkpoint not found at {sam3_checkpoint}.")
+                    return f"/code/predictions/sam3_not_found.nii.gz", final_result_json
+                else:
+                    predictor = predictor_sam3
             else:
                 predictor = predictor_sam2
             start = time.time()
@@ -930,23 +950,43 @@ class BasicInferTask(InferTask):
                     logger.info(f"ann_frame_list: {ann_frame_list}")
                     logger.info(f"ann_frame_idx: {ann_frame_idx}")
                     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-                        inference_state=inference_state,
-                        frame_idx=ann_frame_idx,
-                        obj_id=ann_obj_id,
-                        points=points,
-                        labels=labels,
-                        box=boxes
-                    )
+                        if medsam2 == 'sam3':
+                            _, out_obj_ids, _, out_mask_logits = predictor.add_new_points_or_box(
+                            inference_state=inference_state,
+                            frame_idx=ann_frame_idx,
+                            obj_id=ann_obj_id,
+                            points=points,
+                            labels=labels,
+                            box=boxes
+                            )
+                        else:    
+                            _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+                            inference_state=inference_state,
+                            frame_idx=ann_frame_idx,
+                            obj_id=ann_obj_id,
+                            points=points,
+                            labels=labels,
+                            box=boxes
+                            )
                 else:
                     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
-                        inference_state=inference_state,
-                        frame_idx=ann_frame_idx,
-                        obj_id=ann_obj_id,
-                        points=points,
-                        labels=labels,
-                    )
+                        if medsam2 == 'sam3':
+                            predictor.clear_all_points_in_video(inference_state)
+                            _, out_obj_ids, _, out_mask_logits = predictor.add_new_points_or_box(
+                            inference_state=inference_state,
+                            frame_idx=ann_frame_idx,
+                            obj_id=ann_obj_id,
+                            points=points,
+                            labels=labels,
+                            )
+                        else:    
+                            _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+                            inference_state=inference_state,
+                            frame_idx=ann_frame_idx,
+                            obj_id=ann_obj_id,
+                            points=points,
+                            labels=labels,
+                            )
 
                 if "one" in data:
                     video_segments[ann_frame_idx] = {
@@ -954,18 +994,20 @@ class BasicInferTask(InferTask):
                         for i, out_obj_id in enumerate(out_obj_ids)
                     }
             if "one" not in data:
-                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state, reverse=False):
-                        video_segments[out_frame_idx] = {
-                            out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
-                            for i, out_obj_id in enumerate(out_obj_ids)
-                        }
-                with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state, reverse=True):
-                        video_segments[out_frame_idx] = {
-                            out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
-                            for i, out_obj_id in enumerate(out_obj_ids)
-                        }
+                if medsam2 == 'sam3':
+                    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                        for out_frame_idx, out_obj_ids, _, out_mask_logits,_ in predictor.propagate_in_video(inference_state, start_frame_idx=0, max_frame_num_to_track=None, reverse=False, propagate_preflight=True):
+                            video_segments[out_frame_idx] = {
+                                out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                                for i, out_obj_id in enumerate(out_obj_ids)
+                            }
+                else:
+                    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                        for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state, start_frame_idx=0, reverse=False):
+                            video_segments[out_frame_idx] = {
+                                out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                                for i, out_obj_id in enumerate(out_obj_ids)
+                            }
 
             pred = np.zeros((len_z, len_y, len_x))
 
@@ -988,8 +1030,10 @@ class BasicInferTask(InferTask):
                 final_result_json["flipped"] = False
 
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            if medsam2:
+            if medsam2 == 'medsam2':
                 final_result_json["label_name"] = f"medsam2_pred_{timestamp}"
+            elif medsam2 == 'sam3':
+                final_result_json["label_name"] = f"sam3_pred_{timestamp}"
             else:
                 final_result_json["label_name"] = f"sam2_pred_{timestamp}"
             
