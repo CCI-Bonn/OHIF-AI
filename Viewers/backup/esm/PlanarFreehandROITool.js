@@ -449,7 +449,8 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
     }
     updateClosedCachedStats({ viewport, points, imageData, metadata, cachedStats, targetId, modalityUnit, canvasCoordinates, calibratedScale,sliceIndex }) {
         const { scale, areaUnit, unit } = calibratedScale;
-        let boundary = points.map(array => csUtils.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
+        //let boundary = points.map(array => csUtils.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
+        let boundary = points.map(array => csUtils.transformWorldToIndex(imageData, array));
         const { voxelManager } = viewport.getImageData();
         const canvasPoint = canvasCoordinates[0];
         const originalWorldPoint = viewport.canvasToWorld(canvasPoint);
@@ -559,7 +560,34 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
     }
     updateOpenCachedStats({ targetId, metadata, imageData, canvasCoordinates, points, sliceIndex, cachedStats, modalityUnit, calibratedScale, }) {
         const { scale, unit } = calibratedScale;
-        let polyline = points.map(array => csUtils.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
+        //let polyline = points.map(array => csUtils.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
+        let polyline = points.map(array => csUtils.transformWorldToIndex(imageData, array));
+        if (targetId.startsWith('volumeId:')) {
+            const axialViewport = services.cornerstoneViewportService.getCornerstoneViewport('mpr-axial');
+            const imageIdsInVolume = axialViewport.getImageIds();
+            let { activeViewportId, viewports } = services.viewportGridService.getState();
+            const activeViewportSpecificData = viewports.get(activeViewportId);
+            if(activeViewportSpecificData === undefined){
+              return;
+            }
+            const { displaySetInstanceUIDs } = activeViewportSpecificData;
+            const displaySets = services.displaySetService.activeDisplaySets;
+            const displaySetInstanceUID = displaySetInstanceUIDs[0];
+            let currentDisplaySets;
+            for (let i = 0; i < displaySets.length; i++) {
+              if (displaySets[i].displaySetInstanceUID == displaySetInstanceUID) {
+                currentDisplaySets = displaySets[i];
+                break; // Exit early once found
+              }
+            }
+
+            const imageIdsLength = imageIdsInVolume.length;
+            const currentImageIdIndexInVolume = axialViewport.getCurrentImageIdIndex();
+            if (imageIdsInVolume[0] !== currentDisplaySets.imageIds[0]) {
+                polyline = polyline.map(array => [Math.round(array[0]),Math.round(array[1]),imageIdsLength - Math.round(array[2]) - 1]);
+            }
+        }
+        
         cachedStats[targetId] = {
             Modality: metadata.Modality,
             length: calculatePerimeter(canvasCoordinates, false) / scale,

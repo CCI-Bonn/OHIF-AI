@@ -602,7 +602,7 @@ const commandsModule = ({
       const activeViewportSpecificData = viewports.get(activeViewportId);
 
       const { setViewportGridState } = useViewportGridStore.getState();
-      const currentImageIdIndex = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex;
+      const currentImageIdIndex = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).getCurrentImageIdIndex();
       setViewportGridState('currentImageIdIndex', currentImageIdIndex);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
       const displaySets = displaySetService.activeDisplaySets;
@@ -1033,8 +1033,10 @@ const commandsModule = ({
           if(currentImageIdIndex === 0){
             somewhereIndex = 1;
           }
-          await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
-          await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
+          if (activeViewportId.startsWith('default')){
+            await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
+            await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
+          }
           // Recover the visibility of the segments
           for (let i = 0; i < representations.length; i++) {
             const representation = representations[i];
@@ -1198,7 +1200,7 @@ const commandsModule = ({
       const activeViewportSpecificData = viewports.get(activeViewportId);
 
       const { setViewportGridState } = useViewportGridStore.getState();
-      const currentImageIdIndex = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).currentImageIdIndex;
+      const currentImageIdIndex = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).getCurrentImageIdIndex();
       setViewportGridState('currentImageIdIndex', currentImageIdIndex);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
 
@@ -1692,8 +1694,10 @@ const commandsModule = ({
           if(currentImageIdIndex === 0){
             somewhereIndex = 1;
           }
-          await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
-          await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
+          if (activeViewportId.startsWith('default')){
+            await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
+            await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
+          }
           console.log(`After semi hack: ${(Date.now() - start)/1000} Seconds`);
           // Recover the visibility of the segments
           for (let i = 0; i < representations.length; i++) {
