@@ -21,7 +21,7 @@ import promptSaveReport from './utils/promptSaveReport';
 
 import { Enums as csToolsEnums, Types as cstTypes, segmentation as csToolsSegmentation } from '@cornerstonejs/tools';
 import { updateLabelmapSegmentationImageReferences } from '@cornerstonejs/tools/segmentation/updateLabelmapSegmentationImageReferences';
-import { cache, imageLoader, metaData, Types as csTypes, utilities as csUtils } from '@cornerstonejs/core';
+import { cache, imageLoader, metaData, Types as csTypes, utilities as csUtils, VolumeViewport3D, eventTarget } from '@cornerstonejs/core';
 import { adaptersSEG } from '@cornerstonejs/adapters';
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 import MonaiLabelClient from '../../monai-label/src/services/MonaiLabelClient';
@@ -1001,8 +1001,8 @@ const commandsModule = ({
           
         }else{
           // Comment out at the moment (necessary for hiding previous segments), may need to uncomment some weird bugs.
-          // servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
-          
+           servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
+           const readableText = customizationService.getCustomization('panelSegmentation.readableText');
           // Update the segmentation data
           csToolsSegmentation.updateSegmentations([
             {
@@ -1019,6 +1019,16 @@ const commandsModule = ({
               },
             },
           ]);
+          // Update the segmentation stats
+          Promise.resolve().then(() => 
+            updateSegmentationStats({
+              segmentation: activeSegmentation,
+              segmentationId,
+              readableText,
+            })
+          ).catch(error => {
+            console.warn('Failed to update segmentation stats:', error);
+          });
           }
           servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
           toolboxState.setCurrentActiveSegment(segmentNumber);
@@ -1354,7 +1364,7 @@ const commandsModule = ({
 
       //Disable text prompts for nninteractive
       const text_prompts = [] //currentMeasurements
-      //.filter(e => { return e.toolName === 'Probe' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID})
+      //.filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
       //.map(e => { return e.label })
 
       // Hide the measurements after inference
@@ -1392,10 +1402,6 @@ const commandsModule = ({
         texts: text_prompts,
         nninter: true,
       };
-
-      if(useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj!==undefined){
-        params.nextObj = useToggleHangingProtocolStore.getState().toggleHangingProtocol.nextObj
-      }
 
       let data = MonaiLabelClient.constructFormData(params, null);
 
@@ -1645,21 +1651,36 @@ const commandsModule = ({
                     segments,
                   },
               }
-          ]);
-          
+          ]);          
         }else{
           // Comment out at the moment (necessary for hiding previous segments), may need to uncomment some weird bugs.
-          // servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
+          servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
           const readableText = customizationService.getCustomization('panelSegmentation.readableText');
 
-          // Update the segmentation data
+          // Get existing segmentation to preserve other representation data
+          const existingSegmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
+          const existingRepresentationData = existingSegmentation?.representationData || {};
+          const existingLabelmapData = existingRepresentationData[LABELMAP] || {};
+          
+          // For Surface representation, remove it entirely to force regeneration from updated labelmap
+          // This ensures surfaces are recomputed from the new labelmap data
+          const updatedRepresentationData = { ...existingRepresentationData };
+          const SURFACE = csToolsEnums.SegmentationRepresentations.Surface;
+          if (updatedRepresentationData[SURFACE]) {
+            // Remove Surface representation data to force regeneration from updated labelmap
+            delete updatedRepresentationData[SURFACE];
+          }
+          
+          // Update the segmentation data, preserving other representation data (but not Surface)
           csToolsSegmentation.updateSegmentations([
             {
               segmentationId,
               payload: {
                 segments: segments,
                 representationData: {
+                  ...updatedRepresentationData, // Surface data removed to force regeneration
                   [LABELMAP]: {
+                    ...existingLabelmapData, // Preserve existing labelmap data (e.g., volumeId)
                     imageIds: derivedImageIds,
                     referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
                     referencedImageIds: imageIds,
@@ -1668,6 +1689,7 @@ const commandsModule = ({
               },
             },
           ]);
+          
           // Update the segmentation stats
           Promise.resolve().then(() => 
             updateSegmentationStats({
@@ -1689,14 +1711,14 @@ const commandsModule = ({
             toolboxState.setRefineNew(false);
           }
           console.log(`After Reps: ${(Date.now() - start)/1000} Seconds`);
-          // semi-hack: to render segmentation properly on the current image
-          let somewhereIndex = 0;
-          if(currentImageIdIndex === 0){
-            somewhereIndex = 1;
-          }
-          if (activeViewportId.startsWith('default')){
-            await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
-            await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
+          // semi-hack: to render segmentation properly on the current image for stack viewport
+          const viewport = activeViewportId.startsWith('default') 
+            ? servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId)
+            : null;
+          if (viewport?.setImageIdIndex && currentImageIdIndex !== undefined) {
+            const somewhereIndex = currentImageIdIndex === 0 ? 1 : 0;
+            await viewport.setImageIdIndex(somewhereIndex);
+            await viewport.setImageIdIndex(currentImageIdIndex);
           }
           console.log(`After semi hack: ${(Date.now() - start)/1000} Seconds`);
           // Recover the visibility of the segments
@@ -1711,10 +1733,52 @@ const commandsModule = ({
               }
             }
           }
-          //commandsManager.runCommand('removeSegmentationFromViewport', { segmentationId: segmentationId })
-          //await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-          //  segmentationId: segmentationId,
-          //});
+
+          // Update all viewports with the new segmentation representation
+          const currentViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+          for (let i = 0; i < currentViewportIds.length; i++) {
+            const viewportId = currentViewportIds[i];
+            const viewport = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
+            const isVolume3D = viewport instanceof VolumeViewport3D;
+            
+            servicesManager.services.segmentationService.removeSegmentationRepresentations(
+              viewportId,
+              { segmentationId }
+            );
+            
+            // For VolumeViewport3D, update labelmap image references to trigger surface regeneration
+            if (isVolume3D) {
+              updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
+            }
+            
+            // For VolumeViewport3D, explicitly specify Labelmap type to trigger viewport conversion to Surface
+            // This ensures the surface is properly computed from the updated labelmap
+            await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
+              segmentationId: segmentationId,
+              type: isVolume3D ? csToolsEnums.SegmentationRepresentations.Labelmap : undefined,
+            });
+            
+            // For VolumeViewport3D, wait a bit for surface computation to complete, then render
+            if (isVolume3D) {
+              // Give time for surface computation to complete
+              await new Promise(resolve => setTimeout(resolve, 100));
+              // Use requestAnimationFrame to ensure the representation is fully added before rendering
+              requestAnimationFrame(() => {
+                if (viewport) {
+                  viewport.render();
+                }
+              });
+            }
+          }
+          
+          // Trigger SEGMENTATION_DATA_MODIFIED event AFTER all representations are re-added
+          // This ensures surface representations exist before they try to update
+          eventTarget.dispatchEvent(
+            new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
+              detail: { segmentationId },
+            })
+          );
+          
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
           return response;

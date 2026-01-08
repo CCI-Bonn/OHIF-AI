@@ -1427,6 +1427,8 @@ function commandsModule({
      */
     removeSegmentationFromViewportCommand: ({ segmentationId }) => {
       const { segmentationService, viewportGridService } = servicesManager.services;
+        // Clear all measurements before removing a segmentation
+       commandsManager.runCommand('resetNninter', { clearMeasurements: true });
       segmentationService.removeSegmentationRepresentations(
         viewportGridService.getActiveViewportId(),
         { segmentationId }

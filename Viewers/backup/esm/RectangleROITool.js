@@ -551,9 +551,49 @@ class RectangleROITool extends AnnotationTool {
                         imageData,
                         returnPoints: this.configuration.storePointData,
                     });
-                    pointsInShape.forEach(element => {
-                        element.pointIJK[2]=sliceIndex                        
-                    });
+                    if (targetId.startsWith('imageId:')){
+                        pointsInShape.forEach(element => {
+                            element.pointIJK[2]=sliceIndex                        
+                        });
+                    }
+                    else if (targetId.startsWith('volumeId:')){
+                        const axialViewport = services.cornerstoneViewportService.getCornerstoneViewport('mpr-axial') 
+                            || services.cornerstoneViewportService.getCornerstoneViewport('default');
+                        if (!axialViewport) {
+                            continue;
+                        }
+                        const imageIdsInVolume = axialViewport.getImageIds();
+                        if (!imageIdsInVolume?.length) {
+                            continue;
+                        }
+                        // Get active viewport data
+                        const { activeViewportId, viewports } = services.viewportGridService.getState();
+                        const activeViewportData = viewports.get(activeViewportId);
+                        const displaySetInstanceUID = activeViewportData?.displaySetInstanceUIDs?.[0];
+                        
+                        if (!displaySetInstanceUID) {
+                            return;
+                        }
+
+                        // Find matching display set (manual loop for optimal performance)
+                        let currentDisplaySet;
+                        const displaySets = services.displaySetService.activeDisplaySets;
+                        for (let i = 0; i < displaySets.length; i++) {
+                            if (displaySets[i].displaySetInstanceUID === displaySetInstanceUID) {
+                                currentDisplaySet = displaySets[i];
+                                break;
+                            }
+                        }
+
+                        // Check if imageIds are flipped and correct z-coordinate if needed
+                        if (currentDisplaySet?.imageIds?.[0] && 
+                            imageIdsInVolume[0] !== currentDisplaySet.imageIds[0]) {
+                            const imageIdsLength = imageIdsInVolume.length;
+                            pointsInShape.forEach(element => {
+                                element.pointIJK[2] = imageIdsLength - Math.round(element.pointIJK[2]) - 1;
+                            });
+                        }
+                    }
                     const stats = this.configuration.statsCalculator.getStatistics();
                     cachedStats[targetId] = {
                         Modality: metadata.Modality,

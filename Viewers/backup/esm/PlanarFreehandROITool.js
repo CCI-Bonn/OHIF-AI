@@ -449,8 +449,54 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
     }
     updateClosedCachedStats({ viewport, points, imageData, metadata, cachedStats, targetId, modalityUnit, canvasCoordinates, calibratedScale,sliceIndex }) {
         const { scale, areaUnit, unit } = calibratedScale;
-        //let boundary = points.map(array => csUtils.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
         let boundary = points.map(array => csUtils.transformWorldToIndex(imageData, array));
+        // z-coordinate should be assigned differently for stack viewport (imageId) and volume viewport (volumeId)
+        if (targetId.startsWith('imageId:')){
+            boundary = boundary.map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex]);
+        }
+        else if (targetId.startsWith('volumeId:')){
+            const axialViewport = services.cornerstoneViewportService.getCornerstoneViewport('mpr-axial') 
+                || services.cornerstoneViewportService.getCornerstoneViewport('default');
+            
+            if (!axialViewport) {
+                return;
+            }
+
+            const imageIdsInVolume = axialViewport.getImageIds();
+            if (!imageIdsInVolume?.length) {
+                return;
+            }
+
+            // Get active viewport data
+            const { activeViewportId, viewports } = services.viewportGridService.getState();
+            const activeViewportData = viewports.get(activeViewportId);
+            const displaySetInstanceUID = activeViewportData?.displaySetInstanceUIDs?.[0];
+            
+            if (!displaySetInstanceUID) {
+                return;
+            }
+
+            // Find matching display set (manual loop for optimal performance)
+            let currentDisplaySet;
+            const displaySets = services.displaySetService.activeDisplaySets;
+            for (let i = 0; i < displaySets.length; i++) {
+                if (displaySets[i].displaySetInstanceUID === displaySetInstanceUID) {
+                    currentDisplaySet = displaySets[i];
+                    break;
+                }
+            }
+
+            // Check if imageIds are flipped and correct z-coordinate if needed
+            if (currentDisplaySet?.imageIds?.[0] && 
+                imageIdsInVolume[0] !== currentDisplaySet.imageIds[0]) {
+                const imageIdsLength = imageIdsInVolume.length;
+                boundary = boundary.map(array => [
+                    Math.round(array[0]),
+                    Math.round(array[1]),
+                    imageIdsLength - Math.round(array[2]) - 1
+                ]);
+            }            
+        }
         const { voxelManager } = viewport.getImageData();
         const canvasPoint = canvasCoordinates[0];
         const originalWorldPoint = viewport.canvasToWorld(canvasPoint);
@@ -560,31 +606,54 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
     }
     updateOpenCachedStats({ targetId, metadata, imageData, canvasCoordinates, points, sliceIndex, cachedStats, modalityUnit, calibratedScale, }) {
         const { scale, unit } = calibratedScale;
-        //let polyline = points.map(array => csUtils.transformWorldToIndex(imageData, array)).map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex])
         let polyline = points.map(array => csUtils.transformWorldToIndex(imageData, array));
+        // for StackViewport, the z-coordinate is the sliceIndex
+        if (targetId.startsWith('imageId:')) {
+            polyline = polyline.map(array => [Math.round(array[0]),Math.round(array[1]),sliceIndex]);
+        }
+        // for VolumeViewport in MPR
         if (targetId.startsWith('volumeId:')) {
-            const axialViewport = services.cornerstoneViewportService.getCornerstoneViewport('mpr-axial');
-            const imageIdsInVolume = axialViewport.getImageIds();
-            let { activeViewportId, viewports } = services.viewportGridService.getState();
-            const activeViewportSpecificData = viewports.get(activeViewportId);
-            if(activeViewportSpecificData === undefined){
-              return;
-            }
-            const { displaySetInstanceUIDs } = activeViewportSpecificData;
-            const displaySets = services.displaySetService.activeDisplaySets;
-            const displaySetInstanceUID = displaySetInstanceUIDs[0];
-            let currentDisplaySets;
-            for (let i = 0; i < displaySets.length; i++) {
-              if (displaySets[i].displaySetInstanceUID == displaySetInstanceUID) {
-                currentDisplaySets = displaySets[i];
-                break; // Exit early once found
-              }
+            // Try to get axial viewport (mpr-axial first, then default fallback)
+            const axialViewport = services.cornerstoneViewportService.getCornerstoneViewport('mpr-axial') 
+                || services.cornerstoneViewportService.getCornerstoneViewport('default');
+            
+            if (!axialViewport) {
+                return;
             }
 
-            const imageIdsLength = imageIdsInVolume.length;
-            const currentImageIdIndexInVolume = axialViewport.getCurrentImageIdIndex();
-            if (imageIdsInVolume[0] !== currentDisplaySets.imageIds[0]) {
-                polyline = polyline.map(array => [Math.round(array[0]),Math.round(array[1]),imageIdsLength - Math.round(array[2]) - 1]);
+            const imageIdsInVolume = axialViewport.getImageIds();
+            if (!imageIdsInVolume?.length) {
+                return;
+            }
+
+            // Get active viewport data
+            const { activeViewportId, viewports } = services.viewportGridService.getState();
+            const activeViewportData = viewports.get(activeViewportId);
+            const displaySetInstanceUID = activeViewportData?.displaySetInstanceUIDs?.[0];
+            
+            if (!displaySetInstanceUID) {
+                return;
+            }
+
+            // Find matching display set (manual loop for optimal performance)
+            let currentDisplaySet;
+            const displaySets = services.displaySetService.activeDisplaySets;
+            for (let i = 0; i < displaySets.length; i++) {
+                if (displaySets[i].displaySetInstanceUID === displaySetInstanceUID) {
+                    currentDisplaySet = displaySets[i];
+                    break;
+                }
+            }
+
+            // Check if imageIds are flipped and correct z-coordinate if needed
+            if (currentDisplaySet?.imageIds?.[0] && 
+                imageIdsInVolume[0] !== currentDisplaySet.imageIds[0]) {
+                const imageIdsLength = imageIdsInVolume.length;
+                polyline = polyline.map(array => [
+                    Math.round(array[0]),
+                    Math.round(array[1]),
+                    imageIdsLength - Math.round(array[2]) - 1
+                ]);
             }
         }
         
