@@ -1476,10 +1476,10 @@ const commandsModule = ({
       })
       .filter(Boolean)
 
-      //Disable text prompts for nninteractive
-      const text_prompts = [] //currentMeasurements
-      //.filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
-      //.map(e => { return e.label })
+      //VoxTell
+      const text_prompts = currentMeasurements
+      .filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
+      .map(e => { return e.label })
 
       // Hide the measurements after inference
       for (let i = 0; i < currentMeasurements.length; i++) {

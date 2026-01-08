@@ -44,13 +44,14 @@ urllib3==2.2.1
 scikit-learn
 scipy
 google-auth==2.29.0
-transformers == 4.48.1
+# transformers == 4.48.1
 openmim
 fairscale
 jsonlines
 nltk
 pycocoevalcap
 nninteractive
+voxtell
 huggingface_hub
 
 # scipy and scikit-learn latest packages are missing on python 3.8

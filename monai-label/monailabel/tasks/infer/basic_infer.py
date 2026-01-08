@@ -91,6 +91,18 @@ download_path = snapshot_download(
     allow_patterns=[f"{MODEL_NAME}/*"],
     local_dir=DOWNLOAD_DIR
 )
+
+VOX_MODEL_NAME = "voxtell_v1.1" # Updated models may be available in the future
+
+vox_download_path = snapshot_download(
+      repo_id="mrokuss/VoxTell",
+      allow_patterns=[f"{VOX_MODEL_NAME}/*", "*.json"],
+      local_dir=DOWNLOAD_DIR
+)
+vox_model_path = os.path.join(DOWNLOAD_DIR, VOX_MODEL_NAME)
+from voxtell.inference.predictor import VoxTellPredictor
+vox_predictor = VoxTellPredictor(model_dir=vox_model_path, device=torch.device("cuda:0"))
+
 from nnInteractive.inference.inference_session import nnInteractiveInferenceSession
 
 session = nnInteractiveInferenceSession(
@@ -474,11 +486,13 @@ class BasicInferTask(InferTask):
         reader.SetFileNames(dicom_filenames)
         #reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
         img = reader.Execute()
+        
 
         before_nnInter = time.time()
         logger.info(f"Before nnInter: {before_nnInter-begin} secs")
         if nnInter:
             start = time.time()
+            
             img_np = sitk.GetArrayFromImage(img)[None]
             # Validate input dimensions
             if img_np.ndim != 4:
@@ -500,6 +514,40 @@ class BasicInferTask(InferTask):
                 return f'/code/predictions/init.nii.gz', final_result_json
 
             logger.info(f"interactions in _session_used_interactions: {self._session_used_interactions}")
+
+            if len(data['texts'])==1 and data['texts'][0]!='':
+                orig_orient = sitk.DICOMOrientImageFilter_GetOrientationFromDirectionCosines(
+                    img.GetDirection()
+                )
+                logger.info(f"Original orientation: {orig_orient}")
+                img_ras = sitk.DICOMOrient(img, "RAS")
+                img_np = sitk.GetArrayFromImage(img_ras)[None]
+                voxtell_seg_np_ras = vox_predictor.predict_single_image(img_np, data['texts'][0])
+
+                voxtell_seg_sitk_ras = sitk.GetImageFromArray(voxtell_seg_np_ras[0])
+                voxtell_seg_sitk_ras.CopyInformation(img_ras)
+
+                voxtell_seg_sitk = sitk.DICOMOrient(voxtell_seg_sitk_ras, orig_orient)
+                voxtell_seg_np = sitk.GetArrayFromImage(voxtell_seg_sitk)
+
+
+                voxtell_elapsed = time.time() - start
+                logger.info(f"voxtell latency : {voxtell_elapsed} (sec)")
+                # final_result_json["dicom_seg"] = raw
+                final_result_json["prompt_info"] = result_json
+                final_result_json["voxtell_elapsed"] = voxtell_elapsed
+
+                if instanceNumber > instanceNumber2:
+                    final_result_json["flipped"] = True
+                else:
+                    final_result_json["flipped"] = False
+
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                final_result_json["label_name"] = f"voxtell_pred_{timestamp}"
+
+                logger.info(f"final_result_json info: {final_result_json}")
+
+                return voxtell_seg_np, final_result_json
 
             def _safe_interaction(perform_callable):
                 try:
