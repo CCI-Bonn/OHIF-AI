@@ -349,7 +349,7 @@ function _getInstanceNumberFromVolume(
     const imageId = cornerstoneViewport.getCurrentImageId?.();
 
     if (!imageId) {
-      return;
+      return {};
     }
 
     const { instanceNumber } = metaData.get('generalImageModule', imageId) || {};
