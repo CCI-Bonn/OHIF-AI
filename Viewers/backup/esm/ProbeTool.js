@@ -212,7 +212,7 @@ class ProbeTool extends AnnotationTool {
                 if (!data.cachedStats) {
                     data.cachedStats = {};
                 }
-                if (targetId != `imageId:${annotation.metadata.referencedImageId}`) {
+                if (annotation.metadata.referencedImageId && !targetId.startsWith('volumeId:')) {
                     targetId = `imageId:${annotation.metadata.referencedImageId}`;
                 }
                 if (!data.cachedStats[targetId] || data.cachedStats[targetId].value === null) {

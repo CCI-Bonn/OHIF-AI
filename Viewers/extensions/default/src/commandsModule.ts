@@ -92,6 +92,190 @@ const commandsModule = ({
   // Define a context menu controller for use with any context menus
   const contextMenuController = new ContextMenuController(servicesManager, commandsManager);
 
+  /**
+   * Helper function to handle post-segmentation processing after segmentation data is created/updated.
+   * This includes updating representations, handling viewports, and triggering events.
+   */
+  async function postSegmentationProcessing({
+    activeViewportId,
+    segmentationId,
+    segmentNumber,
+    segments,
+    derivedImageIds,
+    currentDisplaySets,
+    imageIds,
+    existingSegments,
+    existing,
+    activeSegmentation,
+    currentImageIdIndex,
+    z_range,
+  }: {
+    activeViewportId: string;
+    segmentationId: string;
+    segmentNumber: number;
+    segments: { [segmentIndex: string]: cstTypes.Segment };
+    derivedImageIds: string[];
+    currentDisplaySets: any;
+    imageIds: string[];
+    existingSegments: { [segmentIndex: string]: cstTypes.Segment };
+    existing: boolean;
+    activeSegmentation: any;
+    currentImageIdIndex?: number;
+    z_range: number[];
+  }) {
+    // Get the representations for the segmentation to recover the visibility of the segments
+    const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId });
+    
+    if (segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing) {
+      csToolsSegmentation.addSegmentations([
+        {
+          segmentationId,
+          representation: {
+            type: LABELMAP,
+            data: {
+              imageIds: derivedImageIds,
+              referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
+              referencedImageIds: imageIds,
+            }
+          },
+          config: {
+            cachedStats: {
+              center: z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0
+            },
+            label: currentDisplaySets.SeriesDescription,
+            segments,
+          },
+        }
+      ]);
+    } else {
+      // Comment out at the moment (necessary for hiding previous segments), may need to uncomment some weird bugs.
+      servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
+      const readableText = customizationService.getCustomization('panelSegmentation.readableText');
+
+      // Get existing segmentation to preserve other representation data
+      const existingSegmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
+      const existingRepresentationData = existingSegmentation?.representationData || {};
+      const existingLabelmapData = existingRepresentationData[LABELMAP] || {};
+      
+      // For Surface representation, remove it entirely to force regeneration from updated labelmap
+      // This ensures surfaces are recomputed from the new labelmap data
+      const updatedRepresentationData = { ...existingRepresentationData };
+      const SURFACE = csToolsEnums.SegmentationRepresentations.Surface;
+      if (updatedRepresentationData[SURFACE]) {
+        // Remove Surface representation data to force regeneration from updated labelmap
+        delete updatedRepresentationData[SURFACE];
+      }
+      
+      // Update the segmentation data, preserving other representation data (but not Surface)
+      csToolsSegmentation.updateSegmentations([
+        {
+          segmentationId,
+          payload: {
+            segments: segments,
+            representationData: {
+              ...updatedRepresentationData, // Surface data removed to force regeneration
+              [LABELMAP]: {
+                ...existingLabelmapData, // Preserve existing labelmap data (e.g., volumeId)
+                imageIds: derivedImageIds,
+                referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
+                referencedImageIds: imageIds,
+              }
+            }
+          },
+        },
+      ]);
+      
+      // Update the segmentation stats
+      Promise.resolve().then(() => 
+        updateSegmentationStats({
+          segmentation: activeSegmentation,
+          segmentationId,
+          readableText,
+        })
+      ).catch(error => {
+        console.warn('Failed to update segmentation stats:', error);
+      });
+    }
+    
+    servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
+    toolboxState.setCurrentActiveSegment(segmentNumber);
+    await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
+      segmentationId: segmentationId,
+    });
+    
+    if (toolboxState.getRefineNew()) {
+      toolboxState.setRefineNew(false);
+    }
+    
+    // semi-hack: to render segmentation properly on the current image for stack viewport
+    const viewport = activeViewportId.startsWith('default') 
+      ? servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId)
+      : null;
+    if (viewport?.setImageIdIndex && currentImageIdIndex !== undefined) {
+      const somewhereIndex = currentImageIdIndex === 0 ? 1 : 0;
+      await viewport.setImageIdIndex(somewhereIndex);
+      await viewport.setImageIdIndex(currentImageIdIndex);
+    }
+    
+    // Recover the visibility of the segments
+    for (let i = 0; i < representations.length; i++) {
+      const representation = representations[i];
+      const segments = Object.values(representation.segments);
+      
+      if (segments.length > 0) {
+        for (let j = 0; j < segments.length; j++) {
+          const segment = segments[j];
+          servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, segment.segmentIndex, segment.visible);
+        }
+      }
+    }
+
+    // Update all viewports with the new segmentation representation
+    const currentViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+    for (let i = 0; i < currentViewportIds.length; i++) {
+      const viewportId = currentViewportIds[i];
+      const viewport = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      const isVolume3D = viewport instanceof VolumeViewport3D;
+
+      servicesManager.services.segmentationService.removeSegmentationRepresentations(
+        viewportId,
+        { segmentationId }
+      );
+
+      // For VolumeViewport3D, update labelmap image references to trigger surface regeneration
+      if (isVolume3D) {
+        updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
+      }
+
+      // For VolumeViewport3D, explicitly specify Labelmap type to trigger viewport conversion to Surface
+      // This ensures the surface is properly computed from the updated labelmap
+      await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
+        segmentationId: segmentationId,
+        type: isVolume3D ? csToolsEnums.SegmentationRepresentations.Labelmap : undefined,
+      });
+
+      // For VolumeViewport3D, wait a bit for surface computation to complete, then render
+      if (isVolume3D) {
+        // Give time for surface computation to complete
+        await new Promise(resolve => setTimeout(resolve, 100));
+        // Use requestAnimationFrame to ensure the representation is fully added before rendering
+        requestAnimationFrame(() => {
+          if (viewport) {
+            viewport.render();
+          }
+        });
+      }
+    }
+
+    // Trigger SEGMENTATION_DATA_MODIFIED event AFTER all representations are re-added
+    // This ensures surface representations exist before they try to update
+    eventTarget.dispatchEvent(
+      new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
+        detail: { segmentationId },
+      })
+    );
+  }
+
   const actions = {
     setAiToolActive: ({ toolName }: { toolName: string }) => {
       if (!toolName) {
@@ -974,91 +1158,21 @@ const commandsModule = ({
             }
           };
 
-          // Get the representations for the segmentation to recover the visibility of the segments
-          const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId })
-          if(segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing){
-            //servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
-            csToolsSegmentation.addSegmentations([
-              {
-                  segmentationId,
-                  representation: {
-                      type: LABELMAP,
-                      data: {
-                        imageIds: derivedImageIds,
-                        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-                        referencedImageIds: imageIds,
-                      }
-                  },
-                  config: {
-                    cachedStats: {
-                      center: z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0
-                    },//results.segMetadata,
-                    label: currentDisplaySets.SeriesDescription,
-                    segments,
-                  },
-              }
-          ]);
-          
-        }else{
-          // Comment out at the moment (necessary for hiding previous segments), may need to uncomment some weird bugs.
-           servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
-           const readableText = customizationService.getCustomization('panelSegmentation.readableText');
-          // Update the segmentation data
-          csToolsSegmentation.updateSegmentations([
-            {
-              segmentationId,
-              payload: {
-                segments: segments,
-                representationData: {
-                  [LABELMAP]: {
-                    imageIds: derivedImageIds,
-                    referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-                    referencedImageIds: imageIds,
-                  }
-                }
-              },
-            },
-          ]);
-          // Update the segmentation stats
-          Promise.resolve().then(() => 
-            updateSegmentationStats({
-              segmentation: activeSegmentation,
-              segmentationId,
-              readableText,
-            })
-          ).catch(error => {
-            console.warn('Failed to update segmentation stats:', error);
+          // Post-segmentation processing: update representations, handle viewports, trigger events
+          await postSegmentationProcessing({
+            activeViewportId,
+            segmentationId,
+            segmentNumber,
+            segments,
+            derivedImageIds,
+            currentDisplaySets,
+            imageIds,
+            existingSegments,
+            existing,
+            activeSegmentation,
+            currentImageIdIndex,
+            z_range,
           });
-          }
-          servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
-          toolboxState.setCurrentActiveSegment(segmentNumber);
-          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-            segmentationId: segmentationId,
-          });
-          if(toolboxState.getRefineNew()){
-            toolboxState.setRefineNew(false);
-          }
-          // semi-hack: to render segmentation properly on the current image
-          let somewhereIndex = 0;
-          if(currentImageIdIndex === 0){
-            somewhereIndex = 1;
-          }
-          if (activeViewportId.startsWith('default')){
-            await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(somewhereIndex);
-            await servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId).setImageIdIndex(currentImageIdIndex);
-          }
-          // Recover the visibility of the segments
-          for (let i = 0; i < representations.length; i++) {
-            const representation = representations[i];
-            const segments = Object.values(representation.segments);
-            
-            if (segments.length > 0) {
-              for (let j = 0; j < segments.length; j++) {
-                const segment = segments[j];
-                servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, segment.segmentIndex, segment.visible);
-              }
-            }
-          }
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
           return response;
@@ -1628,156 +1742,22 @@ const commandsModule = ({
             }
           };
           console.log(`Before add or update segs: ${(Date.now() - start)/1000} Seconds`);
-          // Get the representations for the segmentation to recover the visibility of the segments
-          const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId })
-          if(segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing){
-            //servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
-            csToolsSegmentation.addSegmentations([
-              {
-                  segmentationId,
-                  representation: {
-                      type: LABELMAP,
-                      data: {
-                        imageIds: derivedImageIds,
-                        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-                        referencedImageIds: imageIds,
-                      }
-                  },
-                  config: {
-                    cachedStats: {
-                      center: z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0
-                    },//results.segMetadata,
-                    label: currentDisplaySets.SeriesDescription,
-                    segments,
-                  },
-              }
-          ]);          
-        }else{
-          // Comment out at the moment (necessary for hiding previous segments), may need to uncomment some weird bugs.
-          servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
-          const readableText = customizationService.getCustomization('panelSegmentation.readableText');
-
-          // Get existing segmentation to preserve other representation data
-          const existingSegmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
-          const existingRepresentationData = existingSegmentation?.representationData || {};
-          const existingLabelmapData = existingRepresentationData[LABELMAP] || {};
-          
-          // For Surface representation, remove it entirely to force regeneration from updated labelmap
-          // This ensures surfaces are recomputed from the new labelmap data
-          const updatedRepresentationData = { ...existingRepresentationData };
-          const SURFACE = csToolsEnums.SegmentationRepresentations.Surface;
-          if (updatedRepresentationData[SURFACE]) {
-            // Remove Surface representation data to force regeneration from updated labelmap
-            delete updatedRepresentationData[SURFACE];
-          }
-          
-          // Update the segmentation data, preserving other representation data (but not Surface)
-          csToolsSegmentation.updateSegmentations([
-            {
-              segmentationId,
-              payload: {
-                segments: segments,
-                representationData: {
-                  ...updatedRepresentationData, // Surface data removed to force regeneration
-                  [LABELMAP]: {
-                    ...existingLabelmapData, // Preserve existing labelmap data (e.g., volumeId)
-                    imageIds: derivedImageIds,
-                    referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-                    referencedImageIds: imageIds,
-                  }
-                }
-              },
-            },
-          ]);
-          
-          // Update the segmentation stats
-          Promise.resolve().then(() => 
-            updateSegmentationStats({
-              segmentation: activeSegmentation,
-              segmentationId,
-              readableText,
-            })
-          ).catch(error => {
-            console.warn('Failed to update segmentation stats:', error);
-          });  
-          }
-          console.log(`After add and update segs: ${(Date.now() - start)/1000} Seconds`);
-          servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
-          toolboxState.setCurrentActiveSegment(segmentNumber);
-          await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-            segmentationId: segmentationId,
+          // Post-segmentation processing: update representations, handle viewports, trigger events
+          await postSegmentationProcessing({
+            activeViewportId,
+            segmentationId,
+            segmentNumber,
+            segments,
+            derivedImageIds,
+            currentDisplaySets,
+            imageIds,
+            existingSegments,
+            existing,
+            activeSegmentation,
+            currentImageIdIndex,
+            z_range,
           });
-          if(toolboxState.getRefineNew()){
-            toolboxState.setRefineNew(false);
-          }
-          console.log(`After Reps: ${(Date.now() - start)/1000} Seconds`);
-          // semi-hack: to render segmentation properly on the current image for stack viewport
-          const viewport = activeViewportId.startsWith('default') 
-            ? servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId)
-            : null;
-          if (viewport?.setImageIdIndex && currentImageIdIndex !== undefined) {
-            const somewhereIndex = currentImageIdIndex === 0 ? 1 : 0;
-            await viewport.setImageIdIndex(somewhereIndex);
-            await viewport.setImageIdIndex(currentImageIdIndex);
-          }
-          console.log(`After semi hack: ${(Date.now() - start)/1000} Seconds`);
-          // Recover the visibility of the segments
-          for (let i = 0; i < representations.length; i++) {
-            const representation = representations[i];
-            const segments = Object.values(representation.segments);
-            
-            if (segments.length > 0) {
-              for (let j = 0; j < segments.length; j++) {
-                const segment = segments[j];
-                servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, segment.segmentIndex, segment.visible);
-              }
-            }
-          }
-
-          // Update all viewports with the new segmentation representation
-          const currentViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
-          for (let i = 0; i < currentViewportIds.length; i++) {
-            const viewportId = currentViewportIds[i];
-            const viewport = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
-            const isVolume3D = viewport instanceof VolumeViewport3D;
-            
-            servicesManager.services.segmentationService.removeSegmentationRepresentations(
-              viewportId,
-              { segmentationId }
-            );
-            
-            // For VolumeViewport3D, update labelmap image references to trigger surface regeneration
-            if (isVolume3D) {
-              updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
-            }
-            
-            // For VolumeViewport3D, explicitly specify Labelmap type to trigger viewport conversion to Surface
-            // This ensures the surface is properly computed from the updated labelmap
-            await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
-              segmentationId: segmentationId,
-              type: isVolume3D ? csToolsEnums.SegmentationRepresentations.Labelmap : undefined,
-            });
-            
-            // For VolumeViewport3D, wait a bit for surface computation to complete, then render
-            if (isVolume3D) {
-              // Give time for surface computation to complete
-              await new Promise(resolve => setTimeout(resolve, 100));
-              // Use requestAnimationFrame to ensure the representation is fully added before rendering
-              requestAnimationFrame(() => {
-                if (viewport) {
-                  viewport.render();
-                }
-              });
-            }
-          }
-          
-          // Trigger SEGMENTATION_DATA_MODIFIED event AFTER all representations are re-added
-          // This ensures surface representations exist before they try to update
-          eventTarget.dispatchEvent(
-            new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
-              detail: { segmentationId },
-            })
-          );
+          console.log(`After add and update segs: ${(Date.now() - start)/1000} Seconds`);
           
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
