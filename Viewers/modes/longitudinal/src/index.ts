@@ -160,6 +160,14 @@ function modeFactory({ modeConfiguration }) {
         //'jumpToSegment',
         //'toggleCurrentSegment',
       ]);
+
+      toolbarService.createButtonSection('textPromptSegmentationToolbox', [
+        'textPromptSegmentationContainer',
+      ]);
+
+      toolbarService.createButtonSection('textPromptSegmentationSection', [
+        'textPromptSegmentation',
+      ]);
       toolbarService.createButtonSection('segmentationToolboxUtilitySection', [
         //'LabelmapSlicePropagation',
         'InterpolateLabelmap',

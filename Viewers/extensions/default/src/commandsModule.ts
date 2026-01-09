@@ -29,6 +29,7 @@ import { updateSegmentationStats } from '../../cornerstone/src/utils/updateSegme
 import axios from 'axios';
 import { toolboxState } from './stores/toolboxState';
 import { parseMultipart } from './utils/multipart';
+import { callInputDialog } from './utils/callInputDialog';
 
 
 export type HangingProtocolParams = {
@@ -1312,7 +1313,7 @@ const commandsModule = ({
 
     },
 
-    async nninter() {
+    async nninter(textPrompts?: string | string[]) {
       if (toolboxState.getLocked()) {
         return;
       }
@@ -1476,10 +1477,16 @@ const commandsModule = ({
       })
       .filter(Boolean)
 
-      //VoxTell
-      const text_prompts = currentMeasurements
-      .filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
-      .map(e => { return e.label })
+      //VoxTell - Use provided textPrompts or extract from measurements
+      let text_prompts: string[] = [];
+      if (textPrompts) {
+        // Convert to array if it's a single string
+        text_prompts = Array.isArray(textPrompts) ? textPrompts : [textPrompts];
+      } else {
+        text_prompts = currentMeasurements
+          .filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
+          .map(e => { return e.label });
+      }
 
       // Hide the measurements after inference
       for (let i = 0; i < currentMeasurements.length; i++) {
@@ -1768,6 +1775,49 @@ const commandsModule = ({
         throw error;
       }
     },
+
+    async textPromptSegmentation() {
+      if (toolboxState.getLocked()) {
+        return;
+      }
+
+      const { uiDialogService } = servicesManager.services;
+
+      try {
+        // Open dialog to get text input
+        const textInput = await callInputDialog({
+          uiDialogService,
+          defaultValue: '',
+          title: 'Text Prompt Segmentation (VoxTell)',
+          placeholder: 'Enter text prompt for segmentation',
+          submitOnEnter: true,
+        });
+
+        // If user cancelled or entered empty text, return early
+        if (!textInput || textInput.trim() === '') {
+          return;
+        }
+
+        // Temporarily override refineNew with textPromptReplaceNew for this operation
+        const originalRefineNew = toolboxState.getRefineNew();
+        const textPromptReplaceNew = toolboxState.getTextPromptReplaceNew();
+        toolboxState.setRefineNew(textPromptReplaceNew);
+
+        try {
+          // Call nninter with the text prompt
+          // Reference actions.nninter - this works because the function executes
+          // after the actions object is fully created
+          return await actions.nninter(textInput.trim());
+        } finally {
+          // Restore original refineNew state
+          toolboxState.setRefineNew(originalRefineNew);
+        }
+      } catch (error) {
+        // User cancelled the dialog - callInputDialog may throw or return empty string
+        console.error('Text prompt segmentation error:', error);
+        return;
+      }
+    },
     jumpToSegment: () => {
       const activeViewportId = viewportGridService.getState().activeViewportId;
       const segmentationService = servicesManager.services.segmentationService;
@@ -1924,6 +1974,7 @@ const commandsModule = ({
     initNninter: actions.initNninter,
     resetNninter: actions.resetNninter,
     nninter: actions.nninter,
+    textPromptSegmentation: actions.textPromptSegmentation,
     jumpToSegment: actions.jumpToSegment,
     toggleCurrentSegment: actions.toggleCurrentSegment,
     updateViewportDisplaySet: actions.updateViewportDisplaySet,

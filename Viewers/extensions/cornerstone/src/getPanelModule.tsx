@@ -40,6 +40,10 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
           title="AI Tools"
         />
         <Toolbox
+          buttonSectionId="textPromptSegmentationToolbox"
+          title="Text-Prompt Segmentation"
+        />
+        <Toolbox
           buttonSectionId="segmentationToolbox"
           title="Segmentation Tools"
         />

@@ -3,6 +3,7 @@
 let liveMode = true;
 let posNeg = false;
 let refineNew = false;
+let textPromptReplaceNew = false; // Replace/New toggle for Text Prompt Segmentation
 let selectedModel: 'nnInteractive' | 'sam2' | 'medsam2' | 'sam3' = 'nnInteractive'; // Model selection: nnInteractive, SAM2, MedSAM2, or SAM3
 let locked = false;
 let currentActiveSegment = 1;
@@ -27,6 +28,10 @@ export const toolboxState = {
         }
         toolboxState.setPosNeg(false);
     }
+  },
+  getTextPromptReplaceNew: () => textPromptReplaceNew,
+  setTextPromptReplaceNew: (enabled: boolean) => {
+    textPromptReplaceNew = enabled;
   },
   // Model selection methods
   getSelectedModel: () => selectedModel,

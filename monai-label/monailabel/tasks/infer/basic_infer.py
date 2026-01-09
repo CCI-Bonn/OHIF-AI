@@ -543,7 +543,7 @@ class BasicInferTask(InferTask):
                     final_result_json["flipped"] = False
 
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                final_result_json["label_name"] = f"voxtell_pred_{timestamp}"
+                final_result_json["label_name"] = data['texts'][0]
 
                 logger.info(f"final_result_json info: {final_result_json}")
 

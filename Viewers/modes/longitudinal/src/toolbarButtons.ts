@@ -55,6 +55,14 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'textPromptSegmentationContainer',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      groupId: 'textPromptSegmentationContainer',
+      buttonSection: 'textPromptSegmentationSection',
+    },
+  },
+  {
     id: 'SegmentationUtilities',
     uiType: 'ohif.toolBoxButton',
     props: {
@@ -604,6 +612,17 @@ const toolbarButtons: Button[] = [
       label: 'run segmentation',
       tooltip: 'run',
       commands: 'runAiSegmentation',
+    },
+  },
+  {
+    id: 'textPromptSegmentation',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      type: 'tool',
+      icon: 'tool-voxtell',
+      label: 'Text Prompt',
+      tooltip: 'VoxTell',
+      commands: 'textPromptSegmentation',
     },
   },
   {

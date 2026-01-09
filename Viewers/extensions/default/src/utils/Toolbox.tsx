@@ -27,6 +27,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
 
   const { toolbarService, customizationService } = servicesManager.services;
   const isAIToolBox = buttonSectionId === 'aiToolBox';
+  const isTextPromptToolbox = buttonSectionId === 'textPromptSegmentationToolbox';
   const [showConfig, setShowConfig] = useState(false);
   const [isLocked, setIsLocked] = useState(toolboxState.getLocked());
   const hotkeysDisabled = isAIToolBox && isLocked;
@@ -35,6 +36,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   const [liveMode, setLiveMode] = useState(toolboxState.getLiveMode());
   const [posNeg, setPosNeg] = useState(toolboxState.getPosNeg());
   const [refineNew, setRefineNew] = useState(toolboxState.getRefineNew());
+  const [textPromptReplaceNew, setTextPromptReplaceNew] = useState(toolboxState.getTextPromptReplaceNew());
   const [selectedModel, setSelectedModel] = useState<'nnInteractive' | 'sam2' | 'medsam2' | 'sam3'>(toolboxState.getSelectedModel());
 
   // Sync local state with global state changes
@@ -43,6 +45,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
       setLiveMode(toolboxState.getLiveMode());
       setPosNeg(toolboxState.getPosNeg());
       setRefineNew(toolboxState.getRefineNew());
+      setTextPromptReplaceNew(toolboxState.getTextPromptReplaceNew());
       setSelectedModel(toolboxState.getSelectedModel());
       setIsLocked(toolboxState.getLocked());
     };
@@ -381,6 +384,22 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
                          <SelectItem value="sam3">SAM3</SelectItem>
                        </SelectContent>
                      </Select>
+                   </div>
+                 </div>
+                )}
+              {isTextPromptToolbox && (
+                <div className="flex justify-center items-center gap-4 py-2 px-1">
+                   <div className="flex items-center gap-2">
+                     <Label htmlFor="replace-new">Replace/New</Label>
+                     <Switch
+                       id="replace-new"
+                       checked={textPromptReplaceNew}
+                       onCheckedChange={(checked) => {
+                        setTextPromptReplaceNew(checked);
+                        toolboxState.setTextPromptReplaceNew(checked);
+                        console.log('Replace/New:', checked);
+                      }}
+                     />
                    </div>
                  </div>
                 )}
