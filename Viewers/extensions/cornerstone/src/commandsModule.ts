@@ -1339,6 +1339,41 @@ function commandsModule({
     },
 
     /**
+     * Toggles the visibility of a segmentation representation for all viewports
+     * If segmentationId is not provided, uses the active segmentation
+     * @param props.segmentationId - The ID of the segmentation (optional, defaults to active segmentation)
+     * @param props.type - The type of representation (optional, defaults to Labelmap)
+     */
+    toggleSegmentationVisibilityAllViewportsCommand: ({ segmentationId, type }) => {
+      const { segmentationService, cornerstoneViewportService, viewportGridService } = servicesManager.services;
+      const viewportIds = cornerstoneViewportService.getViewportIds();
+      
+      // If segmentationId is not provided, get the active segmentation
+      let targetSegmentationId = segmentationId;
+      if (!targetSegmentationId) {
+        const activeViewportId = viewportGridService.getActiveViewportId();
+        const activeSegmentation = segmentationService.getActiveSegmentation(activeViewportId);
+        if (!activeSegmentation) {
+          console.warn('No active segmentation found');
+          return;
+        }
+        targetSegmentationId = activeSegmentation.segmentationId;
+      }
+      
+      // Default to Labelmap if type is not provided
+      const representationType = type || Enums.SegmentationRepresentations.Labelmap;
+      
+      // Toggle visibility for all viewports
+      for (let i = 0; i < viewportIds.length; i++) {
+        const viewportId = viewportIds[i];
+        segmentationService.toggleSegmentationRepresentationVisibility(
+          viewportId,
+          { segmentationId: targetSegmentationId, type: representationType }
+        );
+      }
+    },
+
+    /**
      * Downloads a segmentation
      * @param props.segmentationId - The ID of the segmentation to download
      */
@@ -1989,6 +2024,9 @@ function commandsModule({
     },
     toggleSegmentationVisibility: {
       commandFn: actions.toggleSegmentationVisibilityCommand,
+    },
+    toggleSegmentationVisibilityAllViewports: {
+      commandFn: actions.toggleSegmentationVisibilityAllViewportsCommand,
     },
     downloadSegmentation: {
       commandFn: actions.downloadSegmentationCommand,

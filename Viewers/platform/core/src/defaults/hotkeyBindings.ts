@@ -45,6 +45,12 @@ const bindings = [
   {
     commandName: 'flipViewportVertical',
     label: 'Flip Vertically',
+    keys: ['ctrl+v'],
+    isEditable: true,
+  },
+  {
+    commandName: 'toggleSegmentationVisibilityAllViewports',
+    label: 'Toggle Segmentation Visibility (All Viewports)',
     keys: ['v'],
     isEditable: true,
   },
