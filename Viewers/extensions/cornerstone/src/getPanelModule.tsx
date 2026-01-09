@@ -37,7 +37,11 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
       <>
       <Toolbox
           buttonSectionId="aiToolBox"
-          title="AI Tools"
+          title="Interactive Segmentation (OHIF-AI)"
+        />
+        <Toolbox
+          buttonSectionId="legacyInteractiveSegmentationToolbox"
+          title="Interactive Segmentation (Legacy)"
         />
         <Toolbox
           buttonSectionId="textPromptSegmentationToolbox"
@@ -45,7 +49,8 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
         />
         <Toolbox
           buttonSectionId="segmentationToolbox"
-          title="Segmentation Tools"
+          title="Non-Interactive Segmentation (Legacy)"
+          defaultOpen={false}
         />
         <PanelSegmentation
           commandsManager={commandsManager}

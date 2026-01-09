@@ -21,7 +21,7 @@ interface ButtonProps {
  * role in enhancing the app with a toolbox by providing a way to integrate
  * and display various tools and their corresponding options
  */
-export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; title: string }) {
+export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { buttonSectionId: string; title: string; defaultOpen?: boolean }) {
   const { servicesManager, commandsManager } = useSystem();
   const { t } = useTranslation();
 
@@ -275,7 +275,7 @@ export function Toolbox({ buttonSectionId, title }: { buttonSectionId: string; t
   const shouldCollapse = isAIToolBox && isLocked;
 
   return (
-    <PanelSection key={isAIToolBox ? `toolbox-${isLocked}` : buttonSectionId} defaultOpen={!shouldCollapse}>
+    <PanelSection key={isAIToolBox ? `toolbox-${isLocked}` : buttonSectionId} defaultOpen={defaultOpen && !shouldCollapse}>
       <PanelSection.Header 
         className="flex items-center justify-between"
       >

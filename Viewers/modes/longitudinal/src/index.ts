@@ -161,6 +161,15 @@ function modeFactory({ modeConfiguration }) {
         //'toggleCurrentSegment',
       ]);
 
+      toolbarService.createButtonSection('legacyInteractiveSegmentationToolbox', [
+        'legacyInteractiveSegmentationContainer',
+      ]);
+
+      toolbarService.createButtonSection('legacyInteractiveSegmentationSection', [
+        'ohifTeamViewer',
+        'monaiLabelViewer',
+      ]);
+
       toolbarService.createButtonSection('textPromptSegmentationToolbox', [
         'textPromptSegmentationContainer',
       ]);

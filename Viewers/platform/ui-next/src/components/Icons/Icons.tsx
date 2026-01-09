@@ -66,6 +66,8 @@ import Trash from './Sources/Trash';
 import ToolSam from './Sources/ToolSam';
 import ToolNninter from './Sources/ToolNninter';
 import ToolVoxTell from './Sources/ToolVoxTell';
+import ToolOhifTeam from './Sources/ToolOhifTeam';
+import ToolMonaiLabel from './Sources/ToolMonaiLabel';
 import ToolTarget from './Sources/ToolTarget';
 import ViewportViews from './Sources/ViewportViews';
 import Sorting from './Sources/Sorting';
@@ -682,6 +684,8 @@ export const Icons = {
   'tool-sam': (props: IconProps) => ToolSam(props),
   'tool-nninter': (props: IconProps) => ToolNninter(props),
   'tool-voxtell': (props: IconProps) => ToolVoxTell(props),
+  'tool-ohif-team': (props: IconProps) => ToolOhifTeam(props),
+  'tool-monai-label': (props: IconProps) => ToolMonaiLabel(props),
   'tool-target': (props: IconProps) => ToolTarget(props),
   'eye-visible': (props: IconProps) => EyeVisible(props),
   'tool-stack-image-sync': (props: IconProps) => ToolStackImageSync(props),
