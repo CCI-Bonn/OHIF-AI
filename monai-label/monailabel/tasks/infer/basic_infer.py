@@ -41,7 +41,7 @@ from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
 from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline, spherical_kernel, calculate_dice, timeout_context
-
+from monailabel.utils.others.medgemma import norm, window, _encode
 from sam2.build_sam import build_sam2_video_predictor, build_sam2_video_predictor_npz
 
 from sam3.model_builder import build_sam3_video_model
@@ -137,6 +137,21 @@ else:
     predictor_sam3 = None
 
 predictor_med = build_sam2_video_predictor_npz(medsam2_model_cfg, medsam2_checkpoint, vos_optimized=False)
+
+import transformers
+
+os.environ["HF_TOKEN"] = ""
+
+gem_model_id = "google/medgemma-1.5-4b-it"
+
+gem_model_kwargs = dict(
+    dtype=torch.bfloat16,
+    device_map="auto",
+    offload_buffers=True,
+)
+
+gem_processor = transformers.AutoProcessor.from_pretrained(gem_model_id, use_fast=True,  **gem_model_kwargs)
+gem_model = transformers.AutoModelForImageTextToText.from_pretrained(gem_model_id, **gem_model_kwargs)
 
 logger = logging.getLogger(__name__)
 
@@ -514,6 +529,75 @@ class BasicInferTask(InferTask):
                 return f'/code/predictions/init.nii.gz', final_result_json
 
             logger.info(f"interactions in _session_used_interactions: {self._session_used_interactions}")
+
+            if nnInter == "medGemma":
+                if len(data['texts'])==1 and data['texts'][0]!='':
+                    query = data['texts'][0]
+                    # Convert image to RGB slices and MAX slice = 85
+                    img_np = img_np[0]
+                    num_axial_slices =img_np.shape[2]
+                    img_list = []
+                    if num_axial_slices > 85:
+                        MAX_SLICE = 85
+                        indices = [int(round(i / MAX_SLICE * (num_axial_slices - 1))) for i in range(1, MAX_SLICE + 1)]
+                        img_list = [img_np[:, :, idx] for idx in indices]
+                    else:
+                        # Convert 3D array to list of 2D arrays
+                        img_list = [img_np[:, :, i] for i in range(num_axial_slices)]
+                    
+                    normalized_img_list = []
+                    for ct_slice in img_list:
+                        windowed_slice = window(ct_slice)
+                        # Round slice voxels to nearest integer number.
+                        windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
+                        normalized_img_list.append(windowed_slice)
+
+                    instruction = data['instruction'] if data['instruction'] else ("You are an instructor teaching medical students. You are "
+               "analyzing the following CT slices. Please review the slices provided below "
+               "carefully.")
+
+                    content = []
+                    content.append({"type": "text", "text": instruction})
+                    for slice_number, ct_slice in enumerate(normalized_img_list, 1):
+                        content.append({"type": "image", "image": _encode(ct_slice)})
+                        content.append({"type": "text", "text": f"SLICE {slice_number}"})
+                    content.append({"type": "text", "text": query})
+
+                    messages = [
+                        {
+                            "role": "user",
+                            "content": content
+                        }
+                    ]
+                    inputs = gem_processor.apply_chat_template(
+                                    messages,
+                                    add_generation_prompt=True,
+                                    continue_final_message=False,
+                                    return_tensors="pt",  # pytorch
+                                    tokenize=True,
+                                    return_dict=True,
+                                )
+
+                    # Run generative model
+                    with torch.inference_mode():
+                        inputs = inputs.to(gem_model.device, dtype=torch.bfloat16)
+                        # Seting do_sample to promote deterministic model response.
+                        # Setting max_new_tokens to constrain response length.
+                        generated_sequence = gem_model.generate(**inputs, do_sample=False, max_new_tokens=2000)
+
+                    # Process response
+                    medgemma_response = gem_processor.post_process_image_text_to_text(generated_sequence, skip_special_tokens=True)
+                    decoded_inputs = gem_processor.post_process_image_text_to_text(inputs["input_ids"], skip_special_tokens=True)
+                    medgemma_response = medgemma_response[0]
+                    # There can be added characters before the input text, so we need to find the
+                    # beginning of the input text in the generated text
+                    index_input_text = medgemma_response.find(decoded_inputs[0])
+                    if 0 <= index_input_text and index_input_text <= 2:
+                        # If the input text is found, we remove it
+                        medgemma_response = medgemma_response[index_input_text + len(decoded_inputs[0]):]
+                    logger.info(f"MedGemma Generated text: {medgemma_response}")
+                    #final_result_json["medgemma_response"] = medgemma_response
+                    return medgemma_response, final_result_json
 
             if len(data['texts'])==1 and data['texts'][0]!='':
                 orig_orient = sitk.DICOMOrientImageFilter_GetOrientationFromDirectionCosines(
