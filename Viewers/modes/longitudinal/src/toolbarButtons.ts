@@ -648,7 +648,7 @@ const toolbarButtons: Button[] = [
       type: 'tool',
       icon: 'tool-voxtell',
       label: 'Test Medgemma',
-      tooltip: 'Test Medgemma 1.5B',
+      tooltip: 'Test Medgemma 1.5 4B',
       commands: 'testMedgemma',
     },
   },

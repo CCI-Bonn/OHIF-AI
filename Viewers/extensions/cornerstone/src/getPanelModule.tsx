@@ -49,7 +49,7 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
         />
         <Toolbox
           buttonSectionId="testMedgemmaToolbox"
-          title="Test Medgemma 1.5B"
+          title="Test Medgemma 1.5 4B"
         />
         <Toolbox
           buttonSectionId="segmentationToolbox"
