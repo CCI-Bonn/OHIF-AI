@@ -1881,20 +1881,10 @@ const commandsModule = ({
       try {
         // Get instruction if not provided
         let instructionText = instruction;
-        if (!instructionText) {
-          instructionText = await callInputDialog({
-            uiDialogService,
-            defaultValue: toolboxState.getMedgemmaInstruction() || '',
-            title: 'Medgemma 1.5B - Instruction',
-            placeholder: 'Enter instruction (optional, e.g., "You are an instructor teaching medical students...")',
-            submitOnEnter: true,
-          });
-          
-          if (!instructionText?.trim()) {
-            instructionText = 'You are an instructor teaching medical students. You are analyzing the following CT slices. Please review the slices provided below carefully.';
-          }
-          toolboxState.setMedgemmaInstruction(instructionText.trim());
+        if (!instructionText?.trim()) {
+          instructionText = 'You are an instructor teaching medical students. You are analyzing the following CT slices. Please review the slices provided below carefully.';
         }
+        toolboxState.setMedgemmaInstruction(instructionText.trim());
 
         // Get query if not provided
         let queryText = query;
