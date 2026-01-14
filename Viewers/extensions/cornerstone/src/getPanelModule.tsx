@@ -48,6 +48,10 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
           title="Text-Prompt Segmentation"
         />
         <Toolbox
+          buttonSectionId="testMedgemmaToolbox"
+          title="Test Medgemma 1.5B"
+        />
+        <Toolbox
           buttonSectionId="segmentationToolbox"
           title="Non-Interactive Segmentation (Legacy)"
           defaultOpen={false}

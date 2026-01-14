@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Icons, PanelSection, ToolSettings, Switch, Label, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@ohif/ui-next';
+import React, { useState, useEffect, useRef } from 'react';
+import { Icons, PanelSection, ToolSettings, Switch, Label, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Button, Input } from '@ohif/ui-next';
 import { Lock, LockOpen } from 'lucide-react';
 import { useSystem, useToolbar } from '@ohif/core';
 import classnames from 'classnames';
@@ -28,6 +28,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
   const { toolbarService, customizationService } = servicesManager.services;
   const isAIToolBox = buttonSectionId === 'aiToolBox';
   const isTextPromptToolbox = buttonSectionId === 'textPromptSegmentationToolbox';
+  const isTestMedgemmaToolbox = buttonSectionId === 'testMedgemmaToolbox';
   const [showConfig, setShowConfig] = useState(false);
   const [isLocked, setIsLocked] = useState(toolboxState.getLocked());
   const hotkeysDisabled = isAIToolBox && isLocked;
@@ -38,6 +39,32 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
   const [refineNew, setRefineNew] = useState(toolboxState.getRefineNew());
   const [textPromptReplaceNew, setTextPromptReplaceNew] = useState(toolboxState.getTextPromptReplaceNew());
   const [selectedModel, setSelectedModel] = useState<'nnInteractive' | 'sam2' | 'medsam2' | 'sam3'>(toolboxState.getSelectedModel());
+  const [medgemmaResult, setMedgemmaResult] = useState(toolboxState.getMedgemmaResult());
+  const [medgemmaInstruction, setMedgemmaInstruction] = useState(toolboxState.getMedgemmaInstruction());
+  const [medgemmaQuery, setMedgemmaQuery] = useState(toolboxState.getMedgemmaQuery());
+  // Sync medgemma state from toolboxState
+  useEffect(() => {
+    if (isTestMedgemmaToolbox) {
+      const interval = setInterval(() => {
+        const result = toolboxState.getMedgemmaResult();
+        const instruction = toolboxState.getMedgemmaInstruction();
+        const query = toolboxState.getMedgemmaQuery();
+        setMedgemmaResult(result);
+        setMedgemmaInstruction(instruction);
+        setMedgemmaQuery(query);
+      }, 100); // Check every 100ms for updates
+      return () => clearInterval(interval);
+    }
+  }, [isTestMedgemmaToolbox]);
+
+  // Format time display (MM:SS.mmm)
+  const formatTime = (ms: number): string => {
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    const milliseconds = Math.floor((ms % 1000) / 100);
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds}`;
+  };
 
   // Sync local state with global state changes
   useEffect(() => {
@@ -412,6 +439,14 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
                 }
                 const { id, Component, componentProps } = tool;
 
+                // Hide testMedgemma button since we have input fields in the Toolbox
+                if (isTestMedgemmaToolbox && id === 'testMedgemma') {
+                  return null;
+                }
+
+                // Disable AI Tools buttons when timer is not running (start button not clicked)
+                const isDisabled = isAIToolBox && id !== 'Pan';
+
                 return (
                   <div
                     key={id}
@@ -428,6 +463,59 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
                 );
               })}
             </div>
+            {isTestMedgemmaToolbox && (
+              <div className="flex flex-col gap-3 py-3 px-2 border-t border-primary/20">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="medgemma-instruction" className="text-sm font-semibold">Instruction (Optional)</Label>
+                  <textarea
+                    id="medgemma-instruction"
+                    value={medgemmaInstruction}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setMedgemmaInstruction(value);
+                      toolboxState.setMedgemmaInstruction(value);
+                    }}
+                    placeholder="Enter instruction (e.g., 'You are an instructor teaching medical students...')"
+                    className="min-h-[60px] text-sm bg-primary-dark border border-primary-main rounded p-2 text-white placeholder:text-primary-light resize-y"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="medgemma-query" className="text-sm font-semibold">Query</Label>
+                  <textarea
+                    id="medgemma-query"
+                    value={medgemmaQuery}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setMedgemmaQuery(value);
+                      toolboxState.setMedgemmaQuery(value);
+                    }}
+                    placeholder="Enter your query/question"
+                    className="min-h-[60px] text-sm bg-primary-dark border border-primary-main rounded p-2 text-white placeholder:text-primary-light resize-y"
+                  />
+                </div>
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => {
+                    commandsManager?.run('testMedgemma', { instruction: medgemmaInstruction, query: medgemmaQuery });
+                  }}
+                  disabled={!medgemmaQuery || medgemmaQuery.trim() === ''}
+                  className="w-full"
+                >
+                  Run Medgemma
+                </Button>
+                {medgemmaResult && (
+                  <div className="flex flex-col gap-2 mt-2">
+                    <Label className="text-sm font-semibold">Result:</Label>
+                    <div className="bg-primary-dark border border-primary-main rounded p-3 max-h-[300px] overflow-y-auto">
+                      <pre className="whitespace-pre-wrap break-words text-sm text-white">
+                        {medgemmaResult}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             </React.Fragment>
           );
         })}

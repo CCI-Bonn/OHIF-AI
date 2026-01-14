@@ -7,6 +7,9 @@ let textPromptReplaceNew = false; // Replace/New toggle for Text Prompt Segmenta
 let selectedModel: 'nnInteractive' | 'sam2' | 'medsam2' | 'sam3' = 'nnInteractive'; // Model selection: nnInteractive, SAM2, MedSAM2, or SAM3
 let locked = false;
 let currentActiveSegment = 1;
+let medgemmaResult: string | null = null;
+let medgemmaInstruction: string = '';
+let medgemmaQuery: string = '';
 
 export const toolboxState = {
   getLiveMode: () => liveMode,
@@ -54,5 +57,17 @@ export const toolboxState = {
   getCurrentActiveSegment: () => currentActiveSegment,
   setCurrentActiveSegment: (segment: number) => {
     currentActiveSegment = segment;
+  },
+  getMedgemmaResult: () => medgemmaResult,
+  setMedgemmaResult: (result: string | null) => {
+    medgemmaResult = result;
+  },
+  getMedgemmaInstruction: () => medgemmaInstruction,
+  setMedgemmaInstruction: (instruction: string) => {
+    medgemmaInstruction = instruction;
+  },
+  getMedgemmaQuery: () => medgemmaQuery,
+  setMedgemmaQuery: (query: string) => {
+    medgemmaQuery = query;
   },
 }; 

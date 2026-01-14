@@ -174,6 +174,15 @@ function modeFactory({ modeConfiguration }) {
         'textPromptSegmentationContainer',
       ]);
 
+
+      toolbarService.createButtonSection('testMedgemmaToolbox', [
+        'testMedgemmaContainer',
+      ]);
+
+      toolbarService.createButtonSection('testMedgemmaSection', [
+        'testMedgemma',
+      ]);
+
       toolbarService.createButtonSection('textPromptSegmentationSection', [
         'textPromptSegmentation',
       ]);

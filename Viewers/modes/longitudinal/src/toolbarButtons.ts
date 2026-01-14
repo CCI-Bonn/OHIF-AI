@@ -634,6 +634,25 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'testMedgemmaContainer',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      groupId: 'testMedgemmaContainer',
+      buttonSection: 'testMedgemmaSection',
+    },
+  },
+  {
+    id: 'testMedgemma',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      type: 'tool',
+      icon: 'tool-voxtell',
+      label: 'Test Medgemma',
+      tooltip: 'Test Medgemma 1.5B',
+      commands: 'testMedgemma',
+    },
+  },
+  {
     id: 'ohifTeamViewer',
     uiType: 'ohif.toolBoxButton',
     props: {

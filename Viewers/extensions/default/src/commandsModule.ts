@@ -1310,9 +1310,64 @@ const commandsModule = ({
         console.error('Reset nninter error:', error);
         throw error;
       }
-
     },
+    async medGemma(query: string, instruction?: string) {
+      
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+      const displaySets = displaySetService.activeDisplaySets;
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(e => {
+        return e.displaySetInstanceUID == displaySetInstanceUID;
+      })[0];
+      let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      let params = {
+        largest_cc: false,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        nninter: "medGemma",
+        texts: [query],
+        instruction: instruction || undefined,
+      };
 
+      let data = MonaiLabelClient.constructFormData(params, null);
+
+      // Create the axios promise
+      // For medGemma, we expect a text/string response, not arraybuffer
+      const medgemmaPromise = axios.post(url, data, {
+        responseType: 'text',
+        headers: {
+          accept: 'application/json, text/plain',
+        },
+      });
+
+      // Show notification with promise support
+      uiNotificationService.show({
+        title: 'Medgemma 1.5B',
+        message: 'Processing medgemma request...',
+        type: 'info',
+        promise: medgemmaPromise,
+        promiseMessages: {
+          loading: 'Processing medgemma request...',
+          success: () => 'Medgemma request - Successful',
+          error: (error) => `Medgemma request - Failed: ${error.message || 'Unknown error'}`,
+        },
+      });
+
+      try {
+        const response = await medgemmaPromise;
+        if (response.status === 200) {
+          return response;
+        }
+      } catch (error) {
+        console.error('Medgemma error:', error);
+        throw error;
+      }
+    },
     async nninter(textPrompts?: string | string[]) {
       if (toolboxState.getLocked()) {
         return;
@@ -1818,6 +1873,69 @@ const commandsModule = ({
         return;
       }
     },
+    async testMedgemma(options?: { instruction?: string; query?: string }) {
+      const instruction = options?.instruction;
+      const query = options?.query;
+      const { uiDialogService } = servicesManager.services;
+
+      try {
+        // Get instruction if not provided
+        let instructionText = instruction;
+        if (!instructionText) {
+          instructionText = await callInputDialog({
+            uiDialogService,
+            defaultValue: toolboxState.getMedgemmaInstruction() || '',
+            title: 'Medgemma 1.5B - Instruction',
+            placeholder: 'Enter instruction (optional, e.g., "You are an instructor teaching medical students...")',
+            submitOnEnter: true,
+          });
+          
+          if (!instructionText?.trim()) {
+            instructionText = 'You are an instructor teaching medical students. You are analyzing the following CT slices. Please review the slices provided below carefully.';
+          }
+          toolboxState.setMedgemmaInstruction(instructionText.trim());
+        }
+
+        // Get query if not provided
+        let queryText = query;
+        if (!queryText) {
+          queryText = await callInputDialog({
+            uiDialogService,
+            defaultValue: toolboxState.getMedgemmaQuery() || '',
+            title: 'Medgemma 1.5B - Query',
+            placeholder: 'Enter your query/question',
+            submitOnEnter: true,
+          });
+          
+          if (!queryText || queryText.trim() === '') {
+            return; // User cancelled or empty
+          }
+          toolboxState.setMedgemmaQuery(queryText.trim());
+        }
+
+        // Clear previous result
+        toolboxState.setMedgemmaResult(null);
+
+        // Call medGemma with instruction and query
+        const response = await actions.medGemma(queryText.trim(), instructionText.trim());
+
+        // Extract response text from the response
+        let responseText = '';
+        if (response && response.data) {
+          // Response is a string from the backend
+          responseText = typeof response.data === 'string' ? response.data : String(response.data);
+          // Store result in toolboxState for display in Toolbox
+          toolboxState.setMedgemmaResult(responseText);
+        } else {
+          toolboxState.setMedgemmaResult('No response received');
+        }
+      } catch (error) {
+        // User cancelled the dialog or API call failed
+        console.error('Test Medgemma error:', error);
+        toolboxState.setMedgemmaResult(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        return;
+      }
+    },
     jumpToSegment: () => {
       const activeViewportId = viewportGridService.getState().activeViewportId;
       const segmentationService = servicesManager.services.segmentationService;
@@ -2031,10 +2149,12 @@ const commandsModule = ({
     sam2: actions.sam2,
     initNninter: actions.initNninter,
     resetNninter: actions.resetNninter,
+    medGemma: actions.medGemma,
     nninter: actions.nninter,
     textPromptSegmentation: actions.textPromptSegmentation,
     redirectToOhifTeamViewer: actions.redirectToOhifTeamViewer,
     redirectToMonaiLabelViewer: actions.redirectToMonaiLabelViewer,
+    testMedgemma: actions.testMedgemma,
     jumpToSegment: actions.jumpToSegment,
     toggleCurrentSegment: actions.toggleCurrentSegment,
     updateViewportDisplaySet: actions.updateViewportDisplaySet,
