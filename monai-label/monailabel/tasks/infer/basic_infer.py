@@ -41,7 +41,7 @@ from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
 from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline, spherical_kernel, calculate_dice, timeout_context
-from monailabel.utils.others.medgemma import norm, window, _encode
+from monailabel.utils.others.medgemma import window_mri, window, _encode
 from sam2.build_sam import build_sam2_video_predictor, build_sam2_video_predictor_npz
 
 from sam3.model_builder import build_sam3_video_model
@@ -477,6 +477,15 @@ class BasicInferTask(InferTask):
         contrast_center = None
         contrast_window = None
         
+        if 0x00080060 in dcm_img_sample.keys():
+            modality = dcm_img_sample[0x00080060].value
+            if modality == "CT" or modality == "SC":
+                modality_type = "CT"
+            elif modality == "MR":
+                modality_type = "MR"
+            else:
+                modality_type = "Other"
+            logger.info(f"Modality: {modality_type}")
 
         if 0x00281050 in dcm_img_sample.keys():
             contrast_center = dcm_img_sample[0x00281050].value
@@ -531,36 +540,86 @@ class BasicInferTask(InferTask):
             logger.info(f"interactions in _session_used_interactions: {self._session_used_interactions}")
 
             if nnInter == "medGemma":
-                if len(data['texts'])==1 and data['texts'][0]!='':
+                if len(data['texts'])==1 and data['texts'][0]!='' and data['texts'][0]!={}:
                     query = data['texts'][0]
                     # Convert image to RGB slices and MAX slice = 85
                     img_np = img_np[0]
-                    num_axial_slices =img_np.shape[2]
+                    logger.info(f"img_np shape: {img_np.shape}")
+                    num_axial_slices = img_np.shape[0]
                     img_list = []
-                    if num_axial_slices > 85:
-                        MAX_SLICE = 85
-                        indices = [int(round(i / MAX_SLICE * (num_axial_slices - 1))) for i in range(1, MAX_SLICE + 1)]
-                        img_list = [img_np[:, :, idx] for idx in indices]
-                    else:
-                        # Convert 3D array to list of 2D arrays
-                        img_list = [img_np[:, :, i] for i in range(num_axial_slices)]
+                    logger.info(f"num_axial_slices: {num_axial_slices}")
                     
-                    normalized_img_list = []
-                    for ct_slice in img_list:
-                        windowed_slice = window(ct_slice)
-                        # Round slice voxels to nearest integer number.
-                        windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
-                        normalized_img_list.append(windowed_slice)
+                    # Get slice range from data if provided
+                    # Note: User input is 1-indexed (slice 1, 2, 3, ...), we convert to 0-indexed internally
+                    start_slice = data.get('startSlice')
+                    end_slice = data.get('endSlice')
+                    
+                    # Determine slice indices to use
+                    if start_slice is not None or end_slice is not None:
+                        # User specified slice range (1-indexed)
+                        # Convert from 1-indexed to 0-indexed
+                        start_idx = int(start_slice) - 1 if start_slice is not None else 0
+                        end_idx = int(end_slice) if end_slice is not None else num_axial_slices
+                        # Clamp to valid range (0-indexed)
+                        start_idx = max(0, min(start_idx, num_axial_slices - 1))
+                        end_idx = max(start_idx + 1, min(end_idx, num_axial_slices))
+                        slice_indices = list(range(start_idx, end_idx))
+                        # Log in 1-indexed terms for user clarity
+                        logger.info(f"Using user-specified slice range: {start_idx + 1} to {end_idx} (1-indexed, inclusive)")
+                    else:
+                        # Use all slices (original behavior)
+                        slice_indices = list(range(num_axial_slices))
+                        logger.info(f"Using all slices: 1 to {num_axial_slices} (1-indexed)")
+                    
+                    # Reverse slice indices if instanceNumber > instanceNumber2
+                    if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
+                        slice_indices = [num_axial_slices - 1 - idx for idx in slice_indices]
+                        logger.info(f"Reversed slice indices due to instanceNumber > instanceNumber2: {slice_indices}")
+                    
+                    img_list = [img_np[i] for i in slice_indices]
 
+                     
+                    normalized_img_list = []
+                    if modality_type == "CT":
+                        for ct_slice in img_list:
+                            windowed_slice = window(ct_slice)
+                            # Round slice voxels to nearest integer number.
+                            windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
+                            normalized_img_list.append(windowed_slice)
+                    else:
+                        for mr_slice in img_list:
+                            if contrast_window != None and contrast_center !=None:
+                                windowed_slice = window_mri(mr_slice, contrast_center-contrast_window/2, contrast_center+contrast_window/2)
+                            else:
+                                windowed_slice = window_mri(mr_slice)
+                            # Round slice voxels to nearest integer number.
+                            windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
+                            normalized_img_list.append(windowed_slice)
+                    
+                    # Check the slices (debugging)
+                    #image = Image.fromarray(normalized_img_list[0], mode="RGB")
+                    #image.save(f"/code/2d_slice_{slice_indices[0]}.jpeg", format="JPEG")
+#
+                    #image = Image.fromarray(normalized_img_list[len(slice_indices)//2], mode="RGB")
+                    #image.save(f"/code/2d_slice_{slice_indices[len(slice_indices)//2]}.jpeg", format="JPEG")
+#
+                    #image = Image.fromarray(normalized_img_list[-1], mode="RGB")
+                    #image.save(f"/code/2d_slice_{slice_indices[-1]}.jpeg", format="JPEG")
                     instruction = data['instruction'] if data['instruction'] else ("You are an instructor teaching medical students. You are "
                "analyzing the following CT slices. Please review the slices provided below "
                "carefully.")
 
+                    logger.info(f"normalized_img_list count: {len(normalized_img_list)}")
+
                     content = []
                     content.append({"type": "text", "text": instruction})
-                    for slice_number, ct_slice in enumerate(normalized_img_list, 1):
+                    # Use actual slice numbers (1-indexed) based on the original slice indices
+                    # slice_indices are 0-indexed internally, but we display as 1-indexed for users
+                    for slice_idx, ct_slice in zip(slice_indices, normalized_img_list):
+                        # Convert 0-indexed to 1-indexed for display
+                        actual_slice_number = slice_idx + 1
                         content.append({"type": "image", "image": _encode(ct_slice)})
-                        content.append({"type": "text", "text": f"SLICE {slice_number}"})
+                        content.append({"type": "text", "text": f"SLICE {actual_slice_number}"})
                     content.append({"type": "text", "text": query})
 
                     messages = [
@@ -599,7 +658,7 @@ class BasicInferTask(InferTask):
                     #final_result_json["medgemma_response"] = medgemma_response
                     return medgemma_response, final_result_json
 
-            if len(data['texts'])==1 and data['texts'][0]!='':
+            if len(data['texts'])==1 and data['texts'][0]!='' and data['texts'][0]!={}:
                 orig_orient = sitk.DICOMOrientImageFilter_GetOrientationFromDirectionCosines(
                     img.GetDirection()
                 )
@@ -949,7 +1008,7 @@ class BasicInferTask(InferTask):
             if contrast_window != None and contrast_center !=None:
                 # Check for cats and remote controls
                 # VERY important: text queries need to be lowercased + end with a dot
-                if len(data['texts'])==1 and data['texts'][0]!='':
+                if len(data['texts'])==1 and data['texts'][0]!='' and data['texts'][0]!={}:
                     #model_id = "IDEA-Research/grounding-dino-tiny"
                     #processor = AutoProcessor.from_pretrained(model_id)
                     #model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
