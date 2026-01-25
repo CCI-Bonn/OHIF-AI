@@ -1,6 +1,6 @@
 import dcmjs from 'dcmjs';
 import { classes, Types } from '@ohif/core';
-import { cache, metaData } from '@cornerstonejs/core';
+import { cache, metaData, imageLoader } from '@cornerstonejs/core';
 import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/tools';
 import { adaptersRT, helpers, adaptersSEG } from '@cornerstonejs/adapters';
 import { createReportDialogPrompt } from '@ohif/extension-default';
@@ -90,13 +90,43 @@ const commandsModule = ({
      *
      * @returns Returns the generated segmentation data.
      */
-    generateSegmentation: ({ segmentationId, options = {} }) => {
+    generateSegmentation: async ({ segmentationId, options = {} }) => {
       const segmentation = cornerstoneToolsSegmentation.state.getSegmentation(segmentationId);
 
       const { imageIds } = segmentation.representationData.Labelmap;
 
       const segImages = imageIds.map(imageId => cache.getImage(imageId));
-      const referencedImages = segImages.map(image => cache.getImage(image.referencedImageId));
+      
+      // Collect all referenced image IDs (maintaining array structure to match segImages)
+      const referencedImageIds = segImages.map(image => image?.referencedImageId);
+      
+      // Load all referenced images that exist but may not be in cache yet
+      // This is necessary because lazy loading may not have loaded all slices yet
+      await Promise.all(
+        referencedImageIds.map(referencedImageId => {
+          if (!referencedImageId) {
+            return Promise.resolve(null);
+          }
+          // Check if already in cache
+          const cachedImage = cache.getImage(referencedImageId);
+          if (cachedImage) {
+            return Promise.resolve(cachedImage);
+          }
+          // Load if not in cache
+          return imageLoader.loadAndCacheImage(referencedImageId).catch(error => {
+            console.warn(`Failed to load referenced image ${referencedImageId}:`, error);
+            return null;
+          });
+        })
+      );
+      
+      // Now get all referenced images from cache, maintaining the same order as segImages
+      const referencedImages = segImages.map(image => {
+        if (!image?.referencedImageId) {
+          return null;
+        }
+        return cache.getImage(image.referencedImageId);
+      });
 
       const labelmaps2D = [];
 
@@ -220,9 +250,9 @@ const commandsModule = ({
      * @param params.segmentationId - ID of the segmentation to be downloaded.
      *
      */
-    downloadSegmentation: ({ segmentationId }) => {
+    downloadSegmentation: async ({ segmentationId }) => {
       const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
-      const generatedSegmentation = actions.generateSegmentation({
+      const generatedSegmentation = await actions.generateSegmentation({
         segmentationId,
       });
 
@@ -266,7 +296,7 @@ const commandsModule = ({
             ? extensionManager.getDataSources(selectedDataSource)[0]
             : defaultDataSource;
 
-          const generatedData = actions.generateSegmentation({
+          const generatedData = await actions.generateSegmentation({
             segmentationId,
             options: {
               SeriesDescription: reportName || label || 'Research Derived Series',
