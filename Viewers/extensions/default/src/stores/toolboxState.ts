@@ -10,6 +10,8 @@ let currentActiveSegment = 1;
 let medgemmaResult: string | null = null;
 let medgemmaInstruction: string = '';
 let medgemmaQuery: string = '';
+let medgemmaStartSlice: number | null = null;
+let medgemmaEndSlice: number | null = null;
 
 export const toolboxState = {
   getLiveMode: () => liveMode,
@@ -69,5 +71,13 @@ export const toolboxState = {
   getMedgemmaQuery: () => medgemmaQuery,
   setMedgemmaQuery: (query: string) => {
     medgemmaQuery = query;
+  },
+  getMedgemmaStartSlice: () => medgemmaStartSlice,
+  setMedgemmaStartSlice: (startSlice: number | null) => {
+    medgemmaStartSlice = startSlice;
+  },
+  getMedgemmaEndSlice: () => medgemmaEndSlice,
+  setMedgemmaEndSlice: (endSlice: number | null) => {
+    medgemmaEndSlice = endSlice;
   },
 }; 

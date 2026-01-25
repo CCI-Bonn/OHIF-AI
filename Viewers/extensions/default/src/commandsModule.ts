@@ -1311,7 +1311,7 @@ const commandsModule = ({
         throw error;
       }
     },
-    async medGemma(query: string, instruction?: string) {
+    async medGemma(query: string, instruction?: string, startSlice?: number, endSlice?: number) {
       
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
@@ -1332,6 +1332,8 @@ const commandsModule = ({
         nninter: "medGemma",
         texts: [query],
         instruction: instruction || undefined,
+        startSlice: startSlice !== undefined ? startSlice : undefined,
+        endSlice: endSlice !== undefined ? endSlice : undefined,
       };
 
       let data = MonaiLabelClient.constructFormData(params, null);
@@ -1873,9 +1875,11 @@ const commandsModule = ({
         return;
       }
     },
-    async testMedgemma(options?: { instruction?: string; query?: string }) {
+    async testMedgemma(options?: { instruction?: string; query?: string; startSlice?: number | null; endSlice?: number | null }) {
       const instruction = options?.instruction;
       const query = options?.query;
+      const startSlice = options?.startSlice;
+      const endSlice = options?.endSlice;
       const { uiDialogService } = servicesManager.services;
 
       try {
@@ -1903,11 +1907,19 @@ const commandsModule = ({
           toolboxState.setMedgemmaQuery(queryText.trim());
         }
 
+        // Store slice range in state
+        if (startSlice !== undefined) {
+          toolboxState.setMedgemmaStartSlice(startSlice);
+        }
+        if (endSlice !== undefined) {
+          toolboxState.setMedgemmaEndSlice(endSlice);
+        }
+
         // Clear previous result
         toolboxState.setMedgemmaResult(null);
 
-        // Call medGemma with instruction and query
-        const response = await actions.medGemma(queryText.trim(), instructionText.trim());
+        // Call medGemma with instruction, query, and slice range
+        const response = await actions.medGemma(queryText.trim(), instructionText.trim(), startSlice ?? undefined, endSlice ?? undefined);
 
         // Extract response text from the response
         let responseText = '';
