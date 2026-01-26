@@ -106,6 +106,12 @@ export const CustomSegmentStatisticsHeader = ({
                   segmentationService.addOrUpdateSegmentation({
                     segmentationId,
                   });
+
+                  if (isVisible === false) {
+                    commandsManager.run('jumpToMeasurement', {
+                      uid: bidirectional.annotationUID,
+                    });
+                  }
                 }}
               >
                 {isVisible ? (
@@ -116,24 +122,6 @@ export const CustomSegmentStatisticsHeader = ({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{t('Toggle visibility')}</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  if (bidirectional.annotationUID) {
-                    commandsManager.run('jumpToMeasurement', {
-                      uid: bidirectional.annotationUID,
-                    });
-                  }
-                }}
-              >
-                <Icons.JumpToSlice />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{t('Jump to measurement')}</TooltipContent>
           </Tooltip>
         </div>
       </div>
