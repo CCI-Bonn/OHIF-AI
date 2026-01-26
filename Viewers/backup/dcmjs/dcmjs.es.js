@@ -9342,7 +9342,7 @@ var ShortText = /*#__PURE__*/function (_EncodedStringReprese5) {
     var _this20;
     _classCallCheck(this, ShortText);
     _this20 = _super21.call(this, "ST");
-    _this20.maxCharLength = 1024;
+    _this20.maxCharLength = 10240;
     _this20.padByte = PADDING_SPACE;
     return _this20;
   }
