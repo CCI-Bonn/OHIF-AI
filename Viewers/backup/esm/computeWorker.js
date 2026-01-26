@@ -335,7 +335,7 @@ const computeWorker = {
             if (!segment) {
                 continue;
             }
-            const segmentIndex = segment.segmentIndex;
+            const segmentIndex = Number(segment.segmentIndex);
             const sliceContours = [];
             const scalars = vtkDataArray.newInstance({
                 name: 'Scalars',
