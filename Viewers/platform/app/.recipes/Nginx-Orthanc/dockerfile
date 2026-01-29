@@ -28,6 +28,9 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotat
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/renderMethods.js
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/drawLoop.js
 
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/displayTools/Labelmap/labelmapDisplay.js
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/displayTools/Labelmap/addLabelmapToElement.js
+
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/cursors/elementCursor.js
 
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/SegmentationRenderingEngine.js
@@ -56,6 +59,9 @@ COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/t
 COPY ./backup/esm/PlanarFreehandROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 COPY ./backup/esm/renderMethods.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
 COPY ./backup/esm/drawLoop.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/planarFreehandROITool/
+
+COPY ./backup/esm/labelmapDisplay.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/displayTools/Labelmap/labelmapDisplay.js
+COPY ./backup/esm/addLabelmapToElement.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/displayTools/Labelmap/addLabelmapToElement.js
 
 COPY ./backup/esm/elementCursor.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/cursors/elementCursor.js
 
