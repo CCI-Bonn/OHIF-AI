@@ -38,18 +38,22 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
       <Toolbox
           buttonSectionId="aiToolBox"
           title="Interactive Segmentation (OHIF-AI)"
+          defaultOpen={true}
         />
         <Toolbox
           buttonSectionId="legacyInteractiveSegmentationToolbox"
           title="Interactive Segmentation (Legacy)"
+          defaultOpen={false}
         />
         <Toolbox
           buttonSectionId="textPromptSegmentationToolbox"
           title="Text-Prompt Segmentation"
+          defaultOpen={false}
         />
         <Toolbox
           buttonSectionId="testMedgemmaToolbox"
           title="Test Medgemma 1.5 4B"
+          defaultOpen={false}
         />
         <Toolbox
           buttonSectionId="segmentationToolbox"
