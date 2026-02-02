@@ -6,9 +6,9 @@
 
 **Interactive AI segmentation for medical imaging, directly in your browser.**
 
-OHIF-AI integrates state-of-the-art interactive segmentation models such as **nnInteractive**, **SAM2**, **MedSAM2**, and **SAM3** into the **OHIF Viewer**, enabling convenient and accurate real-time, prompt-based segmentation of medical images directly in the browser.
+OHIF-AI integrates state-of-the-art interactive segmentation models such as **nnInteractive**, **SAM2**, **MedSAM2**, and **SAM3**, plus **VoxTell** (text-prompt segmentation) and **Medgemma 1.5** (report generation from 3D medical images), into the **OHIF Viewer**, enabling convenient and accurate real-time, prompt-based segmentation and AI-assisted reporting directly in the browser.
 
-By combining the capabilities of large foundation models with the familiar <a href="https://ohif.org/" target="_blank">OHIF</a> interface, users can guide AI segmentation using simple visual prompts — such as **points**, **scribbles**, **lassos**, or **bounding boxes** — to delineate anatomical structures or regions of interest within 2D or 3D DICOM images. The integration supports iterative refinement, live inference, and model selection, offering a flexible framework for researchers and clinicians to explore next-generation segmentation workflows without leaving the web environment.
+By combining the capabilities of large foundation models with the familiar <a href="https://ohif.org/" target="_blank">OHIF</a> interface, users can guide AI segmentation using simple visual prompts — such as **points**, **scribbles**, **lassos**, or **bounding boxes** — or free-form **text prompts** (VoxTell), and generate radiology-style reports from 3D CT/MRI using **Medgemma 1.5**. The integration supports iterative refinement, live inference, model selection, and report generation, offering a flexible framework for researchers and clinicians to explore next-generation segmentation and reporting workflows without leaving the web environment.
 
 ---
 
@@ -23,6 +23,8 @@ By combining the capabilities of large foundation models with the familiar <a hr
   - [Positive and Negative Prompts](#positive-and-negative-prompts)
   - [Refine vs. New Segment](#refine-vs-new-segment)
   - [Model Selection](#model-selection)
+  - [Text-Prompt Segmentation (VoxTell)](#text-prompt-segmentation-voxtell)
+  - [Report Generation (Medgemma 1.5 4B)](#report-generation-medgemma-15-4b)
 - [Keyboard Shortcuts](#-keyboard-shortcuts)
 - [FAQ](#-faq)
 - [How to Cite](#-how-to-cite)
@@ -34,10 +36,12 @@ By combining the capabilities of large foundation models with the familiar <a hr
 ## ✨ Features
 
 - 🖱️ **Interactive Segmentation** - Real-time AI segmentation with visual prompts
+- 📝 **Text-Prompt Segmentation (VoxTell)** - Free-form text prompts to get segmentation
+- 📄 **Report Generation (Medgemma 1.5 4B)** - Generate reports from 3D CT/MRI with configurable instruction, query, and slice range
 - 🚀 **Live Mode** - Automatic inference on every prompt
 - 📦 **3D Propagation** - Single prompt automatically segments entire volume
-- 🎯 **Multiple Prompt Types** - Points, scribbles, lassos, and bounding boxes
-- 🤖 **Multiple AI Models** - Choose among nnInteractive, SAM2, MedSAM2, and SAM3
+- 🎯 **Multiple Prompt Types** - Points, scribbles, lassos, bounding boxes, and text (VoxTell)
+- 🤖 **Multiple AI Models** - Choose among nnInteractive, SAM2, MedSAM2, SAM3, and VoxTell
 - 🌐 **Browser-Based** - No installation required, works directly in your web browser
 
 ---
@@ -69,6 +73,10 @@ Model checkpoints are typically downloaded automatically during setup. However, 
 - **nnInteractive**: [Hugging Face](https://huggingface.co/nnInteractive/nnInteractive)
 - **SAM2** (sam2.1-hiera-tiny): [Hugging Face](https://huggingface.co/facebook/sam2.1-hiera-tiny)
 - **MedSAM2** (MedSAM2_latest): [Hugging Face](https://huggingface.co/wanglab/MedSAM2)
+- **VoxTell**: [Hugging Face](https://huggingface.co/mrokuss/VoxTell)
+- **MedGemma 1.5 4B**: [Hugging Face](https://huggingface.co/google/medgemma-1.5-4b-it) — requires your Hugging Face token (`HF_Token`) in `monai-label/monailabel/tasks/infer/basic_infer.py`
+
+⚠️ **MedGemma VRAM:** MedGemma uses approximately **35 GB VRAM**. Either use one large GPU for all models, or allocate a **separate GPU** for MedGemma. To put MedGemma on another device (e.g. second GPU), set `device_map={"": "cuda:1"}` in `monai-label/monailabel/tasks/infer/basic_infer.py`.
 
 **Manual Download Required:**
 
@@ -77,7 +85,7 @@ Model checkpoints are typically downloaded automatically during setup. However, 
 2. Once access is granted, download the model checkpoint
 3. Place the downloaded file as `sam3.pt` in the `monai-label/checkpoints/` directory
 
-⚠️ **Note:** If the SAM3 checkpoint is not found, you will see a warning message and SAM3 will not be available for use. The application will continue to work with other models (nnInteractive, SAM2, MedSAM2).
+⚠️ **Note:** If the SAM3 checkpoint is not found, you will see a warning message and SAM3 will not be available for use. The application will continue to work with other models (nnInteractive, SAM2, MedSAM2, VoxTell, MedGemma 1.5 4B).
 
 ![SAM3 Not Found Warning](docs/images/sam3_not_found.png)
 
@@ -164,6 +172,47 @@ Use the **Refine/New** toggle to control segmentation behavior:
 - **New**: Create a new, separate segment  
 
 💡 You can revisit any existing segment at any time by selecting it from the segmentation list — once selected, new prompts will continue refining that specific segmentation interactively.
+
+### Text-Prompt Segmentation (VoxTell)
+
+With **VoxTell**, you can obtain segmentation using **free-form text** instead of (or in addition to) visual prompts. Describe the structure or region you want to segment in natural language.
+
+- **Replace current segment** – Use your text prompt to replace the currently selected segment.
+- **Add segment label** – Create an additional segment with a new label from your text prompt.
+
+⚠️ **Note:** Cross-usage with nnInteractive is not supported yet (e.g., VoxTell → nnInteractive). Use VoxTell and nnInteractive in separate workflows.
+
+<a href="docs/images/text_prompt.png" target="_blank">
+  <img src="docs/images/text_prompt.png" alt="Text-Prompt Segmentation (VoxTell)" width="700">
+</a>
+
+**VoxTell demo:** [Watch on YouTube](https://youtu.be/LsngrUz_vXk)
+
+<a href="https://youtu.be/LsngrUz_vXk" target="_blank">
+  <img src="https://img.youtube.com/vi/LsngrUz_vXk/0.jpg" alt="VoxTell Demo" width="700">
+</a>
+
+### Report Generation (Medgemma 1.5 4B)
+
+**Medgemma 1.5 4B** generates radiology-style reports from 3D medical images (CT/MRI).
+
+- **Instruction** – Define the broad role of Medgemma (e.g., “You are a radiology assistant”) so the model follows your intended style and scope.
+- **Query** – Ask specifically what you want in the report (e.g., findings, impressions, or a full report).
+- **Slice range** – Specify the **slice range** of the 3D volume to include (e.g., slices 10–50) so the report is based on the relevant portion of the CT or MRI stack.
+
+Use the Medgemma panel to set Instruction, Query, and slice range, then run inference to generate the report.
+
+⚠️ **GPU / VRAM:** MedGemma uses ~35 GB VRAM. Use one large GPU for all models, or a dedicated GPU for MedGemma by setting `device_map={"": "cuda:1"}` (or another device ID) in `monai-label/monailabel/tasks/infer/basic_infer.py`.
+
+<a href="docs/images/medgemma.png" target="_blank">
+  <img src="docs/images/medgemma.png" alt="Report Generation (Medgemma 1.5 4B)" width="700">
+</a>
+
+**VoxTell + MedGemma demo:** [Watch on YouTube](https://youtu.be/HU4XHAC67cQ)
+
+<a href="https://youtu.be/HU4XHAC67cQ" target="_blank">
+  <img src="https://img.youtube.com/vi/HU4XHAC67cQ/0.jpg" alt="VoxTell + MedGemma Demo" width="700">
+</a>
 
 ---
 
@@ -284,12 +333,26 @@ If you use OHIF-AI in your research, please cite:
 }
 ```
 
+**VoxTell:**
+```bibtex
+@misc{rokuss2025voxtell,
+  title={VoxTell: Free-Text Promptable Universal 3D Medical Image Segmentation}, 
+  author={Maximilian Rokuss and Moritz Langenberg and Yannick Kirchhoff and Fabian Isensee and Benjamin Hamm and Constantin Ulrich and Sebastian Regnery and Lukas Bauer and Efthimios Katsigiannopulos and Tobias Norajitra and Klaus Maier-Hein},
+  year={2025},
+  eprint={2511.11450},
+  archivePrefix={arXiv},
+  primaryClass={cs.CV},
+  url={https://arxiv.org/abs/2511.11450}
+}
+```
+
 **Papers:**
 - [OHIF-SAM2 (IEEE ISBI 2025)](https://ieeexplore.ieee.org/document/10981119)
 - [nnInteractive (arXiv)](https://arxiv.org/abs/2503.08373)
 - [SAM2 (arXiv)](https://arxiv.org/abs/2408.00714)
 - [MedSAM2 (arXiv)](https://arxiv.org/abs/2504.03600)
 - [SAM3 (arXiv)](https://arxiv.org/abs/2511.16719)
+- [VoxTell (arXiv)](https://arxiv.org/abs/2511.11450)
 
 ---
 
@@ -307,6 +370,8 @@ This project builds upon:
 - [nnInteractive](https://github.com/MIC-DKFZ/nnInteractive) - Interactive 3D Segmentation Framework
 - [MedSAM2](https://github.com/bowang-lab/MedSAM2) - MedSAM2 by Bowang lab
 - [SAM3](https://github.com/facebookresearch/sam3) - Segment Anything Model 3 by Meta
+- [VoxTell](https://github.com/MIC-DKFZ/VoxTell) - Free-Text Promptable Universal 3D Medical Image Segmentation
+- [MedGemma](https://github.com/Google-Health/medgemma) - Report generation from 3D medical images ([Google Research Blog](https://research.google/blog/next-generation-medical-image-interpretation-with-medgemma-15-and-medical-speech-to-text-with-medasr/))
 
 
 
