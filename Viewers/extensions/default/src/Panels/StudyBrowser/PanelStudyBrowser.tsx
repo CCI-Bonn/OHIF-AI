@@ -81,6 +81,9 @@ function PanelStudyBrowser({
 
   const mapDisplaySetsWithState = customMapDisplaySets || _mapDisplaySets;
 
+  // Track if initial sort has been applied
+  const [initialSortApplied, setInitialSortApplied] = useState(false);
+
   const onDoubleClickThumbnailHandler = useCallback(
     async displaySetInstanceUID => {
       const customHandler = customizationService.getCustomization(
@@ -301,6 +304,17 @@ function PanelStudyBrowser({
     const SubscriptionDisplaySetsChanged = displaySetService.subscribe(
       displaySetService.EVENTS.DISPLAY_SETS_CHANGED,
       changedDisplaySets => {
+        // Apply initial sort by Series Number if not yet applied
+        if (!initialSortApplied && changedDisplaySets.length > 0) {
+          const sortFunctions = customizationService.getCustomization('studyBrowser.sortFunctions');
+          const defaultSort = sortFunctions?.find(sf => sf.label === 'Series Number') || sortFunctions?.[0];
+          
+          if (defaultSort) {
+            displaySetService.sortDisplaySets(defaultSort.sortFunction, 'ascending', true);
+            setInitialSortApplied(true);
+            return; // The sort will trigger another DISPLAY_SETS_CHANGED event
+          }
+        }
         const mappedDisplaySets = mapDisplaySetsWithState(
           changedDisplaySets,
           displaySetsLoadingState,
@@ -344,6 +358,8 @@ function PanelStudyBrowser({
     viewports,
     displaySetService,
     customMapDisplaySets,
+    initialSortApplied,
+    customizationService,
   ]);
 
   const tabs = createStudyBrowserTabs(StudyInstanceUIDs, studyDisplayList, displaySets);

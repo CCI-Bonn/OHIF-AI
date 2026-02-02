@@ -14,7 +14,8 @@ export function StudyBrowserSort({ servicesManager }: withAppTypes) {
   const { customizationService, displaySetService } = servicesManager.services;
   const sortFunctions = customizationService.getCustomization('studyBrowser.sortFunctions');
 
-  const [selectedSort, setSelectedSort] = useState(sortFunctions[0]);
+  const defaultSort = sortFunctions.find(sf => sf.label === 'Series Number') || sortFunctions[0];
+  const [selectedSort, setSelectedSort] = useState(defaultSort);
   const [sortDirection, setSortDirection] = useState('ascending');
 
   const handleSortChange = sortFunction => {

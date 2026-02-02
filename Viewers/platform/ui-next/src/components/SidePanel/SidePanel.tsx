@@ -463,12 +463,22 @@ const SidePanel = ({
       {panelOpen ? (
         <>
           {getOpenStateComponent()}
+          <div 
+            className={classnames(
+              "flex flex-col overflow-x-hidden flex-1 min-h-0",
+              side === 'right' ? "overflow-y-auto side-panel-scrollable" : "overflow-hidden"
+            )} 
+            style={side === 'right' ? { 
+              backgroundColor: '#090c29'
+            } : {}}
+          >
           {tabs.map((tab, tabIndex) => {
             if (tabIndex === activeTabIndex) {
               return <tab.content key={tabIndex} />;
             }
             return null;
           })}
+          </div>
         </>
       ) : (
         <React.Fragment>{getCloseStateComponent()}</React.Fragment>

@@ -254,3 +254,26 @@ input[type='number']::-webkit-outer-spin-button {
 input[type='number'] {
   -moz-appearance: textfield; /* For Firefox */
 }
+
+/* Custom scrollbar styles for side panels */
+.side-panel-scrollable::-webkit-scrollbar {
+  width: 8px;
+}
+
+.side-panel-scrollable::-webkit-scrollbar-track {
+  background: #090c29;
+}
+
+.side-panel-scrollable::-webkit-scrollbar-thumb {
+  background: #4a5568;
+  border-radius: 4px;
+}
+
+.side-panel-scrollable::-webkit-scrollbar-thumb:hover {
+  background: #5a6578;
+}
+
+.side-panel-scrollable {
+  scrollbar-color: #4a5568 #090c29;
+  scrollbar-width: thin;
+}
