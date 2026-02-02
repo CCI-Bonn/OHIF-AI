@@ -74,3 +74,4 @@ def _encode(data: np.ndarray) -> str:
     img_bytes.seek(0)
     encoded_string = base64.b64encode(img_bytes.getbuffer()).decode("utf-8")
   return f"data:image/{format};base64,{encoded_string}"
+  

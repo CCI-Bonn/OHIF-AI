@@ -63,14 +63,6 @@ const toolbarButtons: Button[] = [
     },
   },
   {
-    id: 'legacyInteractiveSegmentationContainer',
-    uiType: 'ohif.toolBoxButton',
-    props: {
-      groupId: 'legacyInteractiveSegmentationContainer',
-      buttonSection: 'legacyInteractiveSegmentationSection',
-    },
-  },
-  {
     id: 'SegmentationUtilities',
     uiType: 'ohif.toolBoxButton',
     props: {
@@ -650,28 +642,6 @@ const toolbarButtons: Button[] = [
       label: 'Test Medgemma',
       tooltip: 'Test Medgemma 1.5 4B',
       commands: 'testMedgemma',
-    },
-  },
-  {
-    id: 'ohifTeamViewer',
-    uiType: 'ohif.toolBoxButton',
-    props: {
-      type: 'tool',
-      icon: 'tool-ohif-team',
-      label: 'OHIF-Team',
-      tooltip: 'Open OHIF-Team Viewer',
-      commands: 'redirectToOhifTeamViewer',
-    },
-  },
-  {
-    id: 'monaiLabelViewer',
-    uiType: 'ohif.toolBoxButton',
-    props: {
-      type: 'tool',
-      icon: 'tool-monai-label',
-      label: 'MONAI-Label Team',
-      tooltip: 'Open MONAI-Label Team Viewer',
-      commands: 'redirectToMonaiLabelViewer',
     },
   },
   {

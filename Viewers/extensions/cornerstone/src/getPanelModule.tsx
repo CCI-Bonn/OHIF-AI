@@ -41,11 +41,6 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
           defaultOpen={true}
         />
         <Toolbox
-          buttonSectionId="legacyInteractiveSegmentationToolbox"
-          title="Interactive Segmentation (Legacy)"
-          defaultOpen={false}
-        />
-        <Toolbox
           buttonSectionId="textPromptSegmentationToolbox"
           title="Text-Prompt Segmentation"
           defaultOpen={false}

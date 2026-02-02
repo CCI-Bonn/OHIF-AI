@@ -80,4 +80,5 @@ export const toolboxState = {
   setMedgemmaEndSlice: (endSlice: number | null) => {
     medgemmaEndSlice = endSlice;
   },
-}; 
+};
+ 

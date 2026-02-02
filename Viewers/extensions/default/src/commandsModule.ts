@@ -1349,7 +1349,7 @@ const commandsModule = ({
 
       // Show notification with promise support
       uiNotificationService.show({
-        title: 'Medgemma 1.5B',
+        title: 'Medgemma 1.5 4B',
         message: 'Processing medgemma request...',
         type: 'info',
         promise: medgemmaPromise,
@@ -2064,64 +2064,6 @@ const commandsModule = ({
 
       setTimeout(() => actions.scrollActiveThumbnailIntoView(), 0);
     },
-
-    /**
-     * Redirects to OHIF-Team viewer (viewer-0512)
-     */
-    redirectToOhifTeamViewer: () => {
-      const currentUrl = window.location.href;
-      const url = new URL(currentUrl);
-      const pathname = url.pathname;
-      
-      // Extract StudyInstanceUIDs from query params
-      const studyInstanceUIDs = url.searchParams.getAll('StudyInstanceUIDs');
-      const queryString = studyInstanceUIDs.length > 0 
-        ? `?StudyInstanceUIDs=${studyInstanceUIDs.join('&StudyInstanceUIDs=')}`
-        : '';
-      
-      // Build new URL: insert /viewer-0512 before /viewer
-      // Example: https://nninter.ccibonn.ai/viewer?StudyInstanceUIDs=... 
-      // -> https://nninter.ccibonn.ai/viewer-0512/viewer?StudyInstanceUIDs=...
-      let newPath = pathname;
-      if (pathname.includes('/viewer')) {
-        newPath = pathname.replace('/viewer', '/viewer-0512/viewer');
-      } else {
-        // If no /viewer in path, add it
-        newPath = `${pathname}/viewer-0512/viewer`;
-      }
-      const newUrl = `${url.origin}${newPath}${queryString}`;
-      
-      window.location.href = newUrl;
-    },
-
-    /**
-     * Redirects to MONAI-Label Team viewer (monailabel-0512)
-     */
-    redirectToMonaiLabelViewer: () => {
-      const currentUrl = window.location.href;
-      const url = new URL(currentUrl);
-      const pathname = url.pathname;
-      
-      // Extract StudyInstanceUIDs from query params
-      const studyInstanceUIDs = url.searchParams.getAll('StudyInstanceUIDs');
-      const queryString = studyInstanceUIDs.length > 0 
-        ? `?StudyInstanceUIDs=${studyInstanceUIDs.join('&StudyInstanceUIDs=')}`
-        : '';
-      
-      // Build new URL: replace /viewer with /monailabel-0512/monai-label
-      // Example: https://nninter.ccibonn.ai/viewer?StudyInstanceUIDs=... 
-      // -> https://nninter.ccibonn.ai/monailabel-0512/monai-label?StudyInstanceUIDs=...
-      let newPath = pathname;
-      if (pathname.includes('/viewer')) {
-        newPath = pathname.replace('/viewer', '/monailabel-0512/monai-label');
-      } else {
-        // If no /viewer in path, add it
-        newPath = `${pathname}/monailabel-0512/monai-label`;
-      }
-      const newUrl = `${url.origin}${newPath}${queryString}`;
-      
-      window.location.href = newUrl;
-    },
   };
 
   const definitions = {
@@ -2154,8 +2096,6 @@ const commandsModule = ({
     medGemma: actions.medGemma,
     nninter: actions.nninter,
     textPromptSegmentation: actions.textPromptSegmentation,
-    redirectToOhifTeamViewer: actions.redirectToOhifTeamViewer,
-    redirectToMonaiLabelViewer: actions.redirectToMonaiLabelViewer,
     testMedgemma: actions.testMedgemma,
     jumpToSegment: actions.jumpToSegment,
     toggleCurrentSegment: actions.toggleCurrentSegment,
