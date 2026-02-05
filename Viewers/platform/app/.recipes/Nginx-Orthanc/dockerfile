@@ -85,8 +85,8 @@ COPY ./backup/vtkjs/ImageMarchingSquares.js /usr/src/app/node_modules/@kitware/v
 # set QUICK_BUILD to true to make the build faster for dev
 ENV APP_CONFIG=config/docker-nginx-orthanc.js
 
-# Build the application
-RUN yarn run build:dev
+# Build the application with production mode Use Run yarn run build:dev for development
+RUN yarn run build
 
 # # Stage 2: Bundle the built application into a Docker container which runs NGINX using Alpine Linux
 FROM nginx:alpine

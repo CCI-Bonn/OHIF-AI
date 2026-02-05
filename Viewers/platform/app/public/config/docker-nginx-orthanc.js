@@ -37,6 +37,8 @@ window.config = {
         imageRendering: 'wadors',
         thumbnailRendering: 'wadors',
         dicomUploadEnabled: true,
+        supportsFuzzyMatching: true,
+        supportsWildcard: true,
         omitQuotationForMultipartRequest: true,
       },
     },
