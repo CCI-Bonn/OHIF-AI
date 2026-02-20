@@ -26,27 +26,16 @@ def window(ct_vol: np.ndarray) -> np.ndarray:
 def norm_mri(mri_vol: np.ndarray, min=None, max=None) -> np.ndarray:
   """Normalize MRI imaging values to 0-255 integer.
   If min and max are provided: window/level normalization (clip then normalize).
-  Otherwise: z-score normalization."""
+  Otherwise: percentile clipping (1st–99th) then min-max scaling to [0, 255]."""
   mri_vol = mri_vol.astype(np.float32)
   
   if min is None or max is None:
-    # Z-score normalization: (x - mean) / std
-    mean = np.mean(mri_vol)
-    std = np.std(mri_vol)
-    
-    # Avoid division by zero
-    if std == 0:
-      mri_vol_normalized = np.zeros_like(mri_vol)
-    else:
-      mri_vol_normalized = (mri_vol - mean) / std
-    
-    # Clip z-scores to reasonable range (±3 standard deviations) to handle outliers
-    # This is necessary for proper remapping, not window/level clipping like CT
-    mri_vol_normalized = np.clip(mri_vol_normalized, -3.0, 3.0)
-    
-    # Linearly remap from [-3, 3] to [0, 255]
-    mri_vol_normalized = (mri_vol_normalized + 3.0) / 6.0  # Map to [0, 1]
-    mri_vol_normalized = mri_vol_normalized * 255.0  # Map to [0, 255]
+    # Percentile clipping (1st to 99th) then min-max scaling to [0, 255]
+    pmin = float(np.percentile(mri_vol, 1))
+    pmax = float(np.percentile(mri_vol, 99))
+    np.clip(mri_vol, pmin, pmax, out=mri_vol)
+    denom = pmax - pmin
+    mri_vol_normalized = np.zeros_like(mri_vol, dtype=np.float32) if denom == 0 else (mri_vol - pmin) / denom * 255.0
   else:
     # Window/level normalization: clip then normalize (similar to CT norm function)
     np.clip(mri_vol, min, max, out=mri_vol)
@@ -56,7 +45,7 @@ def norm_mri(mri_vol: np.ndarray, min=None, max=None) -> np.ndarray:
 
 
 def window_mri(mri_vol: np.ndarray, min: float=None, max: float=None) -> np.ndarray:
-  """Normalize MRI slice imaging using z-score normalization.
+  """Normalize MRI slice imaging (percentile or window/level via norm_mri).
   Returns RGB representation (same channel stacked 3 times) remapped to 0-255.
   This matches the structure of window() for CT images."""
   normalized = norm_mri(mri_vol, min, max)
