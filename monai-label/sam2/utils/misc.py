@@ -356,7 +356,11 @@ def load_medical_slices(
     offload_video_to_cpu,
     compute_device,
     clip_low=None,
-    clip_high=None
+    clip_high=None,
+    use_imagenet_norm=True # For SAM2/MedSAM2, this is the default normalization used in the model, but I'm not sure whether it performs better for SAM2 (previous setup, volume wise normalization).
+                         # However, for SAM3, this is not the default normalization used in the model. 
+                         # img_mean=(0.5, 0.5, 0.5), #https://github.com/facebookresearch/sam3/issues/229 -> Differnet mean and std for SAM3
+                         # img_std=(0.5, 0.5, 0.5),
 ):
     """
 
@@ -408,6 +412,11 @@ def load_medical_slices(
     img_mean = images.mean()
     img_std = images.std()
     images = torch.unsqueeze(images, 1).expand(-1, 3,-1,-1).clone()
+
+    if use_imagenet_norm:
+        images = (images - images.min()) / (images.max() - images.min() + 1e-8)
+        img_mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)[None, :, None, None]
+        img_std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32)[None, :, None, None]
 
     video_height = img_y
     video_width = img_x
