@@ -918,12 +918,20 @@ const commandsModule = ({
       if (pos_points.length == 0 && neg_points.length == 0 && pos_boxes.length == 0 && text_prompts.length == 0){
         uiNotificationService.show({
           title: 'Prompt warning',
-          message: 'Only pos/neg points and bbox are available for SAM2',
+          message: 'Only pos/neg points and bbox are available for SAM2-based models',
           type: 'warning',
           duration: 4000,
         });
         return;
       }
+
+      uiNotificationService.show({
+        title: 'Prompt info',
+        message: 'Only pos/neg points and bbox are accepted for SAM2-based models, other prompt types are ignored',
+        type: 'info',
+        duration: 4000,
+      });
+
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
