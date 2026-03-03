@@ -1159,7 +1159,6 @@ class BasicInferTask(InferTask):
                 else:
                     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
                         if medsam2 == 'sam3':
-                            predictor.clear_all_points_in_video(inference_state)
                             _, out_obj_ids, _, out_mask_logits = predictor.add_new_points_or_box(
                             inference_state=inference_state,
                             frame_idx=ann_frame_idx,
