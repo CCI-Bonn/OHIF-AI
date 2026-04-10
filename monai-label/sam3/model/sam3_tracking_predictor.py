@@ -1,13 +1,13 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import logging
 from collections import OrderedDict
 
 import torch
-
 from sam3.model.sam3_tracker_base import concat_points, NO_OBJ_SCORE, Sam3TrackerBase
 from sam3.model.sam3_tracker_utils import fill_holes_in_mask_scores
-from sam3.model.utils.sam2_utils import load_video_frames
 from sam2.utils.misc import load_medical_slices
 from tqdm.auto import tqdm
 
@@ -90,12 +90,11 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
                 offload_video_to_cpu=offload_video_to_cpu,
                 clip_low=clip_low,
                 clip_high=clip_high,
-                #async_loading_frames=async_loading_frames,
+                # async_loading_frames not used for SimpleITK volume loading
                 compute_device=inference_state["storage_device"],
                 use_imagenet_norm=False,
                 use_sam3_norm=True,  # mean=(0.5,0.5,0.5), std=(0.5,0.5,0.5), see facebookresearch/sam3#229
             )
-            
             inference_state["images"] = images
             inference_state["num_frames"] = len(images)
             inference_state["video_height"] = video_height
@@ -220,12 +219,7 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
         if labels.dim() == 1:
             labels = labels.unsqueeze(0)  # add batch dimension
 
-        #if rel_coordinates:
-        #    # convert the points from relative coordinates to absolute coordinates
-        #    if points is not None:
-        #        points = points * self.image_size
-        #    if box is not None:
-        #        box = box * self.image_size
+        # Medical / OHIF: prompts use original slice pixel space; see normalize_coords below.
 
         # If `box` is provided, we add it as the first two points with labels 2 and 3
         # along with the user-provided points (consistent with how SAM 2 is trained).
@@ -243,7 +237,7 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
             box_coords = box_coords.reshape(1, -1, 2)
             box_labels = torch.tensor([2, 3], dtype=torch.int32, device=labels.device).repeat(num_boxes)
             box_labels = box_labels.unsqueeze(0)
-            
+
             points = torch.cat([box_coords, points], dim=1)
             labels = torch.cat([box_labels, labels], dim=1)
         if normalize_coords:

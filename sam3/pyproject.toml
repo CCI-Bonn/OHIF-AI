@@ -26,13 +26,13 @@ classifiers = [
 ]
 dependencies = [
     "timm>=1.0.17",
+    "numpy>=1.26,<2",
     "tqdm",
     "ftfy==6.1.1",
     "regex",
     "iopath>=0.1.10",
     "typing_extensions",
     "huggingface_hub",
-    "decord",
 ]
 
 [project.optional-dependencies]
@@ -82,8 +82,12 @@ train = [
 "Homepage" = "https://github.com/facebookresearch/sam3"
 "Bug Tracker" = "https://github.com/facebookresearch/sam3/issues"
 
-[tool.setuptools]
-packages = ["sam3", "sam3.model"]
+[tool.setuptools.packages.find]
+include = ["sam3*"]
+exclude = ["build*", "scripts*", "examples*"]
+
+[tool.setuptools.package-data]
+sam3 = ["assets/*.txt.gz"]
 
 [tool.setuptools.dynamic]
 version = {attr = "sam3.__version__"}
