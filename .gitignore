@@ -261,3 +261,5 @@ monai-label/predictions/*
 xnat-docker/postgres-data
 xnat-docker/xnat-data
 xnat-docker/xnat/plugins
+
+.env

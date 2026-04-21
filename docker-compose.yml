@@ -55,9 +55,15 @@ services:
        # Persist data
       - ./monai-label/predictions:/code/predictions
     environment:
-      - CUDA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0,1
       - NVIDIA_VISIBLE_DEVICES=all  # This exposes all GPUs to the container
       - NVIDIA_DRIVER_CAPABILITIES=all
+      # Hugging Face (Kimi / Qwen router, hub downloads); set in .env or host env
+      - HF_TOKEN=${HF_TOKEN:-}
+      # VLM API keys (basic_infer reads these env vars)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     #  - NVIDIA_DRIVER_CAPABILITIES=compute,utility  # Required driver capabilities for GPU use
     deploy:
       resources:
