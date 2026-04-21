@@ -55,7 +55,7 @@ services:
        # Persist data
       - ./monai-label/predictions:/code/predictions
     environment:
-      - CUDA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0,1
       - NVIDIA_VISIBLE_DEVICES=all  # This exposes all GPUs to the container
       - NVIDIA_DRIVER_CAPABILITIES=all
     #  - NVIDIA_DRIVER_CAPABILITIES=compute,utility  # Required driver capabilities for GPU use

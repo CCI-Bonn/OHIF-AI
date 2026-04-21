@@ -261,3 +261,6 @@ monai-label/predictions/*
 xnat-docker/postgres-data
 xnat-docker/xnat-data
 xnat-docker/xnat/plugins
+
+# 0512
+Viewers-0512/*
