@@ -9,7 +9,7 @@
 OHIF-AI brings two main capabilities into the <a href="https://ohif.org/" target="_blank">OHIF Viewer</a>:
 
 1. **Segmentation** — Interactive AI segmentation for medical imaging using **visual prompts** (points, scribbles, lassos, bounding boxes) with models such as **nnInteractive**, **SAM2**, **MedSAM2**, and **SAM3**, or using **text prompts** with **VoxTell**. Supports iterative refinement, live inference, and 3D propagation from minimal input.
-2. **Report generation** — AI-assisted radiology-style reports from 3D CT/MRI using **Medgemma 1.5**.
+2. **Report generation** — AI-assisted radiology-style reports from 3D CT/MRI. Choose **local MedGemma** (Hugging Face checkpoints) or **frontier / open-weight VLMs** via **provider APIs** (e.g. **Gemini**, **GPT**, **Claude**) or the **Hugging Face inference router** (**Kimi**, **Qwen**, **Gemma 4**), or a **self-hosted OpenAI-compatible server** such as **[vLLM](https://docs.vllm.ai/)** (e.g. **InternVL**, **Qwen**, **Kimi**, **Gemma 4**, depending on what you serve).
 
 By combining these foundation models with the familiar OHIF interface, researchers and clinicians can perform prompt-based segmentation and generate reports without leaving the web environment.
 
@@ -20,6 +20,8 @@ By combining these foundation models with the familiar OHIF interface, researche
 - [Features](#-features)
 - [Demo Video](#-demo-video)
 - [Getting Started](#-getting-started)
+- [Local MedGemma GPUs](#local-medgemma-gpus)
+- [Environment variables and API keys](#environment-variables-and-api-keys)
 - [Usage Guide](#-usage-guide)
   - [Segmentation](#segmentation)
     - [Visual prompts](#visual-prompts)
@@ -44,7 +46,8 @@ By combining these foundation models with the familiar OHIF interface, researche
 - 🤖 **Multiple models** — nnInteractive, SAM2, MedSAM2, SAM3, and VoxTell  
 
 **Report generation**  
-- 📄 **Medgemma 1.5 4B** — Generate radiology-style reports from 3D CT/MRI with configurable instruction, query, and slice range  
+- 📄 **Flexible VLMs** — Local **MedGemma** (e.g. 1.5–4B and **27B IT** on GPU), or cloud / router models (**Gemini**, **GPT**, **Claude**, **Kimi**, **Qwen**, **Gemma 4**), or **vLLM** on your own machine for open-weight multimodal models such as **InternVL**  
+- 🔑 **Your keys, your stack** — Provider credentials and Hugging Face token are configured in a **`.env`** file you maintain (see [below](#environment-variables-and-api-keys))  
 
 **General**  
 - 🌐 **Browser-based** — No local installation; runs in the web browser
@@ -86,9 +89,24 @@ Model checkpoints are typically downloaded automatically during setup. However, 
 - **SAM2** (sam2.1-hiera-tiny): [Hugging Face](https://huggingface.co/facebook/sam2.1-hiera-tiny)
 - **MedSAM2** (MedSAM2_latest): [Hugging Face](https://huggingface.co/wanglab/MedSAM2)
 - **VoxTell**: [Hugging Face](https://huggingface.co/mrokuss/VoxTell)
-- **MedGemma 1.5 4B**: [Hugging Face](https://huggingface.co/google/medgemma-1.5-4b-it) — requires your Hugging Face token (`HF_Token`) in `monai-label/monailabel/tasks/infer/basic_infer.py`
+- **MedGemma** (local HF): [1.5–4B IT](https://huggingface.co/google/medgemma-1.5-4b-it), [27B IT](https://huggingface.co/google/medgemma-27b-it) — authenticated download via **`HF_TOKEN`** in your **`.env`** (recommended) or environment; see [Environment variables and API keys](#environment-variables-and-api-keys). Larger weights (especially **27B**) need plenty of VRAM.
 
-⚠️ **MedGemma VRAM:** MedGemma uses approximately **35 GB VRAM**. Either use one large GPU for all models, or allocate a **separate GPU** for MedGemma. To put MedGemma on another device (e.g. second GPU), set `device_map={"": "cuda:1"}` in `monai-label/monailabel/tasks/infer/basic_infer.py`.
+### Local MedGemma GPUs
+
+- **`docker-compose.yml`** → **`monai_sam2`** → **`CUDA_VISIBLE_DEVICES`**: which **host** GPUs the container sees (logical `cuda:0`, …; shared with segmentation).
+- **`basic_infer.py`** → **`_medgemma_get_processor_and_model`** → **`gem_model_kwargs`**: default **`device_map="auto"`** + **`max_memory`** per logical GPU; adjust caps or use **`device_map={"": "cuda:0"}`** to pin one GPU.
+- Rebuild / restart MONAI after editing **`basic_infer.py`**. Not configured via `.env`.
+
+Default in the repo (logical GPUs **0** and **1**, **40GiB** cap each — tune to your cards):
+
+```python
+gem_model_kwargs = dict(
+    dtype=torch.bfloat16,
+    device_map="auto",
+    max_memory={0: "40GiB", 1: "40GiB"},
+    offload_buffers=True,
+)
+```
 
 **Manual Download Required:**
 
@@ -97,7 +115,7 @@ Model checkpoints are typically downloaded automatically during setup. However, 
 2. Once access is granted, download the model checkpoint
 3. Place the downloaded file as `sam3.pt` in the `monai-label/checkpoints/` directory
 
-⚠️ **Note:** If the SAM3 checkpoint is not found, you will see a warning message and SAM3 will not be available for use. The application will continue to work with other models (nnInteractive, SAM2, MedSAM2, VoxTell, MedGemma 1.5 4B).
+⚠️ **Note:** If the SAM3 checkpoint is not found, you will see a warning message and SAM3 will not be available for use. The application will continue to work with other segmentation models (nnInteractive, SAM2, MedSAM2, VoxTell) and report generation backends you have configured.
 
 ![SAM3 Not Found Warning](docs/images/sam3_not_found.png)
 
@@ -121,6 +139,25 @@ Model checkpoints are typically downloaded automatically during setup. However, 
 4. **Load sample data**
    
    Upload all DICOM files from the `sample-data` directory
+
+### Environment variables and API keys
+
+Report generation can call **Hugging Face** (Hub downloads and/or the **Kimi**, **Qwen**, and **Gemma 4** router), **Google Gemini**, **OpenAI**, **Anthropic (Claude)**, and optionally **vLLM** on your host. **You must supply your own secrets**; nothing in the repo should contain real keys.
+
+1. **Copy the template** in the project root (same folder as `docker-compose.yml`):
+   ```bash
+   cp .env-sample .env
+   ```
+2. **Edit `.env`** and fill in only the providers you use. Docker Compose reads `.env` automatically and passes values into the `monai_sam2` container (see `docker-compose.yml` → `environment`). The MONAI infer task resolves keys from the **infer request** first, then from **these environment variables**:
+   - **`HF_TOKEN`** — Hugging Face token ([create a token](https://huggingface.co/settings/tokens)): authenticated downloads (e.g. MedGemma) and **Hugging Face router** VLMs (Kimi / Qwen / Gemma 4).
+   - **`GEMINI_API_KEY`** — [Google AI Studio](https://aistudio.google.com/apikey) for Gemini.
+   - **`OPENAI_API_KEY`** — [OpenAI](https://platform.openai.com/api-keys) for GPT-class models.
+   - **`ANTHROPIC_API_KEY`** — [Anthropic](https://console.anthropic.com/) for Claude.
+   - **`VLLM_BASE_URL`** — Optional override for a **local OpenAI-compatible vLLM** server (default in Compose: `http://host.docker.internal:8000/v1` so the container can reach vLLM on the host).
+
+3. **File permissions** — Treat `.env` as secret (e.g. `chmod 600 .env`). **Never commit `.env`**; it is gitignored.
+
+For **self-hosted vLLM** (open-weight multimodal models such as InternVL, Qwen, Kimi, Gemma 4, etc.), see the **[`vllm/`](vllm/)** folder and **[vLLM Recipes](https://recipes.vllm.ai/)** for hardware-matched `vllm serve` examples.
 
 ---
 
@@ -212,20 +249,29 @@ Use the **Refine/New** toggle to control segmentation behavior:
 
 ### Report generation
 
-**Medgemma 1.5 4B** generates radiology-style reports from 3D medical images (CT/MRI). This is separate from segmentation and adds AI-assisted reporting to OHIF-AI.
+Radiology-style reports from **3D CT/MRI** are separate from segmentation. In the OHIF toolbox you choose a **report backend** (local MedGemma, a cloud API, the Hugging Face router, or **vLLM**), then set **Instruction**, **Query**, and **slice range** as before.
 
-- **Instruction** – Define the broad role of Medgemma (e.g., “You are a radiology assistant”) so the model follows your intended style and scope.
-- **Query** – Ask specifically what you want in the report (e.g., findings, impressions, or a full report).
-- **Slice range** – Specify the **slice range** of the 3D volume to include (e.g., slices 10–50) so the report is based on the relevant portion of the CT or MRI stack.
+| Path | Examples | How it runs |
+|------|------------|-------------|
+| **Local MedGemma (Hugging Face)** | MedGemma **1.5–4B IT**, **27B IT** | **`HF_TOKEN`** in `.env`; GPUs: [Local MedGemma GPUs](#local-medgemma-gpus). |
+| **Provider APIs** | **Gemini**, **GPT**, **Claude** | Calls the vendor API; set **`GEMINI_API_KEY`**, **`OPENAI_API_KEY`**, or **`ANTHROPIC_API_KEY`** in `.env` (or pass keys per request where supported). |
+| **Hugging Face inference router** | **Kimi**, **Qwen**, **Gemma 4** | OpenAI-compatible router; uses **`HF_TOKEN`**. |
+| **Local vLLM** | **InternVL**, **Qwen**, **Kimi**, **Gemma 4**, … (whatever you serve) | Run **[vLLM](https://docs.vllm.ai/)** (or compatible server) on the host; MONAI defaults to **`VLLM_BASE_URL`** → `http://host.docker.internal:8000/v1`. Pick a model id and GPU layout using **[vLLM Recipes](https://recipes.vllm.ai/)** and the scripts in **[`vllm/`](vllm/README.md)**. |
 
-Use the Medgemma panel to set Instruction, Query, and slice range, then run inference to generate the report.
+**Panel fields (all backends):**
 
-**Notice:**
+- **Instruction** — Broad role (e.g. “You are a radiology assistant”) and style.
+- **Query** — What you want in the report (findings, impression, structured sections, etc.).
+- **Slice range** — Which slices of the 3D stack to send (e.g. 10–50).
 
-- ⚠️ **GPU / VRAM** — MedGemma uses ~35 GB VRAM. Use one large GPU for all models, or a dedicated GPU for MedGemma by setting `device_map={"": "cuda:1"}` (or another device ID) in `monai-label/monailabel/tasks/infer/basic_infer.py`.
+**Notices:**
+
+- ⚠️ **Secrets** — Configure **your own** `.env` from **`.env-sample`**; never commit real API keys. See [Environment variables and API keys](#environment-variables-and-api-keys).
+- ⚠️ **GPU / VRAM (local MedGemma)** — [Local MedGemma GPUs](#local-medgemma-gpus).
+- ⚠️ **vLLM** — You are responsible for starting the server, model compatibility, and **`VLLM_BASE_URL`** if not on the default host port.
 
 <a href="docs/images/medgemma.png" target="_blank">
-  <img src="docs/images/medgemma.png" alt="Report Generation (Medgemma 1.5 4B)" width="700">
+  <img src="docs/images/medgemma.png" alt="Report generation (toolbox)" width="700">
 </a>
 
 **VoxTell + MedGemma demo:**
@@ -391,7 +437,8 @@ This project builds upon:
 - [MedSAM2](https://github.com/bowang-lab/MedSAM2) - MedSAM2 by Bowang lab
 - [SAM3](https://github.com/facebookresearch/sam3) - Segment Anything Model 3 by Meta
 - [VoxTell](https://github.com/MIC-DKFZ/VoxTell) - Free-Text Promptable Universal 3D Medical Image Segmentation
-- [MedGemma](https://github.com/Google-Health/medgemma) - Report generation from 3D medical images ([Google Research Blog](https://research.google/blog/next-generation-medical-image-interpretation-with-medgemma-15-and-medical-speech-to-text-with-medasr/))
+- [MedGemma](https://github.com/Google-Health/medgemma) - Local report generation from 3D medical images ([Google Research Blog](https://research.google/blog/next-generation-medical-image-interpretation-with-medgemma-15-and-medical-speech-to-text-with-medasr/))
+- [vLLM](https://github.com/vllm-project/vllm) - Optional self-hosted OpenAI-compatible serving for open-weight VLMs; see also [vLLM Recipes](https://recipes.vllm.ai/)
 
 
 
