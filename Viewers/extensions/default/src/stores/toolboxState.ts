@@ -23,7 +23,18 @@ export type VlmProviderId =
   | 'openai'
   | 'claude'
   | 'kimi'
-  | 'qwen';
+  | 'qwen'
+  | 'gemma'
+  | 'vllm';
+
+/** vLLM OpenAI-compatible server: served model family (empty = infer from model id). */
+export type VllmFamilyId = '' | 'internvl' | 'qwen' | 'kimi' | 'gemma';
+
+/** vLLM thinking: off (no InternVL system / no native thinking extras) or on. */
+export type VllmThinkingLevel = 'off' | 'on';
+
+/** Local MedGemma HF variant: ``1.5-4b`` → 1.5-4B IT; ``27b`` → ``google/medgemma-27b-it``. */
+export type MedgemmaVariantId = '1.5-4b' | '27b';
 
 let vlmProvider: VlmProviderId = 'medGemma';
 
@@ -39,6 +50,17 @@ let kimiReasoningEnabled = true;
 
 let qwenModel = 'Qwen/Qwen3.5-397B-A17B:novita';
 let qwenThinkingEnabled = true;
+
+let gemmaModel = 'google/gemma-4-31B-it:novita';
+let gemmaThinkingEnabled = true;
+
+let medgemmaVariant: MedgemmaVariantId = '1.5-4b';
+let medgemmaThinkingEnabled = false;
+
+/** OpenAI-compatible vLLM base URL (include /v1). */
+let vllmBaseUrl = 'http://host.docker.internal:8000/v1';
+let vllmFamily: VllmFamilyId = '';
+let vllmThinkingLevel: VllmThinkingLevel = 'on';
 
 export const toolboxState = {
   getLiveMode: () => liveMode,
@@ -119,6 +141,14 @@ export const toolboxState = {
   setVlmProvider: (provider: VlmProviderId) => {
     vlmProvider = provider;
   },
+  getMedgemmaVariant: (): MedgemmaVariantId => medgemmaVariant,
+  setMedgemmaVariant: (variant: MedgemmaVariantId) => {
+    medgemmaVariant = variant;
+  },
+  getMedgemmaThinkingEnabled: () => medgemmaThinkingEnabled,
+  setMedgemmaThinkingEnabled: (enabled: boolean) => {
+    medgemmaThinkingEnabled = enabled;
+  },
   getOpenaiModel: () => openaiModel,
   setOpenaiModel: (model: string) => {
     openaiModel = model;
@@ -151,6 +181,26 @@ export const toolboxState = {
   getQwenThinkingEnabled: () => qwenThinkingEnabled,
   setQwenThinkingEnabled: (enabled: boolean) => {
     qwenThinkingEnabled = enabled;
+  },
+  getGemmaModel: () => gemmaModel,
+  setGemmaModel: (model: string) => {
+    gemmaModel = model;
+  },
+  getGemmaThinkingEnabled: () => gemmaThinkingEnabled,
+  setGemmaThinkingEnabled: (enabled: boolean) => {
+    gemmaThinkingEnabled = enabled;
+  },
+  getVllmBaseUrl: () => vllmBaseUrl,
+  setVllmBaseUrl: (url: string) => {
+    vllmBaseUrl = url;
+  },
+  getVllmFamily: (): VllmFamilyId => vllmFamily,
+  setVllmFamily: (family: VllmFamilyId) => {
+    vllmFamily = family;
+  },
+  getVllmThinkingLevel: (): VllmThinkingLevel => vllmThinkingLevel,
+  setVllmThinkingLevel: (level: VllmThinkingLevel) => {
+    vllmThinkingLevel = level;
   },
 };
  

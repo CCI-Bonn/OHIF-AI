@@ -27,7 +27,13 @@ const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 import MonaiLabelClient from '../../monai-label/src/services/MonaiLabelClient';
 import { updateSegmentationStats } from '../../cornerstone/src/utils/updateSegmentationStats';
 import axios from 'axios';
-import { toolboxState, type VlmProviderId } from './stores/toolboxState';
+import {
+  toolboxState,
+  type VlmProviderId,
+  type VllmFamilyId,
+  type VllmThinkingLevel,
+  type MedgemmaVariantId,
+} from './stores/toolboxState';
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 
@@ -1319,8 +1325,14 @@ const commandsModule = ({
         throw error;
       }
     },
-    async medGemma(query: string, instruction?: string, startSlice?: number, endSlice?: number) {
-      
+    async medGemma(
+      query: string,
+      instruction?: string,
+      startSlice?: number,
+      endSlice?: number,
+      medgemmaVariant?: MedgemmaVariantId,
+      medgemmaThinkingEnabled?: boolean
+    ) {
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
@@ -1330,7 +1342,15 @@ const commandsModule = ({
         return e.displaySetInstanceUID == displaySetInstanceUID;
       })[0];
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
-      let params = {
+      const variant =
+        medgemmaVariant !== undefined
+          ? medgemmaVariant
+          : toolboxState.getMedgemmaVariant();
+      const thinking =
+        medgemmaThinkingEnabled !== undefined
+          ? medgemmaThinkingEnabled
+          : toolboxState.getMedgemmaThinkingEnabled();
+      let params: Record<string, unknown> = {
         largest_cc: false,
         result_extension: '.nii.gz',
         result_dtype: 'uint16',
@@ -1342,6 +1362,8 @@ const commandsModule = ({
         instruction: instruction || undefined,
         startSlice: startSlice !== undefined ? startSlice : undefined,
         endSlice: endSlice !== undefined ? endSlice : undefined,
+        medgemma_variant: variant,
+        medgemma_thinking_enabled: thinking,
       };
 
       let data = MonaiLabelClient.constructFormData(params, null);
@@ -1355,9 +1377,14 @@ const commandsModule = ({
         },
       });
 
+      const medgemmaTitle =
+        variant === '27b'
+          ? 'MedGemma 1-27B'
+          : 'MedGemma 1.5-4B';
+
       // Show notification with promise support
       uiNotificationService.show({
-        title: 'Medgemma 1.5 4B',
+        title: medgemmaTitle,
         message: 'Processing medgemma request...',
         type: 'info',
         promise: medgemmaPromise,
@@ -1716,6 +1743,150 @@ const commandsModule = ({
         }
       } catch (error) {
         console.error('Qwen error:', error);
+        throw error;
+      }
+    },
+    async gemma(
+      query: string,
+      instruction?: string,
+      startSlice?: number,
+      endSlice?: number,
+      gemmaModel?: string,
+      gemmaThinkingEnabled?: boolean
+    ) {
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+      const displaySets = displaySetService.activeDisplaySets;
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(e => {
+        return e.displaySetInstanceUID == displaySetInstanceUID;
+      })[0];
+      const url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      const thinking =
+        gemmaThinkingEnabled !== undefined
+          ? gemmaThinkingEnabled
+          : toolboxState.getGemmaThinkingEnabled();
+      const params: Record<string, unknown> = {
+        largest_cc: false,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        nninter: 'gemma',
+        texts: [query],
+        instruction: instruction || undefined,
+        startSlice: startSlice !== undefined ? startSlice : undefined,
+        endSlice: endSlice !== undefined ? endSlice : undefined,
+        gemma_model: gemmaModel || toolboxState.getGemmaModel(),
+        gemma_thinking_enabled: thinking,
+      };
+
+      const data = MonaiLabelClient.constructFormData(params, null);
+
+      const gemmaPromise = axios.post(url, data, {
+        responseType: 'text',
+        headers: {
+          accept: 'application/json, text/plain',
+        },
+      });
+
+      uiNotificationService.show({
+        title: 'Gemma 4 (HF router)',
+        message: 'Processing Gemma request...',
+        type: 'info',
+        promise: gemmaPromise,
+        promiseMessages: {
+          loading: 'Processing Gemma request...',
+          success: () => 'Gemma request - Successful',
+          error: (error) => `Gemma request - Failed: ${error.message || 'Unknown error'}`,
+        },
+      });
+
+      try {
+        const response = await gemmaPromise;
+        if (response.status === 200) {
+          return response;
+        }
+      } catch (error) {
+        console.error('Gemma error:', error);
+        throw error;
+      }
+    },
+    async vllm(
+      query: string,
+      instruction?: string,
+      startSlice?: number,
+      endSlice?: number,
+      vllmBaseUrl?: string,
+      vllmFamily?: VllmFamilyId,
+      vllmThinkingLevel?: VllmThinkingLevel
+    ) {
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+      const displaySets = displaySetService.activeDisplaySets;
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(e => {
+        return e.displaySetInstanceUID == displaySetInstanceUID;
+      })[0];
+      const url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      const baseUrl =
+        (vllmBaseUrl ?? toolboxState.getVllmBaseUrl()).trim() ||
+        'http://host.docker.internal:8000/v1';
+      const family = vllmFamily !== undefined ? vllmFamily : toolboxState.getVllmFamily();
+      const thinking =
+        vllmThinkingLevel !== undefined
+          ? vllmThinkingLevel
+          : toolboxState.getVllmThinkingLevel();
+      const params: Record<string, unknown> = {
+        largest_cc: false,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        nninter: 'vllm',
+        texts: [query],
+        instruction: instruction || undefined,
+        startSlice: startSlice !== undefined ? startSlice : undefined,
+        endSlice: endSlice !== undefined ? endSlice : undefined,
+        vllm_base_url: baseUrl,
+        vllm_thinking_level: thinking,
+      };
+      if (family) {
+        params.vllm_family = family;
+      }
+
+      const data = MonaiLabelClient.constructFormData(params, null);
+
+      const vllmPromise = axios.post(url, data, {
+        responseType: 'text',
+        headers: {
+          accept: 'application/json, text/plain',
+        },
+      });
+
+      uiNotificationService.show({
+        title: 'vLLM (OpenAI API)',
+        message: 'Processing vLLM request...',
+        type: 'info',
+        promise: vllmPromise,
+        promiseMessages: {
+          loading: 'Processing vLLM request...',
+          success: () => 'vLLM request - Successful',
+          error: (error) => `vLLM request - Failed: ${error.message || 'Unknown error'}`,
+        },
+      });
+
+      try {
+        const response = await vllmPromise;
+        if (response.status === 200) {
+          return response;
+        }
+      } catch (error) {
+        console.error('vLLM error:', error);
         throw error;
       }
     },
@@ -2230,6 +2401,8 @@ const commandsModule = ({
       query?: string;
       startSlice?: number | null;
       endSlice?: number | null;
+      medgemmaVariant?: MedgemmaVariantId;
+      medgemmaThinkingEnabled?: boolean;
       geminiModel?: string;
       geminiThinkingLevel?: '' | 'low' | 'medium' | 'high';
       openaiModel?: string;
@@ -2240,6 +2413,11 @@ const commandsModule = ({
       kimiReasoningEnabled?: boolean;
       qwenModel?: string;
       qwenThinkingEnabled?: boolean;
+      gemmaModel?: string;
+      gemmaThinkingEnabled?: boolean;
+      vllmBaseUrl?: string;
+      vllmFamily?: VllmFamilyId;
+      vllmThinkingLevel?: VllmThinkingLevel;
     }) {
       const vlm: VlmProviderId = options?.vlmProvider ?? toolboxState.getVlmProvider();
       const instruction = options?.instruction;
@@ -2261,6 +2439,17 @@ const commandsModule = ({
       const qwenModel = options?.qwenModel ?? toolboxState.getQwenModel();
       const qwenThinkingEnabled =
         options?.qwenThinkingEnabled ?? toolboxState.getQwenThinkingEnabled();
+      const gemmaModel = options?.gemmaModel ?? toolboxState.getGemmaModel();
+      const gemmaThinkingEnabled =
+        options?.gemmaThinkingEnabled ?? toolboxState.getGemmaThinkingEnabled();
+      const vllmBaseUrl = options?.vllmBaseUrl ?? toolboxState.getVllmBaseUrl();
+      const vllmFamily = options?.vllmFamily ?? toolboxState.getVllmFamily();
+      const vllmThinkingLevel =
+        options?.vllmThinkingLevel ?? toolboxState.getVllmThinkingLevel();
+      const medgemmaVariant =
+        options?.medgemmaVariant ?? toolboxState.getMedgemmaVariant();
+      const medgemmaThinkingEnabled =
+        options?.medgemmaThinkingEnabled ?? toolboxState.getMedgemmaThinkingEnabled();
       const { uiDialogService } = servicesManager.services;
 
       const queryDialogTitles: Record<VlmProviderId, string> = {
@@ -2270,6 +2459,8 @@ const commandsModule = ({
         claude: 'Claude — Query',
         kimi: 'Kimi — Query',
         qwen: 'Qwen — Query',
+        gemma: 'Gemma 4 — Query',
+        vllm: 'vLLM — Query',
       };
       const queryDialogTitle = queryDialogTitles[vlm];
 
@@ -2352,12 +2543,33 @@ const commandsModule = ({
             qwenModel,
             qwenThinkingEnabled
           );
+        } else if (vlm === 'gemma') {
+          response = await actions.gemma(
+            queryText.trim(),
+            instructionText.trim(),
+            startSlice ?? undefined,
+            endSlice ?? undefined,
+            gemmaModel,
+            gemmaThinkingEnabled
+          );
+        } else if (vlm === 'vllm') {
+          response = await actions.vllm(
+            queryText.trim(),
+            instructionText.trim(),
+            startSlice ?? undefined,
+            endSlice ?? undefined,
+            vllmBaseUrl,
+            vllmFamily,
+            vllmThinkingLevel
+          );
         } else {
           response = await actions.medGemma(
             queryText.trim(),
             instructionText.trim(),
             startSlice ?? undefined,
-            endSlice ?? undefined
+            endSlice ?? undefined,
+            medgemmaVariant,
+            medgemmaThinkingEnabled
           );
         }
 
@@ -2548,6 +2760,8 @@ const commandsModule = ({
     claude: actions.claude,
     kimi: actions.kimi,
     qwen: actions.qwen,
+    gemma: actions.gemma,
+    vllm: actions.vllm,
     nninter: actions.nninter,
     textPromptSegmentation: actions.textPromptSegmentation,
     testVlm: actions.testVlm,
