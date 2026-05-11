@@ -54,10 +54,21 @@ services:
     volumes:
        # Persist data
       - ./monai-label/predictions:/code/predictions
+    extra_hosts:
+      # Lets MONAI reach vLLM / other services bound on the host (e.g. port 8000)
+      - "host.docker.internal:host-gateway"
     environment:
-      - CUDA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0,1
       - NVIDIA_VISIBLE_DEVICES=all  # This exposes all GPUs to the container
       - NVIDIA_DRIVER_CAPABILITIES=all
+      # Hugging Face (Kimi / Qwen router, hub downloads); set in .env or host env
+      - HF_TOKEN=${HF_TOKEN:-}
+      # VLM API keys (basic_infer reads these env vars)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # vLLM on host:8000 — override if vLLM is elsewhere (same Docker network service name, etc.)
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
     #  - NVIDIA_DRIVER_CAPABILITIES=compute,utility  # Required driver capabilities for GPU use
     deploy:
       resources:

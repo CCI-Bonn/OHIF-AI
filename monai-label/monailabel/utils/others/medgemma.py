@@ -52,6 +52,16 @@ def window_mri(mri_vol: np.ndarray, min: float=None, max: float=None) -> np.ndar
   # Stack the same channel three times to create RGB (for consistency with CT window function)
   return np.stack([normalized, normalized, normalized], axis=-1)
 
+def encode_slice_to_jpeg_bytes(data: np.ndarray) -> bytes:
+  """Encode a slice array as JPEG bytes (same PIL path as :func:`_encode`, no base64)."""
+  format = "jpeg"
+  with io.BytesIO() as img_bytes:
+    with PIL.Image.fromarray(data) as img:
+      img.save(img_bytes, format=format)
+    img_bytes.seek(0)
+    return img_bytes.getvalue()
+
+
 def _encode(data: np.ndarray) -> str:
   """Encode CT slice imaging inline in prompt."""
   # Image format to encode ct slice images as.

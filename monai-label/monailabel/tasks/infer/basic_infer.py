@@ -41,7 +41,7 @@ from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
 from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline, spherical_kernel, calculate_dice, timeout_context
-from monailabel.utils.others.medgemma import window_mri, window, _encode
+from monailabel.utils.others.medgemma import encode_slice_to_jpeg_bytes, window_mri, window, _encode
 from sam2.build_sam import build_sam2_video_predictor, build_sam2_video_predictor_npz
 
 from sam3.model_builder import build_sam3_video_model
@@ -140,20 +140,622 @@ predictor_med = build_sam2_video_predictor_npz(medsam2_model_cfg, medsam2_checkp
 
 import transformers
 
-os.environ["HF_TOKEN"] = ""
+_MEDGEMMA_HF_1_5_4B = "google/medgemma-1.5-4b-it"
+_MEDGEMMA_HF_27B_IT = "google/medgemma-27b-it"
 
-gem_model_id = "google/medgemma-1.5-4b-it"
-
-gem_model_kwargs = dict(
-    dtype=torch.bfloat16,
-    device_map={"": "cuda:1"},
-    offload_buffers=True,
-)
-
-gem_processor = transformers.AutoProcessor.from_pretrained(gem_model_id, use_fast=True,  **gem_model_kwargs)
-gem_model = transformers.AutoModelForImageTextToText.from_pretrained(gem_model_id, **gem_model_kwargs)
+_medgemma_loaded_id: Optional[str] = None
+_medgemma_processor: Any = None
+_medgemma_model: Any = None
 
 logger = logging.getLogger(__name__)
+
+
+def _medgemma_resolve_hf_model_id(data: Dict[str, Any]) -> str:
+    """Map ``medgemma_variant`` / ``medgemma_model`` to a Hugging Face model id (default 1.5-4B)."""
+    raw = (
+        str(data.get("medgemma_variant") or data.get("medgemma_model") or "1.5-4b")
+    ).strip()
+    if raw.startswith("google/"):
+        return raw
+    raw_l = raw.lower()
+    if raw_l in (
+        "27b",
+        "27",
+        "medgemma-27b-it",
+    ):
+        return _MEDGEMMA_HF_27B_IT
+    if raw_l in (
+        "1.5-4b",
+        "1.5",
+        "4b",
+        "1.5-4b-it",
+        "google/medgemma-1.5-4b-it",
+        "medgemma-1.5-4b-it",
+    ):
+        return _MEDGEMMA_HF_1_5_4B
+    return _MEDGEMMA_HF_1_5_4B
+
+
+def _medgemma_get_processor_and_model(model_id: str) -> Tuple[Any, Any]:
+    """Load (or swap) MedGemma weights on ``cuda:1``; only one variant resident at a time."""
+    global _medgemma_loaded_id, _medgemma_processor, _medgemma_model
+    if _medgemma_loaded_id == model_id and _medgemma_processor is not None and _medgemma_model is not None:
+        return _medgemma_processor, _medgemma_model
+    if _medgemma_model is not None:
+        try:
+            del _medgemma_model
+            del _medgemma_processor
+        except Exception:
+            pass
+        _medgemma_model = None
+        _medgemma_processor = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    gem_model_kwargs = dict(
+        dtype=torch.bfloat16,
+        device_map="auto",
+        max_memory={0: "40GiB", 1: "40GiB"},
+        offload_buffers=True,
+    )
+    logger.info("Loading MedGemma model %s ...", model_id)
+    _medgemma_processor = transformers.AutoProcessor.from_pretrained(
+        model_id, use_fast=True, **gem_model_kwargs
+    )
+    _medgemma_model = transformers.AutoModelForImageTextToText.from_pretrained(
+        model_id, **gem_model_kwargs
+    )
+    _medgemma_loaded_id = model_id
+    return _medgemma_processor, _medgemma_model
+
+
+def _resolve_hf_token(data: Dict[str, Any]) -> str:
+    """Request HF_TOKEN."""
+    return os.environ.get("HF_TOKEN", "").strip()
+
+
+def _gemini_generate_content_config(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Plain dict for generate_content(..., config={...}). None = omit thinking_config (Gemini 3.x defaults)."""
+    raw = (str(req.get("gemini_thinking_level") or "")).strip().lower()
+    if not raw:
+        return None
+    valid = ("low", "medium", "high")
+    if raw not in valid:
+        raise ValueError(
+            f"Invalid gemini_thinking_level {raw!r}; use one of: {', '.join(valid)}"
+        )
+    return {"thinking_config": {"thinking_level": raw}}
+
+
+def _vlm_prepare_medical_slices(
+    data: Dict[str, Any],
+    img_np: np.ndarray,
+    modality_type: str,
+    contrast_center: Any,
+    contrast_window: Any,
+    instanceNumber: Any,
+    instanceNumber2: Any,
+) -> Tuple[str, str, List[int], List[np.ndarray]]:
+    """
+    Shared CT/MR slice extraction, windowing, and ordering for VLMs (MedGemma, Gemini, ...).
+    Returns: query, instruction, slice_indices (0-based), normalized_img_list (RGB uint8 per slice).
+    """
+    query = data["texts"][0]
+    logger.info(f"img_np shape: {img_np.shape}")
+    num_axial_slices = img_np.shape[0]
+    logger.info(f"num_axial_slices: {num_axial_slices}")
+
+    start_slice = data.get("startSlice")
+    end_slice = data.get("endSlice")
+
+    if start_slice is not None or end_slice is not None:
+        start_idx = int(start_slice) - 1 if start_slice is not None else 0
+        end_idx = int(end_slice) if end_slice is not None else num_axial_slices
+        start_idx = max(0, min(start_idx, num_axial_slices - 1))
+        end_idx = max(start_idx + 1, min(end_idx, num_axial_slices))
+        slice_indices = list(range(start_idx, end_idx))
+        logger.info(
+            f"Using user-specified slice range: {start_idx + 1} to {end_idx} (1-indexed, inclusive)"
+        )
+    else:
+        slice_indices = list(range(num_axial_slices))
+        logger.info(f"Using all slices: 1 to {num_axial_slices} (1-indexed)")
+
+    if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
+        slice_indices = [num_axial_slices - 1 - idx for idx in slice_indices]
+        logger.info(
+            f"Reversed slice indices due to instanceNumber > instanceNumber2: {slice_indices}"
+        )
+
+    img_list = [img_np[i] for i in slice_indices]
+
+    normalized_img_list: List[np.ndarray] = []
+    if modality_type == "CT":
+        for ct_slice in img_list:
+            windowed_slice = window(ct_slice)
+            windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
+            normalized_img_list.append(windowed_slice)
+    else:
+        for mr_slice in img_list:
+            if contrast_window is not None and contrast_center is not None:
+                windowed_slice = window_mri(
+                    mr_slice,
+                    contrast_center - contrast_window / 2,
+                    contrast_center + contrast_window / 2,
+                )
+            else:
+                windowed_slice = window_mri(mr_slice)
+            windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
+            normalized_img_list.append(windowed_slice)
+
+    instruction = (
+        data["instruction"]
+        if data.get("instruction")
+        else (
+            "You are an instructor teaching medical students. You are "
+            "analyzing the following CT slices. Please review the slices provided below "
+            "carefully."
+        )
+    )
+    return query, instruction, slice_indices, normalized_img_list
+
+
+def _vlm_medgemma_content_from_slices(
+    instruction: str,
+    slice_indices: List[int],
+    normalized_img_list: List[np.ndarray],
+    query: str,
+) -> List[Dict[str, Any]]:
+    content: List[Dict[str, Any]] = []
+    content.append({"type": "text", "text": instruction})
+    for slice_idx, ct_slice in zip(slice_indices, normalized_img_list):
+        actual_slice_number = slice_idx + 1
+        content.append({"type": "image", "image": _encode(ct_slice)})
+        content.append({"type": "text", "text": f"SLICE {actual_slice_number}"})
+    content.append({"type": "text", "text": query})
+    return content
+
+
+def _vlm_gemini_contents_from_medgemma_encoding(
+    instruction: str,
+    slice_indices: List[int],
+    normalized_img_list: List[np.ndarray],
+    query: str,
+) -> List[Any]:
+    """
+    Gemini `generate_content` input: same multimodal order as MedGemma (instruction →
+    per-slice image + SLICE label → query). Slices are JPEG-encoded with the same
+    PIL pipeline as MedGemma (:func:`encode_slice_to_jpeg_bytes`), passed as
+    ``types.Part.from_bytes`` without base64 round-trip.
+    """
+    from google.genai import types
+
+    content_parts: List[Any] = [instruction]
+    for slice_idx, slc in zip(slice_indices, normalized_img_list):
+        raw = encode_slice_to_jpeg_bytes(slc)
+        content_parts.append(types.Part.from_bytes(data=raw, mime_type="image/jpeg"))
+        content_parts.append(f"SLICE {slice_idx + 1}")
+    content_parts.append(query)
+    return content_parts
+
+
+def _vlm_openai_responses_content(
+    instruction: str,
+    slice_indices: List[int],
+    normalized_img_list: List[np.ndarray],
+    query: str,
+) -> List[Dict[str, Any]]:
+    """Build OpenAI Responses API multimodal ``content`` (input_text / input_image)."""
+    content: List[Dict[str, Any]] = [{"type": "input_text", "text": instruction}]
+    for slice_idx, slc in zip(slice_indices, normalized_img_list):
+        content.append({"type": "input_text", "text": f"SLICE {slice_idx + 1}:"})
+        content.append({"type": "input_image", "image_url": _encode(slc)})
+    content.append({"type": "input_text", "text": query})
+    return content
+
+
+def _vlm_kimi_hf_chat_content(
+    instruction: str,
+    slice_indices: List[int],
+    normalized_img_list: List[np.ndarray],
+    query: str,
+) -> List[Dict[str, Any]]:
+    """OpenAI-compatible chat ``content`` for Hugging Face router (text + image_url data URLs)."""
+    content: List[Dict[str, Any]] = [{"type": "text", "text": instruction}]
+    for slice_idx, slc in zip(slice_indices, normalized_img_list):
+        content.append({"type": "text", "text": f"SLICE {slice_idx + 1}:"})
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": _encode(slc)},
+            }
+        )
+    content.append({"type": "text", "text": query})
+    return content
+
+
+# Same OpenAI chat multimodal layout as Kimi (HF router).
+_vlm_qwen_hf_chat_content = _vlm_kimi_hf_chat_content
+
+
+def _infer_request_bool(val: Any, default: bool = True) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("true", "1", "yes", "on"):
+        return True
+    if s in ("false", "0", "no", "off"):
+        return False
+    return default
+
+
+def _kimi_optional_extra_body(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Moonshot-compatible thinking toggle via extra_body (HF router / Kimi vLLM)."""
+    if _infer_request_bool(req.get("kimi_disable_thinking"), default=False):
+        return {"thinking": {"type": "disabled"}}
+    return None
+
+
+_KIMI_DEFAULT_MAX_TOKENS = 32768
+
+_QWEN_DEFAULT_MAX_TOKENS = 32768
+
+
+def _qwen_effective_max_tokens(req: Dict[str, Any]) -> int:
+    raw = req.get("qwen_max_tokens")
+    if raw is None or raw == "":
+        return _QWEN_DEFAULT_MAX_TOKENS
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return _QWEN_DEFAULT_MAX_TOKENS
+
+
+def _qwen_hf_router_extra_body(req: Dict[str, Any]) -> Dict[str, Any]:
+    """HF OpenAI router / Qwen vLLM: ``extra_body`` ``top_k``; optional ``chat_template_kwargs`` for thinking.
+
+    Prefer ``qwen_thinking_enabled`` from OHIF (bool). Alternatively set only one of
+    ``qwen_enable_thinking`` or ``qwen_disable_thinking``.
+    """
+    try:
+        top_k = max(1, int(req.get("qwen_top_k", 20)))
+    except (TypeError, ValueError):
+        top_k = 20
+    eb: Dict[str, Any] = {"top_k": top_k}
+
+    if req.get("qwen_thinking_enabled") is not None:
+        te = _infer_request_bool(req.get("qwen_thinking_enabled"), default=True)
+        eb["chat_template_kwargs"] = {"enable_thinking": te}
+        return eb
+
+    en = _infer_request_bool(req.get("qwen_enable_thinking"), default=False)
+    dis = _infer_request_bool(req.get("qwen_disable_thinking"), default=False)
+    if en and dis:
+        raise MONAILabelError(
+            "Use only one of qwen_enable_thinking or qwen_disable_thinking"
+        )
+    if en:
+        eb["chat_template_kwargs"] = {"enable_thinking": True}
+    elif dis:
+        eb["chat_template_kwargs"] = {"enable_thinking": False}
+    return eb
+
+
+def _qwen_disable_thinking_effective(req: Dict[str, Any]) -> bool:
+    """True when the no-thinking sampling profile should be used (matches ``qwen_disable_thinking``)."""
+    if req.get("qwen_thinking_enabled") is not None:
+        return not _infer_request_bool(req.get("qwen_thinking_enabled"), default=True)
+    return _infer_request_bool(req.get("qwen_disable_thinking"), default=False)
+
+
+def _qwen_hf_router_sampling_kwargs(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Sampling for Qwen on HF router; fixed profile when thinking is disabled."""
+    if _qwen_disable_thinking_effective(req):
+        return {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "presence_penalty": 1.5,
+        }
+    try:
+        t = float(req.get("qwen_temperature", 0.6))
+    except (TypeError, ValueError):
+        t = 0.6
+    try:
+        tp = float(req.get("qwen_top_p", 0.95))
+    except (TypeError, ValueError):
+        tp = 0.95
+    d: Dict[str, Any] = {"temperature": t, "top_p": tp}
+    pp = req.get("qwen_presence_penalty")
+    if pp is not None and pp != "":
+        try:
+            d["presence_penalty"] = float(pp)
+        except (TypeError, ValueError):
+            pass
+    return d
+
+
+_GEMMA_HF_DEFAULT_MAX_TOKENS = 8192
+
+
+def _gemma_hf_effective_max_tokens(req: Dict[str, Any]) -> int:
+    raw = req.get("gemma_max_tokens")
+    if raw is None or raw == "":
+        return _GEMMA_HF_DEFAULT_MAX_TOKENS
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return _GEMMA_HF_DEFAULT_MAX_TOKENS
+
+
+def _gemma_hf_router_extra_body(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Gemma 4 on Hugging Face OpenAI router: ``top_k`` + ``chat_template_kwargs`` (same pattern as Qwen)."""
+    try:
+        top_k = max(1, int(req.get("gemma4_top_k", 64)))
+    except (TypeError, ValueError):
+        top_k = 64
+    proxy: Dict[str, Any] = {
+        "qwen_thinking_enabled": _infer_request_bool(
+            req.get("gemma_thinking_enabled", True), default=True
+        ),
+        "qwen_top_k": top_k,
+    }
+    return _qwen_hf_router_extra_body(proxy)
+
+
+def _gemma_hf_router_sampling_kwargs(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Same sampling as vLLM Gemma (``gemma4_temperature`` / ``gemma4_top_p``)."""
+    try:
+        t = float(req.get("gemma4_temperature", 1.0))
+    except (TypeError, ValueError):
+        t = 1.0
+    try:
+        tp = float(req.get("gemma4_top_p", 0.95))
+    except (TypeError, ValueError):
+        tp = 0.95
+    return {"temperature": t, "top_p": tp}
+
+
+# vLLM (OpenAI-compatible) — local or remote server; see OHIF toolbox / vllm_* request fields.
+INTERNVL_VLLM_THINKING_SYSTEM_PROMPT = """
+You are an AI assistant that rigorously follows this response protocol:
+
+1. First, conduct a detailed analysis of the question. Consider different angles, potential solutions, and reason through the problem step-by-step. Enclose this entire thinking process within <think> and </think> tags.
+
+2. After the thinking section, provide a clear, concise, and direct answer to the user's question. Separate the answer from the think section with a newline.
+
+Ensure that the thinking process is thorough but remains focused on the query. The final answer should be standalone and not reference the thinking section.
+""".strip()
+
+
+def _vllm_thinking_level(data: Dict[str, Any]) -> str:
+    """``vllm_thinking_level``: ``on`` / ``off``; if omitted, ``vllm_thinking_enabled`` (default on)."""
+    raw = (str(data.get("vllm_thinking_level") or "")).strip().lower()
+    if raw in ("off", "false", "0", "no"):
+        return "off"
+    if raw in ("on", "true", "1", "yes"):
+        return "on"
+    if raw:
+        return "off"
+    return "on" if _infer_request_bool(data.get("vllm_thinking_enabled", True), default=True) else "off"
+
+
+def _vllm_thinking_on(level: str) -> bool:
+    return level == "on"
+
+
+def _vllm_internvl_system_text(level: str) -> str:
+    if level != "on":
+        return ""
+    return INTERNVL_VLLM_THINKING_SYSTEM_PROMPT
+
+
+def _vllm_id_matches_family(model_id: str, family: str) -> bool:
+    mid = model_id.lower()
+    if family == "internvl":
+        return "internvl" in mid or "intern_vl" in mid
+    if family == "qwen":
+        return "qwen" in mid
+    if family == "kimi":
+        return "kimi" in mid or "moonshot" in mid
+    if family == "gemma":
+        return "gemma" in mid
+    return False
+
+
+def _vllm_resolve_family(default_model_id: str, override: str) -> str:
+    """Resolve routing family from the server's default model id and optional ``vllm_family``.
+
+    When ``vllm_family`` is set, ``default_model_id`` must contain that family (substring check).
+    """
+    o = (override or "").strip().lower()
+    valid = ("internvl", "qwen", "kimi", "gemma")
+    if o:
+        if o not in valid:
+            raise MONAILabelError(
+                f"vllm_family must be one of {', '.join(valid)}; got {override!r}"
+            )
+        if not _vllm_id_matches_family(default_model_id, o):
+            raise MONAILabelError(
+                f"vLLM default model id {default_model_id!r} does not match requested "
+                f"vllm_family={o!r}; use a server whose first listed model id contains that family."
+            )
+        return o
+    mid = default_model_id.lower()
+    if "internvl" in mid or "intern_vl" in mid:
+        return "internvl"
+    if "qwen" in mid:
+        return "qwen"
+    if "kimi" in mid or "moonshot" in mid:
+        return "kimi"
+    if "gemma" in mid:
+        return "gemma"
+    raise MONAILabelError(
+        f"vLLM default model id {default_model_id!r} does not match InternVL, Qwen, Kimi, or Gemma; "
+        "set vllm_family in the infer request if the id is non-standard."
+    )
+
+
+def _vllm_openai_messages(
+    family: str,
+    level: str,
+    user_blocks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if family in ("qwen", "kimi", "gemma"):
+        return [{"role": "user", "content": user_blocks}]
+    if not _vllm_thinking_on(level):
+        return [{"role": "user", "content": user_blocks}]
+    sys_text = _vllm_internvl_system_text(level)
+    return [
+        {"role": "system", "content": [{"type": "text", "text": sys_text}]},
+        {"role": "user", "content": user_blocks},
+    ]
+
+
+def _vllm_extra_body_for_create(
+    family: str, level: str, data: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    thinking_on = _vllm_thinking_on(level)
+    if family == "gemma":
+        try:
+            g_top_k = max(1, int(data.get("gemma4_top_k", 64)))
+        except (TypeError, ValueError):
+            g_top_k = 64
+        proxy: Dict[str, Any] = {
+            "qwen_thinking_enabled": thinking_on,
+            "qwen_top_k": g_top_k,
+        }
+        return _qwen_hf_router_extra_body(proxy)
+    if family == "qwen":
+        proxy = {
+            "qwen_thinking_enabled": thinking_on,
+            "qwen_top_k": data.get("vllm_top_k", 20),
+        }
+        return _qwen_hf_router_extra_body(proxy)
+    if family == "kimi":
+        if not thinking_on:
+            return {"thinking": {"type": "disabled"}}
+        return None
+    return None
+
+
+def _vllm_sampling_kwargs_create(
+    family: str, level: str, data: Dict[str, Any]
+) -> Dict[str, Any]:
+    if family == "gemma":
+        try:
+            t = float(data.get("gemma4_temperature", 1.0))
+        except (TypeError, ValueError):
+            t = 1.0
+        try:
+            tp = float(data.get("gemma4_top_p", 0.95))
+        except (TypeError, ValueError):
+            tp = 0.95
+        return {"temperature": t, "top_p": tp}
+    if family == "qwen":
+        proxy = {
+            "qwen_thinking_enabled": _vllm_thinking_on(level),
+            "qwen_top_k": data.get("vllm_top_k", 20),
+            "qwen_temperature": data.get("vllm_temperature", 0.6),
+            "qwen_top_p": data.get("vllm_top_p", 0.95),
+            "qwen_presence_penalty": data.get("vllm_presence_penalty"),
+            "qwen_disable_thinking": not _vllm_thinking_on(level),
+        }
+        return _qwen_hf_router_sampling_kwargs(proxy)
+    if family == "internvl" and not _vllm_thinking_on(level):
+        return {"temperature": 0.0}
+    if family == "internvl" and _vllm_thinking_on(level):
+        return {"temperature": 0.6, "top_p": 0.95}
+    out: Dict[str, Any] = {}
+    if data.get("vllm_temperature") is not None:
+        try:
+            out["temperature"] = float(data.get("vllm_temperature"))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _qwen_stream_collect_text(stream: Any) -> str:
+    """Concatenate streamed chat completion deltas into one string."""
+    full = ""
+    for chunk in stream:
+        choices = getattr(chunk, "choices", None) or ()
+        if not choices:
+            continue
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            continue
+        piece = getattr(delta, "content", None)
+        if piece:
+            full += piece
+    return full
+
+
+def _data_url_mime_and_b64_payload(data_url: str) -> Tuple[str, str]:
+    """Split MedGemma-style ``data:<mime>;base64,<payload>`` from :func:`_encode`."""
+    if not data_url.startswith("data:") or ";base64," not in data_url:
+        raise ValueError(
+            f"expected data URL from _encode(), got {data_url[:64]!r}..."
+        )
+    meta, b64 = data_url.split(";base64,", 1)
+    mime_type = meta[len("data:") :]
+    return mime_type, b64
+
+
+def _vlm_anthropic_messages_content(
+    instruction: str,
+    slice_indices: List[int],
+    normalized_img_list: List[np.ndarray],
+    query: str,
+) -> List[Dict[str, Any]]:
+    """Anthropic Messages API user ``content`` blocks (text + base64 images, no Files API)."""
+    content: List[Dict[str, Any]] = [{"type": "text", "text": instruction}]
+    for slice_idx, slc in zip(slice_indices, normalized_img_list):
+        content.append({"type": "text", "text": f"SLICE {slice_idx + 1}:"})
+        media_type, image_data = _data_url_mime_and_b64_payload(_encode(slc))
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": image_data,
+                },
+            }
+        )
+    content.append({"type": "text", "text": query})
+    return content
+
+
+def _anthropic_assistant_text(message: Any) -> str:
+    """Concatenate user-visible ``text`` blocks from a Messages API response."""
+    parts: List[str] = []
+    for block in getattr(message, "content", None) or ():
+        if getattr(block, "type", None) == "text":
+            parts.append(getattr(block, "text", "") or "")
+    return "".join(parts)
+
+
+_CLAUDE_DEFAULT_MAX_TOKENS = 8192
+
+
+def _claude_messages_create_extra_kwargs(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Extra kwargs for ``messages.create``: adaptive thinking when ``claude_thinking_effort`` is set.
+
+    Effort must use ``output_config.effort`` (not ``thinking.adaptive.effort``).
+    """
+    effort = (str(req.get("claude_thinking_effort") or "")).strip().lower()
+    if not effort:
+        return {}
+    valid = ("low", "medium", "high", "max")
+    if effort not in valid:
+        raise MONAILabelError(
+            f"Invalid claude_thinking_effort {effort!r}; use one of: {', '.join(valid)}"
+        )
+    return {
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": effort},
+    }
 
 
 class CallBackTypes(str, Enum):
@@ -476,7 +1078,8 @@ class BasicInferTask(InferTask):
 
         contrast_center = None
         contrast_window = None
-        
+        modality_type = "Other"
+
         if 0x00080060 in dcm_img_sample.keys():
             modality = dcm_img_sample[0x00080060].value
             if modality == "CT" or modality == "SC":
@@ -539,124 +1142,413 @@ class BasicInferTask(InferTask):
 
             logger.info(f"interactions in _session_used_interactions: {self._session_used_interactions}")
 
-            if nnInter == "medGemma":
+            if nnInter in (
+                "medGemma",
+                "gemini",
+                "openai",
+                "claude",
+                "kimi",
+                "qwen",
+                "gemma",
+                "vllm",
+            ):
                 if len(data['texts'])==1 and data['texts'][0]!='' and data['texts'][0]!={}:
-                    query = data['texts'][0]
-                    # Convert image to RGB slices and MAX slice = 85
+                    hf_token = (
+                        _resolve_hf_token(data)
+                        if nnInter in ("kimi", "qwen", "gemma")
+                        else None
+                    )
                     img_np = img_np[0]
-                    logger.info(f"img_np shape: {img_np.shape}")
-                    num_axial_slices = img_np.shape[0]
-                    img_list = []
-                    logger.info(f"num_axial_slices: {num_axial_slices}")
-                    
-                    # Get slice range from data if provided
-                    # Note: User input is 1-indexed (slice 1, 2, 3, ...), we convert to 0-indexed internally
-                    start_slice = data.get('startSlice')
-                    end_slice = data.get('endSlice')
-                    
-                    # Determine slice indices to use
-                    if start_slice is not None or end_slice is not None:
-                        # User specified slice range (1-indexed)
-                        # Convert from 1-indexed to 0-indexed
-                        start_idx = int(start_slice) - 1 if start_slice is not None else 0
-                        end_idx = int(end_slice) if end_slice is not None else num_axial_slices
-                        # Clamp to valid range (0-indexed)
-                        start_idx = max(0, min(start_idx, num_axial_slices - 1))
-                        end_idx = max(start_idx + 1, min(end_idx, num_axial_slices))
-                        slice_indices = list(range(start_idx, end_idx))
-                        # Log in 1-indexed terms for user clarity
-                        logger.info(f"Using user-specified slice range: {start_idx + 1} to {end_idx} (1-indexed, inclusive)")
-                    else:
-                        # Use all slices (original behavior)
-                        slice_indices = list(range(num_axial_slices))
-                        logger.info(f"Using all slices: 1 to {num_axial_slices} (1-indexed)")
-                    
-                    # Reverse slice indices if instanceNumber > instanceNumber2
-                    if instanceNumber is not None and instanceNumber2 is not None and instanceNumber > instanceNumber2:
-                        slice_indices = [num_axial_slices - 1 - idx for idx in slice_indices]
-                        logger.info(f"Reversed slice indices due to instanceNumber > instanceNumber2: {slice_indices}")
-                    
-                    img_list = [img_np[i] for i in slice_indices]
-
-                     
-                    normalized_img_list = []
-                    if modality_type == "CT":
-                        for ct_slice in img_list:
-                            windowed_slice = window(ct_slice)
-                            # Round slice voxels to nearest integer number.
-                            windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
-                            normalized_img_list.append(windowed_slice)
-                    else:
-                        for mr_slice in img_list:
-                            if contrast_window != None and contrast_center !=None:
-                                windowed_slice = window_mri(mr_slice, contrast_center-contrast_window/2, contrast_center+contrast_window/2)
-                            else:
-                                windowed_slice = window_mri(mr_slice)
-                            # Round slice voxels to nearest integer number.
-                            windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
-                            normalized_img_list.append(windowed_slice)
-                    
-                    # Check the slices (debugging)
-                    #image = Image.fromarray(normalized_img_list[0], mode="RGB")
-                    #image.save(f"/code/2d_slice_{slice_indices[0]}.jpeg", format="JPEG")
-#
-                    #image = Image.fromarray(normalized_img_list[len(slice_indices)//2], mode="RGB")
-                    #image.save(f"/code/2d_slice_{slice_indices[len(slice_indices)//2]}.jpeg", format="JPEG")
-#
-                    #image = Image.fromarray(normalized_img_list[-1], mode="RGB")
-                    #image.save(f"/code/2d_slice_{slice_indices[-1]}.jpeg", format="JPEG")
-                    instruction = data['instruction'] if data['instruction'] else ("You are an instructor teaching medical students. You are "
-               "analyzing the following CT slices. Please review the slices provided below "
-               "carefully.")
-
+                    query, instruction, slice_indices, normalized_img_list = (
+                        _vlm_prepare_medical_slices(
+                            data,
+                            img_np,
+                            modality_type,
+                            contrast_center,
+                            contrast_window,
+                            instanceNumber,
+                            instanceNumber2,
+                        )
+                    )
                     logger.info(f"normalized_img_list count: {len(normalized_img_list)}")
 
-                    content = []
-                    content.append({"type": "text", "text": instruction})
-                    # Use actual slice numbers (1-indexed) based on the original slice indices
-                    # slice_indices are 0-indexed internally, but we display as 1-indexed for users
-                    for slice_idx, ct_slice in zip(slice_indices, normalized_img_list):
-                        # Convert 0-indexed to 1-indexed for display
-                        actual_slice_number = slice_idx + 1
-                        content.append({"type": "image", "image": _encode(ct_slice)})
-                        content.append({"type": "text", "text": f"SLICE {actual_slice_number}"})
-                    content.append({"type": "text", "text": query})
+                    if nnInter == "medGemma":
+                        model_id = _medgemma_resolve_hf_model_id(data)
+                        gem_processor, gem_model = _medgemma_get_processor_and_model(model_id)
+                        is_thinking = _infer_request_bool(
+                            data.get("medgemma_thinking_enabled", False),
+                            default=False,
+                        )
+                        user_content = _vlm_medgemma_content_from_slices(instruction, slice_indices, normalized_img_list, query)
+                        if is_thinking:
+                            system_instruction = "SYSTEM INSTRUCTION: think silently if needed. "
+                            max_new_tokens = 5000
+                            messages = [
+                            {
+                                "role": "system",
+                                "content": [{"type": "text", "text": system_instruction}],
+                            },
+                            {"role": "user", "content": user_content},
+                        ]
+                        else:
+                            max_new_tokens = 2000
+                            messages = [
+                            {"role": "user", "content": user_content},
+                        ]
+                        
+                        
+                        inputs = gem_processor.apply_chat_template(
+                            messages,
+                            add_generation_prompt=True,
+                            continue_final_message=False,
+                            return_tensors="pt",
+                            tokenize=True,
+                            return_dict=True,
+                        )
+                        with torch.inference_mode():
+                            inputs = inputs.to(gem_model.device, dtype=torch.bfloat16)
+                            generated_sequence = gem_model.generate(
+                                **inputs,
+                                do_sample=is_thinking,
+                                max_new_tokens=max_new_tokens,
+                            )
+                        medgemma_response = gem_processor.post_process_image_text_to_text(
+                            generated_sequence, skip_special_tokens=True
+                        )
+                        decoded_inputs = gem_processor.post_process_image_text_to_text(
+                            inputs["input_ids"], skip_special_tokens=True
+                        )
+                        medgemma_response = medgemma_response[0]
+                        index_input_text = medgemma_response.find(decoded_inputs[0])
+                        if 0 <= index_input_text and index_input_text <= 2:
+                            medgemma_response = medgemma_response[
+                                index_input_text + len(decoded_inputs[0]) :
+                            ]
+                        logger.info(
+                            "MedGemma model=%s thinking=%s max_new_tokens=%s",
+                            model_id,
+                            is_thinking,
+                            max_new_tokens,
+                        )
+                        logger.info(f"MedGemma Generated text: {medgemma_response}")
+                        return medgemma_response, final_result_json
 
-                    messages = [
-                        {
-                            "role": "user",
-                            "content": content
+                    if nnInter == "gemini":
+                        try:
+                            from google import genai
+                        except ImportError as err:
+                            raise MONAILabelError(
+                                "Gemini VLM requires the google-genai package: pip install google-genai"
+                            ) from err
+                        api_key = (
+                            data.get("gemini_api_key")
+                            or os.environ.get("GEMINI_API_KEY")
+                            or ""
+                        ).strip()
+                        if not api_key:
+                            raise MONAILabelError(
+                                "Gemini API key missing: pass gemini_api_key in the infer request "
+                                "or set GEMINI_API_KEY in the environment."
+                            )
+                        client = genai.Client(api_key=api_key)
+                        contents = _vlm_gemini_contents_from_medgemma_encoding(
+                            instruction, slice_indices, normalized_img_list, query
+                        )
+                        model_name = data.get(
+                            "gemini_model", "gemini-3-flash-preview"
+                        )
+                        gemini_cfg = _gemini_generate_content_config(data)
+                        _kw: Dict[str, Any] = {
+                            "model": model_name,
+                            "contents": contents,
                         }
-                    ]
-                    inputs = gem_processor.apply_chat_template(
-                                    messages,
-                                    add_generation_prompt=True,
-                                    continue_final_message=False,
-                                    return_tensors="pt",  # pytorch
-                                    tokenize=True,
-                                    return_dict=True,
+                        if gemini_cfg is not None:
+                            _kw["config"] = gemini_cfg
+                        response = client.models.generate_content(**_kw)
+                        medgemma_response = response.text
+                        logger.info(f"Gemini generated text: {medgemma_response}")
+                        return medgemma_response, final_result_json
+
+                    if nnInter == "openai":
+                        try:
+                            from openai import OpenAI
+                        except ImportError as err:
+                            raise MONAILabelError(
+                                "OpenAI VLM requires the openai package: pip install openai"
+                            ) from err
+                        api_key = (
+                            data.get("openai_api_key")
+                            or os.environ.get("OPENAI_API_KEY")
+                            or ""
+                        ).strip()
+                        if not api_key:
+                            raise MONAILabelError(
+                                "OpenAI API key missing: pass openai_api_key in the infer request "
+                                "or set OPENAI_API_KEY in the environment."
+                            )
+                        oa_content = _vlm_openai_responses_content(
+                            instruction, slice_indices, normalized_img_list, query
+                        )
+                        client = OpenAI(api_key=api_key)
+                        model_name = data.get("openai_model", "gpt-5.4")
+                        raw_effort = data.get("openai_reasoning_effort")
+                        if raw_effort is None or (
+                            isinstance(raw_effort, str) and raw_effort.strip() == ""
+                        ):
+                            oa_effort = "none"
+                        else:
+                            oa_effort = str(raw_effort).strip()
+                        logger.info(
+                            f"OpenAI Responses API model={model_name} reasoning.effort={oa_effort}"
+                        )
+                        response = client.responses.create(
+                            model=model_name,
+                            input=[{"role": "user", "content": oa_content}],
+                            reasoning={"effort": oa_effort},
+                        )
+                        medgemma_response = response.output_text
+                        logger.info(f"OpenAI generated text: {medgemma_response}")
+                        return medgemma_response, final_result_json
+
+                    if nnInter == "claude":
+                        try:
+                            from anthropic import Anthropic
+                        except ImportError as err:
+                            raise MONAILabelError(
+                                "Claude VLM requires the anthropic package: pip install anthropic"
+                            ) from err
+                        api_key = (
+                            data.get("anthropic_api_key")
+                            or os.environ.get("ANTHROPIC_API_KEY")
+                            or ""
+                        ).strip()
+                        if not api_key:
+                            raise MONAILabelError(
+                                "Anthropic API key missing: pass anthropic_api_key in the infer "
+                                "request or set ANTHROPIC_API_KEY in the environment."
+                            )
+                        claude_content = _vlm_anthropic_messages_content(
+                            instruction, slice_indices, normalized_img_list, query
+                        )
+                        model_name = data.get(
+                            "claude_model", "claude-sonnet-4-20250514"
+                        )
+                        client = Anthropic(api_key=api_key, timeout=1200.0)
+                        _cc_kw: Dict[str, Any] = {
+                            "model": model_name,
+                            "max_tokens": _CLAUDE_DEFAULT_MAX_TOKENS,
+                            "messages": [{"role": "user", "content": claude_content}],
+                        }
+                        _cc_kw.update(_claude_messages_create_extra_kwargs(data))
+                        message = client.messages.create(**_cc_kw)
+                        medgemma_response = _anthropic_assistant_text(message)
+                        logger.info(f"Claude generated text: {medgemma_response}")
+                        return medgemma_response, final_result_json
+
+                    if nnInter == "kimi":
+                        try:
+                            from openai import OpenAI
+                        except ImportError as err:
+                            raise MONAILabelError(
+                                "Kimi (HF router) requires the openai package: pip install openai"
+                            ) from err
+                        if not hf_token:
+                            raise MONAILabelError(
+                                "Hugging Face token missing: pass huggingface_token in the infer "
+                                "request or set HF_TOKEN / HUGGINGFACE_HUB_TOKEN."
+                            )
+                        kimi_content = _vlm_kimi_hf_chat_content(
+                            instruction, slice_indices, normalized_img_list, query
+                        )
+                        model_name = data.get(
+                            "kimi_model", "moonshotai/Kimi-K2.5:novita"
+                        )
+                        client = OpenAI(
+                            base_url="https://router.huggingface.co/v1",
+                            api_key=hf_token,
+                            timeout=None,
+                        )
+                        create_kwargs: Dict[str, Any] = {
+                            "model": model_name,
+                            "messages": [{"role": "user", "content": kimi_content}],
+                            "max_tokens": _KIMI_DEFAULT_MAX_TOKENS,
+                        }
+                        kimi_eb = _kimi_optional_extra_body(data)
+                        if kimi_eb is not None:
+                            create_kwargs["extra_body"] = kimi_eb
+                        logger.info(
+                            f"Kimi HF router model={model_name} extra_body="
+                            f"{'set' if kimi_eb is not None else 'none'}"
+                        )
+                        completion = client.chat.completions.create(**create_kwargs)
+                        medgemma_response = (
+                            completion.choices[0].message.content or ""
+                        )
+                        logger.info(f"Kimi generated text: {medgemma_response}")
+                        return medgemma_response, final_result_json
+
+                    if nnInter == "qwen":
+                        try:
+                            from openai import OpenAI
+                        except ImportError as err:
+                            raise MONAILabelError(
+                                "Qwen (HF router) requires the openai package: pip install openai"
+                            ) from err
+                        if not hf_token:
+                            raise MONAILabelError(
+                                "Hugging Face token missing: pass huggingface_token or set "
+                                "HF_TOKEN / HUGGINGFACE_HUB_TOKEN."
+                            )
+                        qwen_content = _vlm_qwen_hf_chat_content(
+                            instruction, slice_indices, normalized_img_list, query
+                        )
+                        model_name = data.get(
+                            "qwen_model", "Qwen/Qwen3.5-397B-A17B:novita"
+                        )
+                        client = OpenAI(
+                            base_url="https://router.huggingface.co/v1",
+                            api_key=hf_token,
+                            timeout=None,
+                        )
+                        qwen_max = _qwen_effective_max_tokens(data)
+                        qwen_extra = _qwen_hf_router_extra_body(data)
+                        sampling = _qwen_hf_router_sampling_kwargs(data)
+                        create_kwargs: Dict[str, Any] = {
+                            "model": model_name,
+                            "messages": [{"role": "user", "content": qwen_content}],
+                            "stream": True,
+                            "max_tokens": qwen_max,
+                            **sampling,
+                            "extra_body": qwen_extra,
+                        }
+                        logger.info(
+                            f"Qwen HF router streaming model={model_name} max_tokens={qwen_max}"
+                        )
+                        stream = client.chat.completions.create(**create_kwargs)
+                        medgemma_response = _qwen_stream_collect_text(stream)
+                        logger.info(
+                            f"Qwen streamed response length={len(medgemma_response)} chars"
+                        )
+                        return medgemma_response, final_result_json
+
+                    if nnInter == "gemma":
+                        try:
+                            from openai import OpenAI
+                        except ImportError as err:
+                            raise MONAILabelError(
+                                "Gemma (HF router) requires the openai package: pip install openai"
+                            ) from err
+                        if not hf_token:
+                            raise MONAILabelError(
+                                "Hugging Face token missing: pass huggingface_token or set "
+                                "HF_TOKEN / HUGGINGFACE_HUB_TOKEN."
+                            )
+                        gemma_content = _vlm_qwen_hf_chat_content(
+                            instruction, slice_indices, normalized_img_list, query
+                        )
+                        model_name = data.get(
+                            "gemma_model", "google/gemma-4-31B-it:novita"
+                        )
+                        client = OpenAI(
+                            base_url="https://router.huggingface.co/v1",
+                            api_key=hf_token,
+                            timeout=None,
+                        )
+                        gemma_max = _gemma_hf_effective_max_tokens(data)
+                        gemma_extra = _gemma_hf_router_extra_body(data)
+                        sampling = _gemma_hf_router_sampling_kwargs(data)
+                        create_kwargs: Dict[str, Any] = {
+                            "model": model_name,
+                            "messages": [{"role": "user", "content": gemma_content}],
+                            "max_tokens": gemma_max,
+                            **sampling,
+                            "extra_body": gemma_extra,
+                        }
+                        logger.info(
+                            f"Gemma HF router model={model_name} max_tokens={gemma_max} "
+                            f"extra_body={'set' if gemma_extra else 'none'}"
+                        )
+                        completion = client.chat.completions.create(**create_kwargs)
+                        medgemma_response = (
+                            completion.choices[0].message.content or ""
+                        )
+                        logger.info(
+                            f"Gemma generated text length={len(medgemma_response)} chars"
+                        )
+                        return medgemma_response, final_result_json
+
+                    if nnInter == "vllm":
+                        try:
+                            from openai import APIConnectionError, OpenAI
+                        except ImportError as err:
+                            raise MONAILabelError(
+                                "vLLM requires the openai package: pip install openai"
+                            ) from err
+                        # Default reaches the Docker *host* from inside a container (see docker-compose
+                        # extra_hosts). 0.0.0.0/127.0.0.1 here would be the container itself, not vLLM on host.
+                        _vllm_default_base = (
+                            "http://host.docker.internal:8000/v1"
+                        )
+                        base_url = (
+                            data.get("vllm_base_url")
+                            or os.environ.get("INTERNVL_VLLM_BASE_URL")
+                            or os.environ.get("VLLM_BASE_URL")
+                            or _vllm_default_base
+                        )
+                        base_url = str(base_url).strip() or _vllm_default_base
+                        client = OpenAI(api_key="", base_url=base_url, timeout=None)
+                        try:
+                            listed = getattr(client.models.list(), "data", None) or []
+                            if not listed:
+                                raise MONAILabelError(
+                                    "vLLM: no models returned from the server; check vllm_base_url "
+                                    "and that the OpenAI-compatible API is running."
                                 )
-
-                    # Run generative model
-                    with torch.inference_mode():
-                        inputs = inputs.to(gem_model.device, dtype=torch.bfloat16)
-                        # Seting do_sample to promote deterministic model response.
-                        # Setting max_new_tokens to constrain response length.
-                        generated_sequence = gem_model.generate(**inputs, do_sample=False, max_new_tokens=2000)
-
-                    # Process response
-                    medgemma_response = gem_processor.post_process_image_text_to_text(generated_sequence, skip_special_tokens=True)
-                    decoded_inputs = gem_processor.post_process_image_text_to_text(inputs["input_ids"], skip_special_tokens=True)
-                    medgemma_response = medgemma_response[0]
-                    # There can be added characters before the input text, so we need to find the
-                    # beginning of the input text in the generated text
-                    index_input_text = medgemma_response.find(decoded_inputs[0])
-                    if 0 <= index_input_text and index_input_text <= 2:
-                        # If the input text is found, we remove it
-                        medgemma_response = medgemma_response[index_input_text + len(decoded_inputs[0]):]
-                    logger.info(f"MedGemma Generated text: {medgemma_response}")
-                    #final_result_json["medgemma_response"] = medgemma_response
-                    return medgemma_response, final_result_json
+                            default_id = listed[0].id
+                            fam_ov = (str(data.get("vllm_family") or "")).strip().lower()
+                            family = _vllm_resolve_family(default_id, fam_ov)
+                            model_name = default_id
+                            level = _vllm_thinking_level(data)
+                            user_blocks = _vlm_kimi_hf_chat_content(
+                                instruction, slice_indices, normalized_img_list, query
+                            )
+                            messages = _vllm_openai_messages(family, level, user_blocks)
+                            api_eb = _vllm_extra_body_for_create(family, level, data)
+                            try:
+                                mt = int(data.get("vllm_max_tokens") or 8192)
+                            except (TypeError, ValueError):
+                                mt = 8192
+                            create_kw: Dict[str, Any] = {
+                                "model": model_name,
+                                "messages": messages,
+                                "max_tokens": max(1, mt),
+                            }
+                            create_kw.update(
+                                _vllm_sampling_kwargs_create(family, level, data)
+                            )
+                            if api_eb:
+                                create_kw["extra_body"] = api_eb
+                            logger.info(
+                                f"vLLM chat base_url={base_url} model={model_name} family={family} "
+                                f"thinking_level={level} extra_body="
+                                f"{'set' if create_kw.get('extra_body') else 'none'}"
+                            )
+                            completion = client.chat.completions.create(**create_kw)
+                            medgemma_response = (
+                                completion.choices[0].message.content or ""
+                            )
+                            logger.info(
+                                f"vLLM generated text length={len(medgemma_response)} chars"
+                            )
+                            return medgemma_response, final_result_json
+                        except APIConnectionError as conn_err:
+                            raise MONAILabelError(
+                                f"vLLM: cannot connect to OpenAI-compatible API at {base_url!r} "
+                                f"({conn_err}). If MONAI runs in Docker and vLLM on the host, use the host "
+                                "from inside the container (e.g. http://host.docker.internal:8000/v1 with "
+                                "compose extra_hosts, or http://172.17.0.1:8000/v1 on Linux bridge), not "
+                                "0.0.0.0 or 127.0.0.1. Set vllm_base_url or VLLM_BASE_URL."
+                            ) from conn_err
 
             if len(data['texts'])==1 and data['texts'][0]!='' and data['texts'][0]!={}:
                 orig_orient = sitk.DICOMOrientImageFilter_GetOrientationFromDirectionCosines(

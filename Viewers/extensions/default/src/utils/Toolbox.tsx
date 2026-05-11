@@ -4,7 +4,13 @@ import { Lock, LockOpen } from 'lucide-react';
 import { useSystem, useToolbar } from '@ohif/core';
 import classnames from 'classnames';
 import { useTranslation } from 'react-i18next';
-import { toolboxState } from '../stores/toolboxState';
+import {
+  toolboxState,
+  type VlmProviderId,
+  type VllmFamilyId,
+  type VllmThinkingLevel,
+  type MedgemmaVariantId,
+} from '../stores/toolboxState';
 
 interface ButtonProps {
   isActive?: boolean;
@@ -44,8 +50,44 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
   const [medgemmaQuery, setMedgemmaQuery] = useState(toolboxState.getMedgemmaQuery());
   const [medgemmaStartSlice, setMedgemmaStartSlice] = useState<number | null>(toolboxState.getMedgemmaStartSlice());
   const [medgemmaEndSlice, setMedgemmaEndSlice] = useState<number | null>(toolboxState.getMedgemmaEndSlice());
-  
-  // Sync medgemma state from toolboxState
+  const [geminiModel, setGeminiModel] = useState(toolboxState.getGeminiModel());
+  const [geminiThinkingLevel, setGeminiThinkingLevel] = useState<
+    '' | 'low' | 'medium' | 'high'
+  >(toolboxState.getGeminiThinkingLevel());
+  const [openaiModel, setOpenaiModel] = useState(toolboxState.getOpenaiModel());
+  const [openaiReasoningEffort, setOpenaiReasoningEffort] = useState(
+    toolboxState.getOpenaiReasoningEffort()
+  );
+  const [claudeModel, setClaudeModel] = useState(toolboxState.getClaudeModel());
+  const [claudeThinkingEffort, setClaudeThinkingEffort] = useState(
+    toolboxState.getClaudeThinkingEffort()
+  );
+  const [kimiModel, setKimiModel] = useState(toolboxState.getKimiModel());
+  const [kimiReasoningEnabled, setKimiReasoningEnabled] = useState(
+    toolboxState.getKimiReasoningEnabled()
+  );
+  const [qwenModel, setQwenModel] = useState(toolboxState.getQwenModel());
+  const [qwenThinkingEnabled, setQwenThinkingEnabled] = useState(
+    toolboxState.getQwenThinkingEnabled()
+  );
+  const [gemmaModel, setGemmaModel] = useState(toolboxState.getGemmaModel());
+  const [gemmaThinkingEnabled, setGemmaThinkingEnabled] = useState(
+    toolboxState.getGemmaThinkingEnabled()
+  );
+  const [vllmBaseUrl, setVllmBaseUrl] = useState(toolboxState.getVllmBaseUrl());
+  const [vllmFamily, setVllmFamily] = useState<VllmFamilyId>(toolboxState.getVllmFamily());
+  const [vllmThinkingLevel, setVllmThinkingLevel] = useState<VllmThinkingLevel>(
+    toolboxState.getVllmThinkingLevel()
+  );
+  const [vlmProvider, setVlmProvider] = useState(toolboxState.getVlmProvider());
+  const [medgemmaVariant, setMedgemmaVariant] = useState<MedgemmaVariantId>(
+    toolboxState.getMedgemmaVariant()
+  );
+  const [medgemmaThinkingEnabled, setMedgemmaThinkingEnabled] = useState(
+    toolboxState.getMedgemmaThinkingEnabled()
+  );
+
+  // Sync VLM toolbox state from toolboxState
   useEffect(() => {
     if (isTestMedgemmaToolbox) {
       const interval = setInterval(() => {
@@ -54,11 +96,47 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
         const query = toolboxState.getMedgemmaQuery();
         const startSlice = toolboxState.getMedgemmaStartSlice();
         const endSlice = toolboxState.getMedgemmaEndSlice();
+        const gm = toolboxState.getGeminiModel();
+        const gtl = toolboxState.getGeminiThinkingLevel();
+        const oam = toolboxState.getOpenaiModel();
+        const oare = toolboxState.getOpenaiReasoningEffort();
+        const cm = toolboxState.getClaudeModel();
+        const cte = toolboxState.getClaudeThinkingEffort();
+        const km = toolboxState.getKimiModel();
+        const kre = toolboxState.getKimiReasoningEnabled();
+        const qm = toolboxState.getQwenModel();
+        const qte = toolboxState.getQwenThinkingEnabled();
+        const gmm = toolboxState.getGemmaModel();
+        const gte = toolboxState.getGemmaThinkingEnabled();
+        const vbu = toolboxState.getVllmBaseUrl();
+        const vf = toolboxState.getVllmFamily();
+        const vtl = toolboxState.getVllmThinkingLevel();
+        const vp = toolboxState.getVlmProvider();
+        const mv = toolboxState.getMedgemmaVariant();
+        const mte = toolboxState.getMedgemmaThinkingEnabled();
         setMedgemmaResult(result);
         setMedgemmaInstruction(instruction);
         setMedgemmaQuery(query);
         setMedgemmaStartSlice(startSlice);
         setMedgemmaEndSlice(endSlice);
+        setGeminiModel(gm);
+        setGeminiThinkingLevel(gtl);
+        setOpenaiModel(oam);
+        setOpenaiReasoningEffort(oare);
+        setClaudeModel(cm);
+        setClaudeThinkingEffort(cte);
+        setKimiModel(km);
+        setKimiReasoningEnabled(kre);
+        setQwenModel(qm);
+        setQwenThinkingEnabled(qte);
+        setGemmaModel(gmm);
+        setGemmaThinkingEnabled(gte);
+        setVllmBaseUrl(vbu);
+        setVllmFamily(vf);
+        setVllmThinkingLevel(vtl);
+        setVlmProvider(vp);
+        setMedgemmaVariant(mv);
+        setMedgemmaThinkingEnabled(mte);
       }, 100); // Check every 100ms for updates
       return () => clearInterval(interval);
     }
@@ -461,6 +539,32 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
             {isTestMedgemmaToolbox && (
               <div className="flex flex-col gap-3 py-3 px-2 border-t border-primary/20">
                 <div className="flex flex-col gap-2">
+                  <Label htmlFor="vlm-provider" className="text-sm font-semibold">
+                    VLM model
+                  </Label>
+                  <Select
+                    value={vlmProvider}
+                    onValueChange={(value: VlmProviderId) => {
+                      setVlmProvider(value);
+                      toolboxState.setVlmProvider(value);
+                    }}
+                  >
+                    <SelectTrigger id="vlm-provider" className="w-full">
+                      <SelectValue placeholder="Select model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="medGemma">MedGemma</SelectItem>
+                      <SelectItem value="gemini">Gemini</SelectItem>
+                      <SelectItem value="openai">OpenAI</SelectItem>
+                      <SelectItem value="claude">Claude</SelectItem>
+                      <SelectItem value="kimi">Kimi (HF)</SelectItem>
+                      <SelectItem value="qwen">Qwen (HF)</SelectItem>
+                      <SelectItem value="gemma">Gemma 4 (HF)</SelectItem>
+                      <SelectItem value="vllm">vLLM (OpenAI API)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
                   <Label htmlFor="medgemma-instruction" className="text-sm font-semibold">Instruction (Optional)</Label>
                   <textarea
                     id="medgemma-instruction"
@@ -525,21 +629,376 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
                     </div>
                   </div>
                 </div>
+                {vlmProvider === 'medGemma' && (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="medgemma-variant" className="text-sm font-semibold">
+                        MedGemma model
+                      </Label>
+                      <Select
+                        value={medgemmaVariant}
+                        onValueChange={value => {
+                          const v = value as MedgemmaVariantId;
+                          setMedgemmaVariant(v);
+                          toolboxState.setMedgemmaVariant(v);
+                        }}
+                      >
+                        <SelectTrigger id="medgemma-variant" className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1.5-4b">1.5-4B</SelectItem>
+                          <SelectItem value="27b">1-27b</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex justify-between items-center gap-4 py-1">
+                      <Label htmlFor="medgemma-thinking" className="text-sm font-semibold">
+                        Thinking
+                      </Label>
+                      <Switch
+                        id="medgemma-thinking"
+                        checked={medgemmaThinkingEnabled}
+                        onCheckedChange={checked => {
+                          setMedgemmaThinkingEnabled(checked);
+                          toolboxState.setMedgemmaThinkingEnabled(checked);
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+                {vlmProvider === 'gemini' && (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="gemini-model" className="text-sm font-semibold">
+                        Gemini model id (API)
+                      </Label>
+                      <Input
+                        id="gemini-model"
+                        type="text"
+                        value={geminiModel}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setGeminiModel(v);
+                          toolboxState.setGeminiModel(v);
+                        }}
+                        placeholder="e.g. gemini-3-flash-preview"
+                        className="text-sm bg-primary-dark border border-primary-main text-white"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="gemini-thinking-level" className="text-sm font-semibold">
+                        Thinking level (reasoning)
+                      </Label>
+                      <Select
+                        value={geminiThinkingLevel || 'default'}
+                        onValueChange={value => {
+                          const level =
+                            value === 'default' ? '' : (value as 'low' | 'medium' | 'high');
+                          setGeminiThinkingLevel(level);
+                          toolboxState.setGeminiThinkingLevel(level);
+                        }}
+                      >
+                        <SelectTrigger id="gemini-thinking-level" className="w-full">
+                          <SelectValue placeholder="Default" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="default">Default (omit)</SelectItem>
+                          <SelectItem value="low">low</SelectItem>
+                          <SelectItem value="medium">medium</SelectItem>
+                          <SelectItem value="high">high</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
+                {vlmProvider === 'openai' && (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="openai-model" className="text-sm font-semibold">
+                        OpenAI model id (API)
+                      </Label>
+                      <Input
+                        id="openai-model"
+                        type="text"
+                        value={openaiModel}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setOpenaiModel(v);
+                          toolboxState.setOpenaiModel(v);
+                        }}
+                        placeholder="e.g. gpt-5.4"
+                        className="text-sm bg-primary-dark border border-primary-main text-white"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="openai-reasoning-effort" className="text-sm font-semibold">
+                        Reasoning effort
+                      </Label>
+                      <Input
+                        id="openai-reasoning-effort"
+                        type="text"
+                        value={openaiReasoningEffort}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setOpenaiReasoningEffort(v);
+                          toolboxState.setOpenaiReasoningEffort(v);
+                        }}
+                        placeholder="none, low, medium, high (model-dependent)"
+                        className="text-sm bg-primary-dark border border-primary-main text-white"
+                      />
+                    </div>
+                  </>
+                )}
+                {vlmProvider === 'claude' && (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="claude-model" className="text-sm font-semibold">
+                        Claude model id (API)
+                      </Label>
+                      <Input
+                        id="claude-model"
+                        type="text"
+                        value={claudeModel}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setClaudeModel(v);
+                          toolboxState.setClaudeModel(v);
+                        }}
+                        placeholder="e.g. claude-sonnet-4-20250514"
+                        className="text-sm bg-primary-dark border border-primary-main text-white"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="claude-thinking-effort" className="text-sm font-semibold">
+                        Thinking effort (adaptive)
+                      </Label>
+                      <Select
+                        value={claudeThinkingEffort || 'default'}
+                        onValueChange={value => {
+                          const level =
+                            value === 'default'
+                              ? ''
+                              : (value as 'low' | 'medium' | 'high' | 'max');
+                          setClaudeThinkingEffort(level);
+                          toolboxState.setClaudeThinkingEffort(level);
+                        }}
+                      >
+                        <SelectTrigger id="claude-thinking-effort" className="w-full">
+                          <SelectValue placeholder="Default" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="default">Default (omit)</SelectItem>
+                          <SelectItem value="low">low</SelectItem>
+                          <SelectItem value="medium">medium</SelectItem>
+                          <SelectItem value="high">high</SelectItem>
+                          <SelectItem value="max">max</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
+                {vlmProvider === 'kimi' && (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="kimi-model" className="text-sm font-semibold">
+                        Kimi model id (HF)
+                      </Label>
+                      <Input
+                        id="kimi-model"
+                        type="text"
+                        value={kimiModel}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setKimiModel(v);
+                          toolboxState.setKimiModel(v);
+                        }}
+                        placeholder="e.g. moonshotai/Kimi-K2.5:novita"
+                        className="text-sm bg-primary-dark border border-primary-main text-white"
+                      />
+                    </div>
+                    <div className="flex justify-between items-center gap-4 py-1">
+                      <Label htmlFor="kimi-reasoning" className="text-sm font-semibold">
+                        Thinking
+                      </Label>
+                      <Switch
+                        id="kimi-reasoning"
+                        checked={kimiReasoningEnabled}
+                        onCheckedChange={checked => {
+                          setKimiReasoningEnabled(checked);
+                          toolboxState.setKimiReasoningEnabled(checked);
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+                {vlmProvider === 'qwen' && (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="qwen-model" className="text-sm font-semibold">
+                        Qwen model id (HF)
+                      </Label>
+                      <Input
+                        id="qwen-model"
+                        type="text"
+                        value={qwenModel}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setQwenModel(v);
+                          toolboxState.setQwenModel(v);
+                        }}
+                        placeholder="e.g. Qwen/Qwen3.5-397B-A17B:novita"
+                        className="text-sm bg-primary-dark border border-primary-main text-white"
+                      />
+                    </div>
+                    <div className="flex justify-between items-center gap-4 py-1">
+                      <Label htmlFor="qwen-thinking" className="text-sm font-semibold">
+                        Thinking
+                      </Label>
+                      <Switch
+                        id="qwen-thinking"
+                        checked={qwenThinkingEnabled}
+                        onCheckedChange={checked => {
+                          setQwenThinkingEnabled(checked);
+                          toolboxState.setQwenThinkingEnabled(checked);
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+                {vlmProvider === 'gemma' && (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="gemma-model" className="text-sm font-semibold">
+                        Gemma model id (HF)
+                      </Label>
+                      <Input
+                        id="gemma-model"
+                        type="text"
+                        value={gemmaModel}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setGemmaModel(v);
+                          toolboxState.setGemmaModel(v);
+                        }}
+                        placeholder="e.g. google/gemma-4-31B-it:novita"
+                        className="text-sm bg-primary-dark border border-primary-main text-white"
+                      />
+                    </div>
+                    <div className="flex justify-between items-center gap-4 py-1">
+                      <Label htmlFor="gemma-thinking" className="text-sm font-semibold">
+                        Thinking
+                      </Label>
+                      <Switch
+                        id="gemma-thinking"
+                        checked={gemmaThinkingEnabled}
+                        onCheckedChange={checked => {
+                          setGemmaThinkingEnabled(checked);
+                          toolboxState.setGemmaThinkingEnabled(checked);
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+                {vlmProvider === 'vllm' && (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="vllm-base-url" className="text-sm font-semibold">
+                        vLLM base URL (OpenAI-compatible, include /v1)
+                      </Label>
+                      <Input
+                        id="vllm-base-url"
+                        type="text"
+                        value={vllmBaseUrl}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setVllmBaseUrl(v);
+                          toolboxState.setVllmBaseUrl(v);
+                        }}
+                        placeholder="http://host.docker.internal:8000/v1"
+                        className="text-sm bg-primary-dark border border-primary-main text-white"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="vllm-family" className="text-sm font-semibold">
+                        Model family (optional)
+                      </Label>
+                      <Select
+                        value={vllmFamily || 'auto'}
+                        onValueChange={value => {
+                          const fam = value === 'auto' ? '' : (value as VllmFamilyId);
+                          setVllmFamily(fam);
+                          toolboxState.setVllmFamily(fam);
+                        }}
+                      >
+                        <SelectTrigger id="vllm-family" className="w-full">
+                          <SelectValue placeholder="Auto from model id" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="auto">Auto (from first model id)</SelectItem>
+                          <SelectItem value="internvl">InternVL</SelectItem>
+                          <SelectItem value="qwen">Qwen</SelectItem>
+                          <SelectItem value="kimi">Kimi</SelectItem>
+                          <SelectItem value="gemma">Gemma</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="vllm-thinking-level" className="text-sm font-semibold">
+                        Thinking
+                      </Label>
+                      <Select
+                        value={vllmThinkingLevel}
+                        onValueChange={value => {
+                          const level = value as VllmThinkingLevel;
+                          setVllmThinkingLevel(level);
+                          toolboxState.setVllmThinkingLevel(level);
+                        }}
+                      >
+                        <SelectTrigger id="vllm-thinking-level" className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="off">Off</SelectItem>
+                          <SelectItem value="on">On</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
                 <Button
                   variant="default"
                   size="sm"
                   onClick={() => {
-                    commandsManager?.run('testMedgemma', { 
-                      instruction: medgemmaInstruction, 
+                    commandsManager?.run('testVlm', {
+                      vlmProvider,
+                      instruction: medgemmaInstruction,
                       query: medgemmaQuery,
                       startSlice: medgemmaStartSlice,
-                      endSlice: medgemmaEndSlice
+                      endSlice: medgemmaEndSlice,
+                      medgemmaVariant,
+                      medgemmaThinkingEnabled,
+                      geminiModel: geminiModel?.trim() || undefined,
+                      geminiThinkingLevel,
+                      openaiModel: openaiModel?.trim() || undefined,
+                      openaiReasoningEffort: openaiReasoningEffort?.trim() || undefined,
+                      claudeModel: claudeModel?.trim() || undefined,
+                      claudeThinkingEffort,
+                      kimiModel: kimiModel?.trim() || undefined,
+                      kimiReasoningEnabled,
+                      qwenModel: qwenModel?.trim() || undefined,
+                      qwenThinkingEnabled,
+                      gemmaModel: gemmaModel?.trim() || undefined,
+                      gemmaThinkingEnabled,
+                      vllmBaseUrl: vllmBaseUrl?.trim() || undefined,
+                      vllmFamily,
+                      vllmThinkingLevel,
                     });
                   }}
                   disabled={!medgemmaQuery || medgemmaQuery.trim() === ''}
                   className="w-full"
                 >
-                  Run Medgemma
+                  Run
                 </Button>
                 {medgemmaResult && (
                   <div className="flex flex-col gap-2 mt-2">
