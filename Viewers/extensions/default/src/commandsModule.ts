@@ -1137,7 +1137,9 @@ const commandsModule = ({
               const scalarData = voxelManager.getScalarData();
               const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
               if (sliceData.some(v => v === 1)){
-                voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
+                voxelManager.setScalarData(sliceData.map((v, idx) =>
+                  v === 1 ? segmentNumber : (scalarData[idx] === segmentNumber ? 0 : scalarData[idx])
+                ));
                 if (flipped) {
                   z_range.push(merged_derivedImages.length - i - 1);
                 } else {
@@ -2360,7 +2362,9 @@ const commandsModule = ({
               const scalarData = voxelManager.getScalarData();
               const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
               if (sliceData.some(v => v === 1)){
-                voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
+                voxelManager.setScalarData(sliceData.map((v, idx) =>
+                  v === 1 ? segmentNumber : (scalarData[idx] === segmentNumber ? 0 : scalarData[idx])
+                ));
                 if (flipped) {
                   z_range.push(merged_derivedImages.length - i - 1);
                 } else {
