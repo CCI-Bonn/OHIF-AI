@@ -1635,7 +1635,31 @@ class BasicInferTask(InferTask):
                     except Exception as reset_error:
                         logger.error(f"Failed to reset session: {reset_error}")
                     return False
-            
+
+            # Refine mode: seed target buffer from the existing loaded mask on the first call
+            if data.get("init_mask") and data.get("label"):
+                try:
+                    label_path = str(data["label"])
+                    if os.path.exists(label_path):
+                        mask_np = np.fromfile(label_path, dtype=np.uint8)
+                        z, y, x = img_np.shape[1], img_np.shape[2], img_np.shape[3]
+                        if mask_np.size == z * y * x:
+                            mask_np = mask_np.reshape((z, y, x))  # C-order: z outer, x inner
+                            if (instanceNumber is not None and instanceNumber2 is not None
+                                    and instanceNumber > instanceNumber2):
+                                mask_np = np.flip(mask_np, axis=0).copy()
+                            session.set_target_buffer(
+                                torch.from_numpy(mask_np).to(torch.uint8)
+                            )
+                            logger.info("Initialised target buffer from existing mask (Refine mode)")
+                        else:
+                            logger.warning(
+                                f"init_mask size mismatch: got {mask_np.size}, "
+                                f"expected {z}x{y}x{x}={z * y * x}"
+                            )
+                except Exception as _e:
+                    logger.warning(f"Failed to apply init_mask: {_e}")
+
             if len(data['pos_points'])!=0:
                 result_json["pos_points"]=copy.deepcopy(data["pos_points"])
                 

@@ -1134,14 +1134,8 @@ const commandsModule = ({
             for (let i = 0; i < merged_derivedImages.length; i++) {
               const voxelManager = merged_derivedImages[i]
                 .voxelManager as csTypes.IVoxelManager<number>;
-              let scalarData = voxelManager.getScalarData();
+              const scalarData = voxelManager.getScalarData();
               const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
-              if (!toolboxState.getRefineNew()){
-                if (scalarData.some(v => v === segmentNumber)){
-                  voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
-                  scalarData = voxelManager.getScalarData();
-                }
-              }
               if (sliceData.some(v => v === 1)){
                 voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
                 if (flipped) {
@@ -1162,7 +1156,7 @@ const commandsModule = ({
           console.log(`Just after derivedImageIds: ${(Date.now() - start)/1000} Seconds`);
           segments[segmentNumber] = {
             segmentIndex: segmentNumber,
-            label: label_name,
+            label: existingSegments[segmentNumber]?.label || label_name,
             locked: false,
             active: false,
             cachedStats: {
@@ -1321,6 +1315,7 @@ const commandsModule = ({
           if (options.clearMeasurements) {
             commandsManager.run('clearMeasurements')
           }
+          toolboxState.clearCurrentActiveSegment();
           return response;
         }
       } catch (error) {
@@ -1926,6 +1921,7 @@ const commandsModule = ({
       let segmentNumber = 1;
       let segments: { [segmentIndex: string]: cstTypes.Segment } = {};
       let segmentationId = `${csUtils.uuidv4()}`
+      let isFirstCallForSegment = false;
       if (activeSegmentation !== undefined){
         segments = activeSegmentation.segments;
       if (Object.values(segments).length > 0) {
@@ -1949,7 +1945,8 @@ const commandsModule = ({
               e.metadata.segmentationId = activeSegmentation.segmentationId;
             }
             segmentNumber = activeSegment.segmentIndex;
-            if (toolboxState.getCurrentActiveSegment() !== segmentNumber){
+            isFirstCallForSegment = toolboxState.getCurrentActiveSegment() !== segmentNumber;
+            if (isFirstCallForSegment){
               await commandsManager.run('resetNninter');
               toolboxState.setCurrentActiveSegment(segmentNumber);
             }
@@ -2088,8 +2085,40 @@ const commandsModule = ({
         document.dispatchEvent(event);
       }, 200);
 
+      // Collect existing segment imageIds before API call for Refine-mode init_mask.
+      // The labelmap may have multiple groups of ctSliceCount imageIds (e.g. DICOM-SEG stores
+      // one group per segment).  We search for the group that contains pixels for segmentNumber,
+      // sampling a few slices per group to keep it fast.
+      let initMaskSegImageIds: string[] = [];
+      if (!toolboxState.getRefineNew() && activeSegmentation !== undefined) {
+        const ids = activeSegmentation.representationData?.Labelmap?.imageIds;
+        const ctSliceCount = currentDisplaySets.imageIds?.length ?? 0;
+        if (ids && ctSliceCount > 0 && ids.length >= ctSliceCount) {
+          const numGroups = Math.floor(ids.length / ctSliceCount);
+          const probeSlices = [
+            Math.floor(ctSliceCount * 0.25),
+            Math.floor(ctSliceCount * 0.5),
+            Math.floor(ctSliceCount * 0.75),
+          ];
+          for (let g = 0; g < numGroups; g++) {
+            const group = ids.slice(g * ctSliceCount, (g + 1) * ctSliceCount);
+            let found = false;
+            for (const si of probeSlices) {
+              const img = cache.getImage(group[si]);
+              if (!img) continue;
+              const sd = img.voxelManager.getScalarData();
+              for (let j = 0; j < sd.length; j++) {
+                if (sd[j] === segmentNumber) { found = true; break; }
+              }
+              if (found) break;
+            }
+            if (found) { initMaskSegImageIds = group; break; }
+          }
+        }
+      }
+
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
-      let params = {
+      let params: Record<string, any> = {
         largest_cc: false,
       //  device: response.data.trainers.segmentation.config.device,
         result_extension: '.nii.gz',
@@ -2109,7 +2138,34 @@ const commandsModule = ({
         nninter: true,
       };
 
-      let data = MonaiLabelClient.constructFormData(params, null);
+      // In Refine mode, send the existing segment mask on the first call so the AI starts
+      // from the loaded segmentation instead of a blank target buffer.
+      let labelFile = null;
+      if (isFirstCallForSegment && initMaskSegImageIds.length > 0) {
+        const existingImages = initMaskSegImageIds.map(id => cache.getImage(id)).filter(Boolean);
+        console.log(`[init_mask] isFirstCallForSegment=${isFirstCallForSegment}, imageIds=${initMaskSegImageIds.length}, cached=${existingImages.length}, segmentNumber=${segmentNumber}`);
+        if (existingImages.length > 0) {
+          const sliceSize = existingImages[0].voxelManager.getScalarData().length;
+          const maskBuffer = new Uint8Array(existingImages.length * sliceSize);
+          let nonZeroCount = 0;
+          for (let i = 0; i < existingImages.length; i++) {
+            const scalarData = existingImages[i].voxelManager.getScalarData();
+            const offset = i * sliceSize;
+            for (let j = 0; j < sliceSize; j++) {
+              if (scalarData[j] === segmentNumber) { maskBuffer[offset + j] = 1; nonZeroCount++; }
+            }
+          }
+          console.log(`[init_mask] built binary mask: ${nonZeroCount} foreground voxels out of ${maskBuffer.length}`);
+          params.init_mask = true;
+          labelFile = { name: 'label', data: new Blob([maskBuffer]), fileName: 'init_mask.raw' };
+        } else {
+          console.warn('[init_mask] no cached images found for labelmap imageIds — mask not sent');
+        }
+      } else {
+        console.log(`[init_mask] skipped: isFirstCallForSegment=${isFirstCallForSegment}, initMaskSegImageIds.length=${initMaskSegImageIds.length}`);
+      }
+
+      let data = MonaiLabelClient.constructFormData(params, labelFile);
 
       
       const beforePost = Date.now();
@@ -2301,14 +2357,8 @@ const commandsModule = ({
             for (let i = 0; i < merged_derivedImages.length; i++) {
               const voxelManager = merged_derivedImages[i]
                 .voxelManager as csTypes.IVoxelManager<number>;
-              let scalarData = voxelManager.getScalarData();
+              const scalarData = voxelManager.getScalarData();
               const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
-              if (!toolboxState.getRefineNew()){
-                if (scalarData.some(v => v === segmentNumber)){
-                  voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
-                  scalarData = voxelManager.getScalarData();
-                }
-              }
               if (sliceData.some(v => v === 1)){
                 voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
                 if (flipped) {
@@ -2331,7 +2381,7 @@ const commandsModule = ({
           console.log(`Just after derivedImageIds: ${(Date.now() - start)/1000} Seconds`);
           segments[segmentNumber] = {
             segmentIndex: segmentNumber,
-            label: label_name,
+            label: existingSegments[segmentNumber]?.label || label_name,
             locked: false,
             active: false,
             cachedStats: {
