@@ -266,6 +266,9 @@ export default class ToolbarService extends PubSubService {
         };
       } else {
         let buttonProps = button.props as NestedButtonProps;
+        
+        this.handleEvaluate(buttonProps);
+        
         const { evaluate: groupEvaluate } = buttonProps;
         const groupEvaluated =
           typeof groupEvaluate === 'function'
@@ -286,6 +289,9 @@ export default class ToolbarService extends PubSubService {
 
         toolButtonIds.forEach(buttonId => {
           const button = buttons[buttonId];
+          
+          this.handleEvaluate(button.props);
+          
           const updatedProps = evaluateButtonProps(button, button.props, refreshProps);
           buttons[buttonId] = {
             ...button,

@@ -61,6 +61,9 @@
       "packageName": "@ohif/extension-cornerstone-dicom-rt",
       "default": false,
       "version": "3.0.0"
+    },
+    {
+      "packageName": "@ohif/extension-pancrea-seg"
     }
   ],
   "modes": [
@@ -88,6 +91,9 @@
       "packageName": "@ohif/mode-basic-dev-mode",
       "default": false,
       "version": "3.0.0"
+    },
+    {
+      "packageName": "@ohif/mode-pancreas"
     }
   ],
   "public": [

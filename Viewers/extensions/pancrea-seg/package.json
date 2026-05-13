@@ -1,0 +1,30 @@
+{
+  "name": "@ohif/extension-pancrea-seg",
+  "version": "3.13.0-beta.37",
+  "description": "OHIF extension for pancreas tumor-vessel contact angle analysis",
+  "author": "PancreaSeg",
+  "license": "MIT",
+  "main": "dist/ohif-extension-pancrea-seg.umd.js",
+  "module": "src/index.tsx",
+  "engines": {
+    "node": ">=14",
+    "npm": ">=6",
+    "yarn": ">=1.16.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "shx rm -rf dist",
+    "clean:deep": "yarn run clean && shx rm -rf node_modules"
+  },
+  "peerDependencies": {
+    "@ohif/core": "3.13.0-beta.37",
+    "@ohif/ui": "3.13.0-beta.37",
+    "react": "18.3.1"
+  },
+  "dependencies": {
+    "@babel/runtime": "7.28.2"
+  }
+}

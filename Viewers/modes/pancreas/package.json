@@ -1,0 +1,28 @@
+{
+  "name": "@ohif/mode-pancreas",
+  "version": "3.13.0-beta.37",
+  "description": "OHIF mode for pancreas tumor-vessel contact angle analysis",
+  "author": "PancreaSeg",
+  "license": "MIT",
+  "main": "dist/umd/@ohif/mode-pancreas/index.umd.js",
+  "module": "src/index.ts",
+  "keywords": [
+    "ohif-mode"
+  ],
+  "repository": "OHIF/Viewers",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=14",
+    "npm": ">=7",
+    "yarn": ">=1.16.0"
+  },
+  "scripts": {
+    "clean": "shx rm -rf dist",
+    "clean:deep": "yarn run clean && shx rm -rf node_modules"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.20.13"
+  }
+}

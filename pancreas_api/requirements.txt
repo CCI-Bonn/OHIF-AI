@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+numpy==2.2.3
+scikit-image==0.25.2
+pydicom==3.0.1
+highdicom==0.25.1
+pydantic==2.10.6
