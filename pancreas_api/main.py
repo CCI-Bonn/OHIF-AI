@@ -100,9 +100,12 @@ async def contact_angle(req: AngleRequest):
 
     results: list[VesselResult] = []
     for vessel_id in req.vessel_seg_ids:
-        vessel_vol, vessel_spacing, _ = await load_seg_volume(vessel_id)
+        vessel_vol, vessel_spacing, vessel_z_positions = await load_seg_volume(vessel_id)
 
-        per_slice = compute_per_slice_angles(tumor_vol, vessel_vol, vessel_spacing, tumor_z_positions)
+        per_slice = compute_per_slice_angles(
+            tumor_vol, vessel_vol, vessel_spacing, tumor_z_positions,
+            vessel_z_positions=vessel_z_positions,
+        )
         if not per_slice:
             log.warning("No contact found for vessel %s", vessel_id)
             continue
@@ -234,17 +237,36 @@ def compute_per_slice_angles(
     spacing_yx: tuple[float, float],
     z_positions: list[float],
     contact_eps_px: float = 0.5,
+    vessel_z_positions: list[float] | None = None,
 ) -> list[PerSliceAngle]:
     """
     Iterate over axial slices (axis 0 = Z) and compute the contact angle.
-    Returns only slices where the vessel is present.
+    Returns only slices where both vessel and tumor are present.
+
+    When vessel_z_positions is provided, slices are matched by physical Z
+    coordinate so that tumor and vessel from different DICOM-SEG files with
+    different Z extents are correctly aligned.  sliceIndex in PerSliceAngle
+    always uses the tumor's Z index for frontend slice navigation.
     """
-    z_slices = max(tumor_vol.shape[0], vessel_vol.shape[0])
     per_slice: list[PerSliceAngle] = []
 
-    for z in range(z_slices):
-        t_slice = tumor_vol[z].astype(np.uint8) if z < tumor_vol.shape[0] else np.zeros_like(vessel_vol[0])
-        v_slice = vessel_vol[z].astype(np.uint8) if z < vessel_vol.shape[0] else np.zeros_like(tumor_vol[0])
+    if vessel_z_positions is not None and z_positions:
+        tumor_z_map = {round(z, 2): i for i, z in enumerate(z_positions)}
+        slice_pairs: list[tuple[int, int, float]] = []
+        for v_idx, vz in enumerate(vessel_z_positions):
+            t_idx = tumor_z_map.get(round(vz, 2))
+            if t_idx is not None:
+                slice_pairs.append((t_idx, v_idx, float(vz)))
+    else:
+        z_slices = max(tumor_vol.shape[0], vessel_vol.shape[0])
+        slice_pairs = [
+            (z, z, z_positions[z] if z < len(z_positions) else 0.0)
+            for z in range(z_slices)
+        ]
+
+    for t_idx, v_idx, z_mm in slice_pairs:
+        t_slice = tumor_vol[t_idx].astype(np.uint8) if t_idx < tumor_vol.shape[0] else np.zeros(vessel_vol.shape[1:], dtype=np.uint8)
+        v_slice = vessel_vol[v_idx].astype(np.uint8) if v_idx < vessel_vol.shape[0] else np.zeros(tumor_vol.shape[1:], dtype=np.uint8)
 
         if not v_slice.any() or not t_slice.any():
             continue
@@ -292,14 +314,14 @@ def compute_per_slice_angles(
         tumor_poly = approximate_polygon(tumor_c, tolerance=0.5)
 
         log.info(
-            "slice z=%d  angle=%.1f°  vessel_perim=%.2fmm  tumor_perim=%.2fmm  contact_arc=%.2fmm  runs=%d eps=%.2fpx",
-            z, theta, C, T, s, len(arc_runs), contact_eps_px,
+            "slice t_idx=%d v_idx=%d z=%.2fmm  angle=%.1f°  vessel_perim=%.2fmm  tumor_perim=%.2fmm  contact_arc=%.2fmm  runs=%d eps=%.2fpx",
+            t_idx, v_idx, z_mm, theta, C, T, s, len(arc_runs), contact_eps_px,
         )
 
         per_slice.append(
             PerSliceAngle(
-                sliceIndex=z,
-                zPositionMm=z_positions[z] if z < len(z_positions) else 0.0,
+                sliceIndex=t_idx,
+                zPositionMm=z_mm,
                 angleDegrees=round(theta, 2),
                 vesselPerimeterMm=round(C, 3),
                 tumorPerimeterMm=round(T, 3),
@@ -311,28 +333,6 @@ def compute_per_slice_angles(
         )
 
     return per_slice
-
-
-def contour_arc_length_mm(
-    contour: np.ndarray,
-    spacing_yx: tuple[float, float],
-    closed: bool = False,
-) -> float:
-    """
-    Cumulative arc length of a contour scaled by pixel spacing (mm).
-    contour: (N, 2) array of (row, col) pixel coordinates.
-    spacing_yx: (row_spacing_mm, col_spacing_mm)
-    """
-    if len(contour) < 2:
-        return 0.0
-
-    pts = contour
-    if closed:
-        pts = np.vstack([pts, pts[0]])
-
-    diffs = np.diff(pts, axis=0)
-    diffs_mm = diffs * np.array(spacing_yx, dtype=float)
-    return float(np.sum(np.linalg.norm(diffs_mm, axis=1)))
 
 
 # ---------------------------------------------------------------------------
@@ -472,17 +472,23 @@ async def _load_seg_volume(series_or_instance_uid: str, segment_index: int | Non
 
     except Exception as exc:
         log.warning("Could not load DICOM-SEG from Orthanc (%s), using phantom: %s", series_or_instance_uid, exc)
-        phantom = _synthetic_phantom()
+        phantom = _synthetic_phantom(series_or_instance_uid)
         return phantom, (1.0, 1.0), list(range(phantom.shape[0]))
 
 
-def _synthetic_phantom() -> np.ndarray:
+def _synthetic_phantom(uid: str = "") -> np.ndarray:
     """
     Generates a synthetic binary volume for development/testing.
-    Returns a 50-slice volume with a circular object.
+    The circle position and radius are seeded from the UID hash so that
+    different UIDs produce non-overlapping phantoms, preventing the
+    spurious 360° contact angle that arises when tumor == vessel.
     """
+    seed = abs(hash(uid)) % (2 ** 32)
+    rng = np.random.default_rng(seed)
+    cy = int(rng.integers(40, 89))
+    cx = int(rng.integers(40, 89))
+    r  = int(rng.integers(10, 26))
     vol = np.zeros((50, 128, 128), dtype=np.uint8)
-    cy, cx, r = 64, 64, 20
     y, x = np.ogrid[:128, :128]
     circle = (y - cy) ** 2 + (x - cx) ** 2 <= r ** 2
     vol[15:35] = circle

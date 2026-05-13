@@ -142,6 +142,8 @@ monai-label/*.cover
 monai-label/*.py,cover
 monai-label/.hypothesis/
 monai-label/.pytest_cache/
+.claude/*
+CLAUDE.md
 
 # Translations
 monai-label/*.mo
