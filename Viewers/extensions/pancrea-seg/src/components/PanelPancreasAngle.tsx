@@ -326,39 +326,6 @@ export function PanelPancreasAngle({ commandsManager, servicesManager }: Props) 
         Pancreas Contact Angles
       </h2>
 
-      {/* Unsaved segmentations warning */}
-      {hasUnsaved && (
-        <div
-          style={{
-            background: '#451a03',
-            border: '1px solid #92400e',
-            borderRadius: '4px',
-            padding: '8px 10px',
-          }}
-        >
-          <p style={{ margin: '0 0 6px', color: '#fbbf24', fontSize: '12px' }}>
-            {unsavedSegmentationIds.length} segmentation(s) not saved to the server.
-            Angle computation requires saved segmentations.
-          </p>
-          <button
-            onClick={handleSaveAll}
-            disabled={saving}
-            style={{
-              padding: '5px 10px',
-              background: saving ? '#78350f' : '#b45309',
-              color: saving ? '#92400e' : '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              fontSize: '12px',
-              fontWeight: 500,
-              cursor: saving ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {saving ? 'Saving...' : 'Save All to Server'}
-          </button>
-        </div>
-      )}
-
       {/* Tumor selector */}
       <div>
         <label style={{ display: 'block', marginBottom: '4px', color: '#94a3b8', fontSize: '11px' }}>
