@@ -214,16 +214,16 @@ async function _loadSegments({
     }
   });
 
-  if (!usedRecommendedDisplayCIELabValue) {
-    // Display a notification about the non-utilization of RecommendedDisplayCIELabValue
-    uiNotificationService.show({
-      title: 'DICOM SEG import',
-      message:
-        'RecommendedDisplayCIELabValue not found for one or more segments. The default color was used instead.',
-      type: 'warning',
-      duration: 5000,
-    });
-  }
+  // if (!usedRecommendedDisplayCIELabValue) {
+  //   // Display a notification about the non-utilization of RecommendedDisplayCIELabValue
+  //   uiNotificationService.show({
+  //     title: 'DICOM SEG import',
+  //     message:
+  //       'RecommendedDisplayCIELabValue not found for one or more segments. The default color was used instead.',
+  //     type: 'warning',
+  //     duration: 5000,
+  //   });
+  // }
 
   Object.assign(segDisplaySet, results);
 }

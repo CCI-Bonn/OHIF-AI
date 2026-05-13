@@ -1,6 +1,7 @@
 import { Types } from '@ohif/core';
 import getPanelModule from './getPanelModule';
 import getCommandsModule from './getCommandsModule';
+import getCustomizationModule from './getCustomizationModule';
 import PancreasAngleService from './services/PancreasAngleService';
 
 const extension = {
@@ -15,6 +16,8 @@ const extension = {
   },
 
   getPanelModule,
+
+  getCustomizationModule,
 
   getCommandsModule({ servicesManager, commandsManager }: Types.Extensions.ExtensionParams) {
     return getCommandsModule({ servicesManager, commandsManager });

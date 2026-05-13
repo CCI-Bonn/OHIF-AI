@@ -881,23 +881,26 @@ const commandsModule = ({
           return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => {
-          return Object.values(e.data)[0].index;
-        });
+          return Object.values(e.data)[0]?.index;
+        })
+        .filter(index => index !== undefined);
       const neg_points = currentMeasurements
         .filter(e => {
           return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => {
-          return Object.values(e.data)[0].index;
-        });
+          return Object.values(e.data)[0]?.index;
+        })
+        .filter(index => index !== undefined);
 
       const pos_boxes = currentMeasurements
         .filter(e => { 
           return e.toolName === 'RectangleROI2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => { 
-          return Object.values(e.data)[0].pointsInShape 
+          return Object.values(e.data)[0]?.pointsInShape 
         })
+        .filter(e => e && e.length > 0)
         .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
 
 
@@ -1990,23 +1993,27 @@ const commandsModule = ({
           return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => {
-          return Object.values(e.data)[0].index;
-        });
+          return Object.values(e.data)[0]?.index;
+        })
+        .filter(index => index !== undefined);
+
       const neg_points = currentMeasurements
         .filter(e => {
           return e.toolName === 'Probe2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => {
-          return Object.values(e.data)[0].index;
-        });
+          return Object.values(e.data)[0]?.index;
+        })
+        .filter(index => index !== undefined);
 
       const pos_boxes = currentMeasurements
         .filter(e => { 
           return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
         })
         .map(e => { 
-          return Object.values(e.data)[0].pointsInShape 
+          return Object.values(e.data)[0]?.pointsInShape 
         })
+        .filter(e => e && e.length > 0)
         .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
 
       const neg_boxes = currentMeasurements
@@ -2014,8 +2021,9 @@ const commandsModule = ({
         return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
       })
       .map(e => { 
-        return Object.values(e.data)[0].pointsInShape 
+        return Object.values(e.data)[0]?.pointsInShape 
       })
+      .filter(e => e && e.length > 0)
       .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
 
       const pos_lassos = currentMeasurements

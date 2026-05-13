@@ -31,6 +31,10 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     'panelSegmentation.customSegmentStatisticsHeader'
   );
 
+  const AfterContent = customizationService.getCustomization(
+    'panelSegmentation.afterContent'
+  ) as React.ComponentType | null;
+
   // Create handlers object for all command runs
   const handlers = {
     onSegmentationClick: (segmentationId: string) => {
@@ -246,11 +250,16 @@ export default function PanelSegmentation({ children }: withAppTypes) {
   };
 
   return (
-    <SegmentationTable {...tableProps}>
-      {children}
-      <SegmentationTable.Config />
-      <SegmentationTable.AddSegmentationRow />
-      {renderModeContent()}
-    </SegmentationTable>
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="max-h-[350px] overflow-y-auto pb-10">
+        <SegmentationTable {...tableProps}>
+          {children}
+          <SegmentationTable.Config />
+          <SegmentationTable.AddSegmentationRow />
+          {renderModeContent()}
+        </SegmentationTable>
+      </div>
+      {AfterContent && <AfterContent />}
+    </div>
   );
 }

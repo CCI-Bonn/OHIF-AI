@@ -34,7 +34,7 @@ export const PanelSection: React.FC<PanelSectionProps> & {
       type="single"
       collapsible
       defaultValue={defaultOpen ? 'item' : undefined}
-      className={cn('flex-shrink-0 overflow-hidden', className)}
+      className={cn('flex-shrink-0 overflow-clip', className)}
     >
       <AccordionItem
         value="item"
@@ -50,6 +50,7 @@ PanelSection.Header = ({ children, className }) => (
   <AccordionTrigger
     className={cn(
       'bg-secondary-dark hover:bg-accent text-aqua-pale',
+      'sticky top-0 z-10',
       'my-0.5 flex h-7 w-full items-center justify-between rounded py-2 pr-1 pl-2.5 text-[13px]',
       className
     )}

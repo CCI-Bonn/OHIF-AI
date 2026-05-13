@@ -208,7 +208,7 @@ export function PanelPancreasAngle({ commandsManager, servicesManager }: Props) 
 
     for (const segId of unsavedSegmentationIds) {
       try {
-        const report = await commandsManager.runCommand('storeSegmentation', { segmentationId: segId });
+        const report = await commandsManager.runCommand('storeSegmentationSilent', { segmentationId: segId });
         if (report?.SeriesInstanceUID) {
           newMap[segId] = report.SeriesInstanceUID;
         }

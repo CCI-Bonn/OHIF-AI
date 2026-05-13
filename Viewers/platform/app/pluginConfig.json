@@ -71,6 +71,9 @@
       "packageName": "@ohif/mode-longitudinal"
     },
     {
+      "packageName": "@ohif/mode-pancreas"
+    },
+    {
       "packageName": "@ohif/mode-segmentation"
     },
     {
@@ -91,9 +94,6 @@
       "packageName": "@ohif/mode-basic-dev-mode",
       "default": false,
       "version": "3.0.0"
-    },
-    {
-      "packageName": "@ohif/mode-pancreas"
     }
   ],
   "public": [

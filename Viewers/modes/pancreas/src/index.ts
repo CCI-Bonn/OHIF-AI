@@ -24,9 +24,6 @@ const dicomRT = {
   sopClassHandler: '@ohif/extension-cornerstone-dicom-rt.sopClassHandlerModule.dicom-rt',
 };
 
-const pancreasExt = {
-  panel: '@ohif/extension-pancrea-seg.panelModule.panelPancreasAngle',
-};
 
 const extensionDependencies = {
   '@ohif/extension-default': '^3.0.0',
@@ -134,7 +131,7 @@ function modeFactory({ modeConfiguration }) {
           props: {
             leftPanels: [ohif.thumbnailList],
             leftPanelResizable: true,
-            rightPanels: [pancreasExt.panel, cornerstone.segmentation],
+            rightPanels: [cornerstone.segmentation],
             rightPanelResizable: true,
             viewports: [
               {
