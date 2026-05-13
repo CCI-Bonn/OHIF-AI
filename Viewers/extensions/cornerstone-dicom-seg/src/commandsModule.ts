@@ -330,6 +330,35 @@ const commandsModule = ({
       }
     },
     /**
+     * Stores a segmentation without showing a dialog — uses the segmentation
+     * label as SeriesDescription and the active data source.  Useful for
+     * programmatic saves (e.g. auto-save before angle computation).
+     */
+    storeSegmentationSilent: async ({ segmentationId }) => {
+      const segmentation = segmentationService.getSegmentation(segmentationId);
+      if (!segmentation) throw new Error('No segmentation found');
+
+      const defaultDataSource = extensionManager.getActiveDataSource();
+      let dataSourceConfig = defaultDataSource;
+      if ((dataSourceConfig as any).store === undefined) {
+        dataSourceConfig = (dataSourceConfig as any)[0];
+      }
+
+      const generatedData = await actions.generateSegmentation({
+        segmentationId,
+        options: { SeriesDescription: segmentation.label || 'AI Segmentation' },
+      });
+
+      if (!generatedData?.dataset) throw new Error('Error generating segmentation');
+
+      const { dataset: naturalizedReport } = generatedData;
+      await (dataSourceConfig as any).store.dicom(naturalizedReport);
+      naturalizedReport.wadoRoot = (dataSourceConfig as any).getConfig().wadoRoot;
+      DicomMetadataStore.addInstances([naturalizedReport], true);
+
+      return naturalizedReport;
+    },
+    /**
      * Converts segmentations into RTSS for download.
      * This sample function retrieves all segentations and passes to
      * cornerstone tool adapter to convert to DICOM RTSS format. It then
@@ -381,6 +410,9 @@ const commandsModule = ({
     },
     storeSegmentation: {
       commandFn: actions.storeSegmentation,
+    },
+    storeSegmentationSilent: {
+      commandFn: actions.storeSegmentationSilent,
     },
     downloadRTSS: {
       commandFn: actions.downloadRTSS,

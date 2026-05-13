@@ -84,6 +84,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     pancreasAngleService,
     cornerstoneViewportService,
     uiNotificationService,
+    segmentationService,
+    displaySetService,
   } = servicesManager.services as any;
 
   return {
@@ -113,10 +115,50 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
           pancreasAngleService.setLoading(true);
 
+          // Auto-save any in-memory (unsaved) segments before hitting the backend.
+          // A segment is unsaved when its segmentationId (the key prefix) resolves
+          // in segmentationService but has no DICOM display-set backing.
+          const allKeys = [tumorSegmentationId, ...vesselSegmentations.map(v => v.id)];
+          const uniqueSegIds = [...new Set(allKeys.map(k => {
+            const sep = k.lastIndexOf('::');
+            return sep !== -1 ? k.slice(0, sep) : k;
+          }))];
+
+          const seriesUIDOverrides: Record<string, string> = {};
+
+          for (const segId of uniqueSegIds) {
+            // Only auto-save if this ID is a known CornerstoneJS segmentationId
+            // (in-memory segs) and it has no DICOM display set backing.
+            const seg = segmentationService?.getSegmentation?.(segId);
+            if (!seg) continue; // segId is a SeriesUID or unknown — already saved
+            const ds = displaySetService?.getDisplaySetByUID?.(segId);
+            if (ds?.SeriesInstanceUID) continue; // already DICOM-backed
+            try {
+              const report = await commandsManager.runCommand('storeSegmentationSilent', { segmentationId: segId });
+              if (report?.SeriesInstanceUID) {
+                seriesUIDOverrides[segId] = report.SeriesInstanceUID;
+              }
+            } catch (e) {
+              console.warn('[PancreaSeg] Auto-save failed for', segId, e);
+            }
+          }
+
+          // Remap keys if any segments were auto-saved
+          const remap = (key: string): string => {
+            const sep = key.lastIndexOf('::');
+            if (sep === -1) return key;
+            const segId = key.slice(0, sep);
+            const idx = key.slice(sep + 2);
+            return seriesUIDOverrides[segId] ? `${seriesUIDOverrides[segId]}::${idx}` : key;
+          };
+
+          const remappedTumorId = remap(tumorSegmentationId);
+          const remappedVessels = vesselSegmentations.map(v => ({ ...v, id: remap(v.id) }));
+
           try {
             const results = await computeContactAngle({
-              tumorSegmentationId,
-              vesselSegmentations,
+              tumorSegmentationId: remappedTumorId,
+              vesselSegmentations: remappedVessels,
               studyInstanceUID,
               apiBaseUrl: PANCREAS_API_BASE,
             });
