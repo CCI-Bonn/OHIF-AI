@@ -2163,25 +2163,36 @@ const commandsModule = ({
             let segImageIds = [];
 
             let existing = false;
-            // Find existing segmentation with matching seriesInstanceUid
             if (activeSegmentation !== undefined){
-              let existingseriesInstanceUid = activeSegmentation.cachedStats?.seriesInstanceUid;
-              
-              if (existingseriesInstanceUid === undefined) {
-                const segments = Object.values(activeSegmentation.segments);
-                for (let j = 0; j < segments.length; j++) {
-                  const segment = segments[j];
-                  if (segment.cachedStats?.algorithmType !== undefined) {
-                    existingseriesInstanceUid = segment.cachedStats.algorithmType;
-                  }
-                }
-              }
-              
-              if (existingseriesInstanceUid === currentDisplaySets.SeriesInstanceUID) {
+              if (!toolboxState.getRefineNew()) {
+                // Refine mode: always reuse the active segmentation regardless of origin
+                // (loaded DICOM-SEG segments have DICOM algorithm tags, not a SeriesInstanceUID,
+                //  so the seriesInstanceUid heuristic would wrongly reject them)
                 existingSegments = activeSegmentation.segments || {};
                 segmentationId = activeSegmentation.segmentationId;
-                segImageIds = activeSegmentation.representationData.Labelmap.imageIds;
-                existing = true;
+                const labelmapImageIds = activeSegmentation.representationData?.Labelmap?.imageIds;
+                if (labelmapImageIds?.length > 0) {
+                  segImageIds = labelmapImageIds;
+                  existing = true;
+                }
+              } else {
+                // New mode: find the segmentation that belongs to this CT series
+                let existingseriesInstanceUid = activeSegmentation.cachedStats?.seriesInstanceUid;
+                if (existingseriesInstanceUid === undefined) {
+                  const segs = Object.values(activeSegmentation.segments);
+                  for (let j = 0; j < segs.length; j++) {
+                    const segment = segs[j];
+                    if (segment.cachedStats?.algorithmType !== undefined) {
+                      existingseriesInstanceUid = segment.cachedStats.algorithmType;
+                    }
+                  }
+                }
+                if (existingseriesInstanceUid === currentDisplaySets.SeriesInstanceUID) {
+                  existingSegments = activeSegmentation.segments || {};
+                  segmentationId = activeSegmentation.segmentationId;
+                  segImageIds = activeSegmentation.representationData.Labelmap.imageIds;
+                  existing = true;
+                }
               }
             }
 
