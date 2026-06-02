@@ -126,9 +126,21 @@ def send_response(datastore, result, output, background_tasks):
                     "flipped": json.dumps(res_json.get("flipped")),
                     "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
                     "sam_elapsed": json.dumps(res_json.get("sam_elapsed")),
-                    "label_name": res_json.get("label_name")
+                    "label_name": res_json.get("label_name"),
+                    "server_begin_ts": json.dumps(res_json.get("server_begin_ts")),
+                    "server_load_elapsed": json.dumps(res_json.get("server_load_elapsed")),
+                    "server_img_convert_elapsed": json.dumps(res_json.get("server_img_convert_elapsed")),
+                    "server_prompt_prep_elapsed": json.dumps(res_json.get("server_prompt_prep_elapsed")),
+                    "nninter_core_elapsed": json.dumps(res_json.get("nninter_core_elapsed")),
+                    "server_result_elapsed": json.dumps(res_json.get("server_result_elapsed")),
+                    "nninter_first_interaction_ts": json.dumps(res_json.get("nninter_first_interaction_ts")),
+                    "server_end_ts": json.dumps(res_json.get("server_end_ts")),
+                    "server_request_ts": json.dumps(res_json.get("server_request_ts")),
+                    "pred_offset": json.dumps(res_json.get("pred_offset")),
+                    "pred_full_shape": json.dumps(res_json.get("pred_full_shape")),
+                    "pred_crop_shape": json.dumps(res_json.get("pred_crop_shape")),
                 }
-                
+
                 boundary = f"monai-{secrets.token_hex(12)}"
                 meta_json = json.dumps(fields, separators=(",", ":"))
                 return stream_multipart(meta_json, res_dicom_seg)
@@ -157,6 +169,7 @@ def run_inference(
     label: UploadFile = File(None),
     output: Optional[ResultType] = None,
 ):
+    server_request_ts = time.time()  # HTTP request received; before MONAI image download
     request = {"model": model, "image": image}
 
     if not file and not image and not session_id:
@@ -206,6 +219,10 @@ def run_inference(
     if result is None:
         raise HTTPException(status_code=500, detail="Failed to execute infer")
 
+    # Inject HTTP-level timestamp so client can measure MONAI pre-processing (DICOM download) separately
+    if isinstance(result.get("params"), dict):
+        result["params"]["server_request_ts"] = server_request_ts
+
     # Dicom Seg Integration
     if output == "dicom_seg":
         dicom_seg_file = None
@@ -227,12 +244,24 @@ def run_inference(
         #result["dicom_seg"] = dicom_bytes
         res_json = result.get("params")
         fields = {
-                    "prompt_info": json.dumps(res_json.get("prompt_info")),
-                    "flipped": json.dumps(res_json.get("flipped")),
-                    "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
-                    "sam_elapsed": json.dumps(res_json.get("sam_elapsed")),
-                    "label_name": res_json.get("label_name")
-                }
+            "prompt_info": json.dumps(res_json.get("prompt_info")),
+            "flipped": json.dumps(res_json.get("flipped")),
+            "nninter_elapsed": json.dumps(res_json.get("nninter_elapsed")),
+            "sam_elapsed": json.dumps(res_json.get("sam_elapsed")),
+            "label_name": res_json.get("label_name"),
+            "server_begin_ts": json.dumps(res_json.get("server_begin_ts")),
+            "server_load_elapsed": json.dumps(res_json.get("server_load_elapsed")),
+            "server_img_convert_elapsed": json.dumps(res_json.get("server_img_convert_elapsed")),
+            "server_prompt_prep_elapsed": json.dumps(res_json.get("server_prompt_prep_elapsed")),
+            "nninter_core_elapsed": json.dumps(res_json.get("nninter_core_elapsed")),
+            "server_result_elapsed": json.dumps(res_json.get("server_result_elapsed")),
+            "nninter_first_interaction_ts": json.dumps(res_json.get("nninter_first_interaction_ts")),
+            "server_end_ts": json.dumps(res_json.get("server_end_ts")),
+            "server_request_ts": json.dumps(res_json.get("server_request_ts")),
+            "pred_offset": json.dumps(res_json.get("pred_offset")),
+            "pred_full_shape": json.dumps(res_json.get("pred_full_shape")),
+            "pred_crop_shape": json.dumps(res_json.get("pred_crop_shape")),
+        }
         boundary = f"monai-{secrets.token_hex(12)}"
         meta_json = json.dumps(fields, separators=(",", ":"))
         return stream_multipart(meta_json, res_img)

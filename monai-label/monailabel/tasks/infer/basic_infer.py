@@ -40,7 +40,16 @@ from monailabel.interfaces.utils.transform import dump_data, run_transforms
 from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
-from monailabel.utils.others.helper import get_scanline_filled_points_3d, clean_and_densify_polyline, spherical_kernel, calculate_dice, timeout_context
+from monailabel.utils.others.helper import (
+    get_scanline_filled_points_3d,
+    clean_and_densify_polyline,
+    spherical_kernel,
+    calculate_dice,
+    timeout_context,
+    scribble_constant_axis,
+    prepare_scribble_interaction_payload,
+    prepare_lasso_interaction_payload,
+)
 from monailabel.utils.others.medgemma import encode_slice_to_jpeg_bytes, window_mri, window, _encode
 from sam2.build_sam import build_sam2_video_predictor, build_sam2_video_predictor_npz
 
@@ -83,14 +92,14 @@ sam3_checkpoint = "/code/checkpoints/sam3.pt"
 from huggingface_hub import snapshot_download
 
 REPO_ID = "nnInteractive/nnInteractive"
-MODEL_NAME = "nnInteractive_v1.0"  # Updated models may be available in the future
+MODEL_NAME = "nnInteractive_v2.0"  # Updated models may be available in the future
 DOWNLOAD_DIR = "/code/checkpoints"  # Specify the download directory
 
-download_path = snapshot_download(
-    repo_id=REPO_ID,
-    allow_patterns=[f"{MODEL_NAME}/*"],
-    local_dir=DOWNLOAD_DIR
-)
+#download_path = snapshot_download(
+#    repo_id=REPO_ID,
+#    allow_patterns=[f"{MODEL_NAME}/*"],
+#    local_dir=DOWNLOAD_DIR
+#)
 
 VOX_MODEL_NAME = "voxtell_v1.1" # Updated models may be available in the future
 
@@ -106,12 +115,11 @@ vox_predictor = VoxTellPredictor(model_dir=vox_model_path, device=torch.device("
 from nnInteractive.inference.inference_session import nnInteractiveInferenceSession
 
 session = nnInteractiveInferenceSession(
-    device=torch.device("cuda:0"),  # Set inference device
-    use_torch_compile=False,  # Experimental: Not tested yet
-    verbose=False,
-    torch_n_threads=os.cpu_count(),  # Use available CPU cores
-    do_autozoom=True,  # Enables AutoZoom for better patching
-    use_pinned_memory=True,  # Optimizes GPU memory transfers
+    device=torch.device("cuda:0"),
+    use_torch_compile=True,
+    verbose=True,
+    torch_n_threads=os.cpu_count(),
+    do_autozoom=True,
 )
 
 model_path = os.path.join(DOWNLOAD_DIR, MODEL_NAME)
@@ -206,6 +214,7 @@ def _medgemma_get_processor_and_model(model_id: str) -> Tuple[Any, Any]:
     )
     _medgemma_loaded_id = model_id
     return _medgemma_processor, _medgemma_model
+
 
 
 def _resolve_hf_token(data: Dict[str, Any]) -> str:
@@ -823,7 +832,11 @@ class BasicInferTask(InferTask):
         self.skip_writer = skip_writer
 
         self._session_image: Dict[str, Any] = {
-            "seriesInstanceUID": None,
+            "dicom_dir": None,        # normalised path MONAI served (level-1 key: exact path match)
+            "seriesInstanceUID": None, # DICOM tag (0020,000E) UID (level-2 key: works if path changes)
+            "img_np": None,           # cached [1,z,y,x] array; populated on init, reused for interactions
+            "instanceNumber": None,   # first DICOM file's InstanceNumber (used for flip detection)
+            "instanceNumber2": None,  # second DICOM file's InstanceNumber
         }
 
 
@@ -1020,6 +1033,19 @@ class BasicInferTask(InferTask):
         Returns: Label (File Path) and Result Params (JSON)
         """
         begin = time.time()
+        server_begin_ts = begin  # Unix timestamp; client uses this to estimate network-to-server latency
+
+        # Fast path: reset does not need config merge, image loading, or deep copy
+        if request.get('nninter') == "reset":
+            for key, lst in self._session_used_interactions.items():
+                lst.clear()
+            session.reset_interactions()
+            # Image cache (_session_image) is intentionally kept: session.reset_interactions()
+            # clears the interaction state in nnInteractive but retains the encoded image
+            # features, so img_np and dicom_dir remain valid for subsequent interactions.
+            logger.info("Reset nninter")
+            return f'/code/predictions/reset.nii.gz', {}
+
         req = copy.deepcopy(self._config)
         req.update(request)
 
@@ -1048,93 +1074,143 @@ class BasicInferTask(InferTask):
         final_result_json = {}
         result_json = {}
         nnInter = data['nninter']
-        if nnInter == "reset":
-            for key, lst in self._session_used_interactions.items():
-                    lst.clear()
-            session.reset_interactions()
-            logger.info("Reset nninter")
-            return f'/code/predictions/reset.nii.gz', final_result_json
 
         img = None
-        
-        dicom_dir = data['image'].split('.nii.gz')[0]
-        seriesInstanceUID = dicom_dir.split("/")[-1]
-        logger.info(f"Series Instance UID: {seriesInstanceUID}")
 
-        reader = sitk.ImageSeriesReader()
-        dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
-        dcm_img_sample = dcmread(dicom_filenames[0], stop_before_pixels=True)
-        dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
-        
-        instanceNumber = None
-        instanceNumber2 = None
+        dicom_dir = data['image'].split('.nii.gz')[0].rstrip("/")
 
-        if 0x00200013 in dcm_img_sample.keys():
-            instanceNumber = dcm_img_sample[0x00200013].value
-        logger.info(f"Prompt First InstanceNumber: {instanceNumber}")
-        if 0x00200013 in dcm_img_sample_2.keys():
-            instanceNumber2 = dcm_img_sample_2[0x00200013].value
-        logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
+        _NNI_EXCLUDE = ("init", "reset",
+                        "medGemma", "gemini", "openai", "claude",
+                        "kimi", "qwen", "gemma", "vllm")
+        _is_nninter_interaction = nnInter and nnInter not in _NNI_EXCLUDE
 
-        contrast_center = None
-        contrast_window = None
-        modality_type = "Other"
+        logger.info(f"dicom_dir={dicom_dir!r}  cached_dicom_dir={self._session_image['dicom_dir']!r}  cached_uid={self._session_image['seriesInstanceUID']!r}")
 
-        if 0x00080060 in dcm_img_sample.keys():
-            modality = dcm_img_sample[0x00080060].value
-            if modality == "CT" or modality == "SC":
-                modality_type = "CT"
-            elif modality == "MR":
-                modality_type = "MR"
+        # Level-1: full cache hit — skip GetGDCMSeriesFileNames, dcmread x2,
+        # reader.Execute, and sitk.GetArrayFromImage entirely.
+        # Key: exact dicom_dir path (stable when MONAI serves the same cached path).
+        _img_np_hit = (
+            _is_nninter_interaction
+            and dicom_dir == self._session_image["dicom_dir"]
+            and self._session_image["img_np"] is not None
+            and self._session_image["instanceNumber"] is not None
+        )
+
+        _pixel_hit = False  # may be set True inside the else branch below
+        if _img_np_hit:
+            seriesInstanceUID = self._session_image["seriesInstanceUID"]
+            instanceNumber    = self._session_image["instanceNumber"]
+            instanceNumber2   = self._session_image["instanceNumber2"]
+            img_convert_elapsed = 0.0
+            logger.info("img_np cache hit — skipping all DICOM I/O")
+        else:
+            # Full I/O: directory scan + header reads needed for metadata / pixel load.
+            reader = sitk.ImageSeriesReader()
+            dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
+            dcm_img_sample   = dcmread(dicom_filenames[0], stop_before_pixels=True)
+            dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
+
+            # Authoritative UID from DICOM tag (0020,000E); path-derived UID is unreliable
+            # when path has trailing slash or a non-UID last component.
+            _SERIES_UID_TAG = 0x0020000e
+            seriesInstanceUID = (
+                str(dcm_img_sample[_SERIES_UID_TAG].value).strip()
+                if _SERIES_UID_TAG in dcm_img_sample else path_uid
+            )
+            logger.info(f"Series Instance UID: {seriesInstanceUID}")
+
+            instanceNumber  = dcm_img_sample[0x00200013].value  if 0x00200013 in dcm_img_sample  else None
+            instanceNumber2 = dcm_img_sample_2[0x00200013].value if 0x00200013 in dcm_img_sample_2 else None
+            logger.info(f"Prompt First InstanceNumber: {instanceNumber}")
+            logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
+
+            contrast_center = None
+            contrast_window = None
+            modality_type   = "Other"
+
+            if 0x00080060 in dcm_img_sample.keys():
+                modality = dcm_img_sample[0x00080060].value
+                if modality in ("CT", "SC"):
+                    modality_type = "CT"
+                elif modality == "MR":
+                    modality_type = "MR"
+                logger.info(f"Modality: {modality_type}")
+
+            if 0x00281050 in dcm_img_sample.keys():
+                contrast_center = dcm_img_sample[0x00281050].value
+            if 0x00281051 in dcm_img_sample.keys():
+                contrast_window = dcm_img_sample[0x00281051].value
+
+            if contrast_window is not None and contrast_center is not None:
+                if contrast_window.__class__.__name__ == 'MultiValue':
+                    contrast_window = contrast_window[0]
+                if contrast_center.__class__.__name__ == 'MultiValue':
+                    contrast_center = contrast_center[0]
+
+            image_series_desc = ""
+            if 0x0008103e in dcm_img_sample.keys():
+                image_series_desc = dcm_img_sample[0x0008103e].value
+
+            # Level-2: path UID may differ (e.g. MONAI changed temp dir) but tag UID matches
+            # → skip reader.Execute + sitk.GetArrayFromImage, keep header metadata.
+            _pixel_hit = (
+                _is_nninter_interaction
+                and seriesInstanceUID == self._session_image["seriesInstanceUID"]
+                and self._session_image["img_np"] is not None
+            )
+
+            if _pixel_hit:
+                logger.info("img_np pixel-cache hit (path UID changed) — skipping reader.Execute")
             else:
-                modality_type = "Other"
-            logger.info(f"Modality: {modality_type}")
-
-        if 0x00281050 in dcm_img_sample.keys():
-            contrast_center = dcm_img_sample[0x00281050].value
-        
-        if 0x00281051 in dcm_img_sample.keys():
-            contrast_window = dcm_img_sample[0x00281051].value
-        
-
-        if contrast_window != None and contrast_center !=None:
-            #breakpoint()
-            if contrast_window.__class__.__name__ == 'MultiValue':
-                contrast_window = contrast_window[0]
-            if contrast_center.__class__.__name__ == 'MultiValue':
-                contrast_center = contrast_center[0]
-
-        image_series_desc = ""
-
-        if 0x0008103e in dcm_img_sample.keys():
-            image_series_desc = dcm_img_sample[0x0008103e].value
-            
-        # --- Load Input Image (Example with SimpleITK) ---
-        reader.SetFileNames(dicom_filenames)
-        #reader.SetOutputPixelType(SimpleITK.sitkUInt16) 
-        img = reader.Execute()
+                if _is_nninter_interaction:
+                    cached_uid = self._session_image["seriesInstanceUID"]
+                    if cached_uid != seriesInstanceUID:
+                        logger.info(f"img_np cache MISS — UID mismatch: cached={cached_uid!r} incoming={seriesInstanceUID!r}")
+                    elif self._session_image["img_np"] is None:
+                        logger.info("img_np cache MISS — not yet initialised")
+                reader.SetFileNames(dicom_filenames)
+                img = reader.Execute()
         
 
         before_nnInter = time.time()
         logger.info(f"Before nnInter: {before_nnInter-begin} secs")
         if nnInter:
             start = time.time()
-            
-            img_np = sitk.GetArrayFromImage(img)[None]
+            nninter_core_elapsed = 0.0          # time inside add_*_interaction calls only
+            nninter_first_interaction_ts = None  # wall-clock of first interaction
+            prompt_prep_elapsed = 0.0           # lasso/scribble mask building (CPU, excludes model calls)
+
+            if _img_np_hit or _pixel_hit:
+                img_np = self._session_image["img_np"]
+                img_convert_elapsed = 0.0
+            else:
+                _t_conv = time.time()
+                img_np = sitk.GetArrayFromImage(img)[None]
+                img_convert_elapsed = time.time() - _t_conv
             # Validate input dimensions
             if img_np.ndim != 4:
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
             
             if nnInter == "init":
                 if seriesInstanceUID is not None and self._session_image["seriesInstanceUID"] != seriesInstanceUID:
+                    self._session_image["dicom_dir"]       = dicom_dir
                     self._session_image["seriesInstanceUID"] = seriesInstanceUID
+                    self._session_image["img_np"]          = img_np
+                    self._session_image["instanceNumber"]  = instanceNumber
+                    self._session_image["instanceNumber2"] = instanceNumber2
                     try:
-                        logger.info("Only first time, no image at nnInter or iamge changed")
+                        logger.info("Only first time, no image at nnInter or image changed")
                         session.set_image(img_np)
                         session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
                     except Exception as init_error:
                         logger.error(f"Failed to initialize session: {init_error}")
                         logger.info("Prefer fail!!")
+                elif self._session_image["img_np"] is None:
+                    # Same series but cache was cleared; repopulate
+                    self._session_image["dicom_dir"]       = dicom_dir
+                    self._session_image["img_np"]          = img_np
+                    self._session_image["instanceNumber"]  = instanceNumber
+                    self._session_image["instanceNumber2"] = instanceNumber2
                 for key, lst in self._session_used_interactions.items():
                     lst.clear()
                 session.reset_interactions()
@@ -1585,6 +1661,7 @@ class BasicInferTask(InferTask):
                 return voxtell_seg_np, final_result_json
 
             def _safe_interaction(perform_callable):
+                nonlocal nninter_core_elapsed, nninter_first_interaction_ts
                 try:
                     if session.original_image_shape is None or session.preprocessed_image is None:
                         # Edge cases: a) a lot of requests are pending, while changing layouts b) without proper image initialization
@@ -1598,16 +1675,16 @@ class BasicInferTask(InferTask):
                         if session.executor._work_queue.qsize() == 0 and session.preprocess_future is None:
                             session.set_image(img_np)
                             session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
-                        
+
                         # Wait until session.preprocessed_image is not None
                         max_wait_time = 5.0  # Maximum wait time in seconds
                         wait_interval = 0.1   # Check every 100ms
                         waited_time = 0.0
-                        
+
                         while session.preprocessed_image is None and waited_time < max_wait_time:
                             time.sleep(wait_interval)
                             waited_time += wait_interval
-                        
+
                         if session.preprocessed_image is None:
                             logger.warning(f"Session preprocessed_image still None after {max_wait_time}s wait")
                             logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
@@ -1619,9 +1696,13 @@ class BasicInferTask(InferTask):
                             return False
                         else:
                             logger.info(f"Session preprocessed_image ready after {waited_time:.2f}s")
-                    logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")        
-                    with timeout_context(seconds=5):
+                    logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
+                    t_before = time.time()
+                    if nninter_first_interaction_ts is None:
+                        nninter_first_interaction_ts = t_before
+                    with timeout_context(seconds=100):
                         perform_callable()
+                    nninter_core_elapsed += time.time() - t_before
                     return True
                 except Exception as e:
                     logger.error(f"Error during interaction: {e}")
@@ -1671,8 +1752,12 @@ class BasicInferTask(InferTask):
                             box[1][2]=img_np.shape[1]-1-box[1][2]
                         box[0]=box[0][::-1]
                         box[1]=box[1][::-1]
-                        if not _safe_interaction(lambda: session.add_bbox_interaction(
-                            [[box[0][0], box[1][0] + 1], [box[0][1], box[1][1]], [box[0][2], box[1][2]]],
+                        bbox = [
+                            [min(box[0][i], box[1][i]), max(box[0][i], box[1][i]) + 1]
+                            for i in range(3)
+                        ]
+                        if not _safe_interaction(lambda b=bbox: session.add_bbox_interaction(
+                            b,
                             include_interaction=True
                         )):
                             return f'/code/predictions/reset.nii.gz', final_result_json
@@ -1689,8 +1774,12 @@ class BasicInferTask(InferTask):
                             box[1][2]=img_np.shape[1]-1-box[1][2]
                         box[0]=box[0][::-1]
                         box[1]=box[1][::-1]
-                        if not _safe_interaction(lambda: session.add_bbox_interaction(
-                            [[box[0][0], box[1][0] + 1], [box[0][1], box[1][1]], [box[0][2], box[1][2]]],
+                        bbox = [
+                            [min(box[0][i], box[1][i]), max(box[0][i], box[1][i]) + 1]
+                            for i in range(3)
+                        ]
+                        if not _safe_interaction(lambda b=bbox: session.add_bbox_interaction(
+                            b,
                             include_interaction=False
                         )):
                             return f'/code/predictions/reset.nii.gz', final_result_json
@@ -1699,90 +1788,83 @@ class BasicInferTask(InferTask):
 
             if len(data['pos_lassos'])!=0:
                 result_json["pos_lassos"]=copy.deepcopy(data["pos_lassos"])
-                
-                for lasso in data['pos_lassos']:
-                    if not self.is_prompt_used(lasso, "pos_lassos"):
-                        self.add_prompt(lasso, "pos_lassos")
-                        lasso = get_scanline_filled_points_3d(clean_and_densify_polyline(lasso))
-                        lassoMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
-                        
-                        filled_indices = np.asarray(lasso)
+
+                for lasso_raw in data['pos_lassos']:
+                    if not self.is_prompt_used(lasso_raw, "pos_lassos"):
+                        self.add_prompt(lasso_raw, "pos_lassos")
+                        _t_prep = time.time()
+                        perim = clean_and_densify_polyline(lasso_raw)
+                        perim_arr = np.round(np.asarray(perim)).astype(int)
                         if instanceNumber > instanceNumber2:
-                            filled_indices[:, 2]=img_np.shape[1]-1 - filled_indices[:, 2]
-                        x, y, z = filled_indices[:, 0], filled_indices[:, 1], filled_indices[:, 2]
-                        valid = (
-                            (x >= 0) & (x < img_np.shape[3]) &
-                            (y >= 0) & (y < img_np.shape[2]) &
-                            (z >= 0) & (z < img_np.shape[1])
-                        )
-                        # Apply only valid indices
-                        lassoMask[z[valid], y[valid], x[valid]] = 1
-                        if not _safe_interaction(lambda: session.add_lasso_interaction(lassoMask, include_interaction=True)):
+                            perim_arr[:, 2] = img_np.shape[1] - 1 - perim_arr[:, 2]
+                        lasso_image, interaction_bbox = prepare_lasso_interaction_payload(img_np.shape[1:], perim_arr)
+                        prompt_prep_elapsed += time.time() - _t_prep
+                        if lasso_image is None:
+                            continue
+                        if not _safe_interaction(
+                            lambda img=lasso_image, bbox=interaction_bbox: session.add_lasso_interaction(
+                                img, include_interaction=True, interaction_bbox=bbox
+                            )
+                        ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
-                        logger.info("Add a lasso")                
-            
+                        logger.info("Add a lasso")
+
             if len(data['neg_lassos'])!=0:
                 result_json["neg_lassos"]=copy.deepcopy(data["neg_lassos"])
-                
-                for lasso in data['neg_lassos']:
-                    if not self.is_prompt_used(lasso, "neg_lassos"):
-                        self.add_prompt(lasso, "neg_lassos")
-                        lasso = get_scanline_filled_points_3d(clean_and_densify_polyline(lasso))
-                        lassoMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
-                        filled_indices = np.asarray(lasso)
+
+                for lasso_raw in data['neg_lassos']:
+                    if not self.is_prompt_used(lasso_raw, "neg_lassos"):
+                        self.add_prompt(lasso_raw, "neg_lassos")
+                        _t_prep = time.time()
+                        perim = clean_and_densify_polyline(lasso_raw)
+                        perim_arr = np.round(np.asarray(perim)).astype(int)
                         if instanceNumber > instanceNumber2:
-                            filled_indices[:, 2]=img_np.shape[1]-1 - filled_indices[:, 2]
-                        x, y, z = filled_indices[:, 0], filled_indices[:, 1], filled_indices[:, 2]
-                        valid = (
-                            (x >= 0) & (x < img_np.shape[3]) &
-                            (y >= 0) & (y < img_np.shape[2]) &
-                            (z >= 0) & (z < img_np.shape[1])
-                        )
-                        # Apply only valid indices
-                        lassoMask[z[valid], y[valid], x[valid]] = 1
-                        if not _safe_interaction(lambda: session.add_lasso_interaction(lassoMask, include_interaction=False)):
+                            perim_arr[:, 2] = img_np.shape[1] - 1 - perim_arr[:, 2]
+                        lasso_image, interaction_bbox = prepare_lasso_interaction_payload(img_np.shape[1:], perim_arr)
+                        prompt_prep_elapsed += time.time() - _t_prep
+                        if lasso_image is None:
+                            continue
+                        if not _safe_interaction(
+                            lambda img=lasso_image, bbox=interaction_bbox: session.add_lasso_interaction(
+                                img, include_interaction=False, interaction_bbox=bbox
+                            )
+                        ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
-                        logger.info("Add a lasso")  
+                        logger.info("Add a lasso")
             
             if len(data['pos_scribbles'])!=0:
                 result_json["pos_scribbles"]=copy.deepcopy(data["pos_scribbles"])
-                
+
                 for scribble in data['pos_scribbles']:
                     if not self.is_prompt_used(scribble, "pos_scribbles"):
                         self.add_prompt(scribble, "pos_scribbles")
+                        _t_prep = time.time()
                         scribble = clean_and_densify_polyline(scribble)
-                        scribbleMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
-
                         filled_indices = np.round(np.asarray(scribble)).astype(int)
-
+                        if filled_indices.size == 0:
+                            continue
                         if instanceNumber > instanceNumber2:
-                            filled_indices[:, 2]=img_np.shape[1]-1 -filled_indices[:, 2]
-                        
-                        # Sphere of radius 1
-                        kernel = spherical_kernel(radius=1)
-                        kz, ky, kx = kernel.shape
-                        offset_z, offset_y, offset_x = kz // 2, ky // 2, kx // 2
-
-                        for x, y, z in filled_indices:
-                            z0, z1 = z - offset_z, z + offset_z + 1
-                            y0, y1 = y - offset_y, y + offset_y + 1
-                            x0, x1 = x - offset_x, x + offset_x + 1
-
-                            # clip bounds to mask
-                            z0c, z1c = max(z0, 0), min(z1, scribbleMask.shape[0])
-                            y0c, y1c = max(y0, 0), min(y1, scribbleMask.shape[1])
-                            x0c, x1c = max(x0, 0), min(x1, scribbleMask.shape[2])
-
-                            # compute corresponding kernel slices
-                            kz0, kz1 = z0c - z0, z1c - z0
-                            ky0, ky1 = y0c - y0, y1c - y0
-                            kx0, kx1 = x0c - x0, x1c - x0
-
-                            #if z0 < 0 or y0 < 0 or x0 < 0 or z1 > scribbleMask.shape[0] or y1 > scribbleMask.shape[1] or x1 > scribbleMask.shape[2]:
-                            #    continue  # Skip out-of-bounds
-                            scribbleMask[z0c:z1c, y0c:y1c, x0c:x1c] |= kernel[kz0:kz1, ky0:ky1, kx0:kx1]
+                            filled_indices[:, 2] = img_np.shape[1] - 1 - filled_indices[:, 2]
+                        flat_axis = scribble_constant_axis(filled_indices)
+                        if flat_axis is not None:
+                            logger.info(f"2D scribble on axis {flat_axis}")
+                        scribble_image, interaction_bbox = prepare_scribble_interaction_payload(
+                            img_np.shape[1:], filled_indices, flat_axis
+                        )
+                        prompt_prep_elapsed += time.time() - _t_prep
                         scribble_start = time.time()
-                        if not _safe_interaction(lambda: session.add_scribble_interaction(scribbleMask, include_interaction=True)):
+                        if interaction_bbox is not None:
+                            if not _safe_interaction(
+                                lambda img=scribble_image, bbox=interaction_bbox: session.add_scribble_interaction(
+                                    scribble_image=img, include_interaction=True, interaction_bbox=bbox
+                                )
+                            ):
+                                return f'/code/predictions/reset.nii.gz', final_result_json
+                        elif not _safe_interaction(
+                            lambda img=scribble_image: session.add_scribble_interaction(
+                                scribble_image=img, include_interaction=True
+                            )
+                        ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info(f"only for add scribble: {time.time()-scribble_start} secs")
                         logger.info(f"just after add scribble: {time.time()-start} secs")
@@ -1790,54 +1872,63 @@ class BasicInferTask(InferTask):
 
             if len(data['neg_scribbles'])!=0:
                 result_json["neg_scribbles"]=copy.deepcopy(data["neg_scribbles"])
-                
+
                 for scribble in data['neg_scribbles']:
                     if not self.is_prompt_used(scribble, "neg_scribbles"):
                         self.add_prompt(scribble, "neg_scribbles")
+                        _t_prep = time.time()
                         scribble = clean_and_densify_polyline(scribble)
-                        scribbleMask = np.zeros(img_np.shape[1:], dtype=np.uint8)
-
                         filled_indices = np.round(np.asarray(scribble)).astype(int)
-
-                        #logger.info(f"filled_indices: {filled_indices}")
-                        #logger.info(f"filled_indices shape: {filled_indices.shape}")
+                        if filled_indices.size == 0:
+                            continue
                         if instanceNumber > instanceNumber2:
-                            filled_indices[:, 2]=img_np.shape[1]-1 -filled_indices[:, 2]
-                        
-                        # Sphere of radius 1
-                        kernel = spherical_kernel(radius=1)
-                        kz, ky, kx = kernel.shape
-                        offset_z, offset_y, offset_x = kz // 2, ky // 2, kx // 2
-
-                        for x, y, z in filled_indices:
-                            z0, z1 = z - offset_z, z + offset_z + 1
-                            y0, y1 = y - offset_y, y + offset_y + 1
-                            x0, x1 = x - offset_x, x + offset_x + 1
-
-                            # clip bounds to mask
-                            z0c, z1c = max(z0, 0), min(z1, scribbleMask.shape[0])
-                            y0c, y1c = max(y0, 0), min(y1, scribbleMask.shape[1])
-                            x0c, x1c = max(x0, 0), min(x1, scribbleMask.shape[2])
-
-                            # compute corresponding kernel slices
-                            kz0, kz1 = z0c - z0, z1c - z0
-                            ky0, ky1 = y0c - y0, y1c - y0
-                            kx0, kx1 = x0c - x0, x1c - x0
-
-                            #if z0 < 0 or y0 < 0 or x0 < 0 or z1 > scribbleMask.shape[0] or y1 > scribbleMask.shape[1] or x1 > scribbleMask.shape[2]:
-                            #    continue  # Skip out-of-bounds
-                            scribbleMask[z0c:z1c, y0c:y1c, x0c:x1c] |= kernel[kz0:kz1, ky0:ky1, kx0:kx1]
-                    
-                        if not _safe_interaction(lambda: session.add_scribble_interaction(scribbleMask, include_interaction=False)):
+                            filled_indices[:, 2] = img_np.shape[1] - 1 - filled_indices[:, 2]
+                        flat_axis = scribble_constant_axis(filled_indices)
+                        if flat_axis is not None:
+                            logger.info(f"2D scribble on axis {flat_axis}")
+                        scribble_image, interaction_bbox = prepare_scribble_interaction_payload(
+                            img_np.shape[1:], filled_indices, flat_axis
+                        )
+                        prompt_prep_elapsed += time.time() - _t_prep
+                        if interaction_bbox is not None:
+                            if not _safe_interaction(
+                                lambda img=scribble_image, bbox=interaction_bbox: session.add_scribble_interaction(
+                                    scribble_image=img, include_interaction=False, interaction_bbox=bbox
+                                )
+                            ):
+                                return f'/code/predictions/reset.nii.gz', final_result_json
+                        elif not _safe_interaction(
+                            lambda img=scribble_image: session.add_scribble_interaction(
+                                scribble_image=img, include_interaction=False
+                            )
+                        ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add a scribble")
 
             # --- Retrieve Results ---
-            # The target buffer holds the segmentation result.
+            _t_result = time.time()
             results = session.target_buffer.clone()
+            pred = results.numpy()  # shape (Z, Y, X), dtype uint8
 
-            # Enjoy!
-            pred = results.numpy()
+            # Crop to tight non-zero bbox before sending.
+            # Reduces wire bytes and compression time proportionally to segmentation size.
+            # Client reconstructs full volume using pred_offset + pred_full_shape from meta.
+            pred_full_shape = list(pred.shape)
+            # np.any along axes is ~10x faster than np.nonzero on large sparse arrays
+            # because it short-circuits and reduces 182M elements to three 1-D projections.
+            z_any = np.any(pred, axis=(1, 2))
+            z_nz  = np.where(z_any)[0]
+            if z_nz.size > 0:
+                y_nz = np.where(np.any(pred, axis=(0, 2)))[0]
+                x_nz = np.where(np.any(pred, axis=(0, 1)))[0]
+                z0, z1 = int(z_nz[0]),  int(z_nz[-1])  + 1
+                y0, y1 = int(y_nz[0]),  int(y_nz[-1])  + 1
+                x0, x1 = int(x_nz[0]),  int(x_nz[-1])  + 1
+                pred = pred[z0:z1, y0:y1, x0:x1]
+                pred_offset = [z0, y0, x0]
+            else:
+                pred_offset = [0, 0, 0]
+            result_elapsed = time.time() - _t_result
 
             
 
@@ -1846,10 +1937,28 @@ class BasicInferTask(InferTask):
             #pred_itk = sitk.Cast(pred_itk, sitk.sitkUInt8)
             #sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}.nii.gz')
             nninter_elapsed = time.time() - start
-            logger.info(f"nninter latency : {nninter_elapsed} (sec)")
-            # final_result_json["dicom_seg"] = raw
+            server_load_elapsed = before_nnInter - begin
+
+            logger.info(
+                f"[timing] load={server_load_elapsed:.3f}s  img_convert={img_convert_elapsed:.3f}s  "
+                f"prompt_prep={prompt_prep_elapsed:.3f}s  model_core={nninter_core_elapsed:.3f}s  "
+                f"result_retrieve={result_elapsed:.3f}s  total_nninter={nninter_elapsed:.3f}s"
+            )
+
             final_result_json["prompt_info"] = result_json
-            final_result_json["nninter_elapsed"] = nninter_elapsed
+            # --- round-trip timing breakdown ---
+            final_result_json["server_begin_ts"] = server_begin_ts          # Unix ts; client computes network-to-server latency
+            final_result_json["server_load_elapsed"] = server_load_elapsed  # DICOM read + sitk.Execute
+            final_result_json["server_img_convert_elapsed"] = img_convert_elapsed  # sitk → numpy
+            final_result_json["server_prompt_prep_elapsed"] = prompt_prep_elapsed  # lasso/scribble mask build
+            final_result_json["nninter_core_elapsed"] = nninter_core_elapsed       # GPU add_*_interaction
+            final_result_json["server_result_elapsed"] = result_elapsed            # target_buffer → numpy + bbox crop
+            final_result_json["nninter_elapsed"] = nninter_elapsed                 # total nnInter block
+            final_result_json["pred_offset"] = pred_offset            # [z0, y0, x0] of cropped region in full volume
+            final_result_json["pred_full_shape"] = pred_full_shape  # [Z, Y, X] of full volume (before crop)
+            final_result_json["pred_crop_shape"] = list(pred.shape) # [cropZ, cropY, cropX] of what is actually sent
+            final_result_json["nninter_first_interaction_ts"] = nninter_first_interaction_ts
+            final_result_json["server_end_ts"] = time.time()  # wall-clock just before serialization; client uses this to isolate server→client network latency
 
             if instanceNumber > instanceNumber2:
                 final_result_json["flipped"] = True
@@ -1880,9 +1989,9 @@ class BasicInferTask(InferTask):
                 predictor = predictor_sam2
             start = time.time()
             #result_json["pos_points"]=data["pos_points"]
-            result_json["pos_points"]=copy.deepcopy(data["pos_points"])
-            result_json["neg_points"]=copy.deepcopy(data["neg_points"])
-            result_json["pos_boxes"]=copy.deepcopy(data["pos_boxes"])
+            result_json["pos_points"] = copy.deepcopy(data["pos_points"]) if data["pos_points"] else []
+            result_json["neg_points"] = copy.deepcopy(data["neg_points"]) if data["neg_points"] else []
+            result_json["pos_boxes"] = copy.deepcopy(data["pos_boxes"]) if data["pos_boxes"] else []
             
             len_z = img.GetSize()[2]
             len_y = img.GetSize()[1]
@@ -1979,24 +2088,9 @@ class BasicInferTask(InferTask):
 
             for i in range(len(ann_frame_list)):
 
-                reader = sitk.ImageSeriesReader()
-                dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
-                dcm_img_sample = dcmread(dicom_filenames[0], stop_before_pixels=True)
-                dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
-                
-                instanceNumber = None
-                instanceNumber2 = None
-
-                if 0x00200013 in dcm_img_sample.keys():
-                    instanceNumber = dcm_img_sample[0x00200013].value
-                logger.info(f"Prompt First InstanceNumber: {instanceNumber}")
-                if 0x00200013 in dcm_img_sample_2.keys():
-                    instanceNumber2 = dcm_img_sample_2[0x00200013].value
-                logger.info(f"Prompt Second InstanceNumber: {instanceNumber2}")
-
                 if instanceNumber < instanceNumber2:
                     ann_frame_idx = ann_frame_list[i]
-                else:    
+                else:
                     ann_frame_idx = len_z-1-ann_frame_list[i]
             
             #ann_frame_idx = len_z-1-data['pos_points'][0][2]  # the frame index we interact with 
@@ -2087,6 +2181,12 @@ class BasicInferTask(InferTask):
                                 out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
                                 for i, out_obj_id in enumerate(out_obj_ids)
                             }
+
+            # Free SAM2 inference state buffers before building the output array
+            predictor.reset_state(inference_state)
+            del inference_state
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             pred = np.zeros((len_z, len_y, len_x))
 
