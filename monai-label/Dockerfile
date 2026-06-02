@@ -9,60 +9,61 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
-#FROM python:3.10-slim
+# syntax=docker/dockerfile:1.7-labs
 
-RUN apt update -y && apt install -y openslide-tools build-essential python3-pip python3-dev python-is-python3 ffmpeg libsm6 libxext6 libxcb-xinerama0 libxcb1 wget git
+# ── Stage 1: deps ────────────────────────────────────────────────────────────
+# Rebuilds only when requirements.txt, sam2/, or sam3/ change.
+# Switch from cuda:devel (~6 GB) to cuda:runtime (~3 GB) — inference needs no compiler.
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04 AS deps
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    apt-get update -y && apt-get install -y --no-install-recommends \
+    openslide-tools \
+    build-essential \
+    python3-pip \
+    python3-dev \
+    python-is-python3 \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    libxcb-xinerama0 \
+    libxcb1 \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
-RUN mkdir -p /install
-RUN mkdir -p /install-3
+RUN mkdir -p /install /install-3
 
-COPY ./monai-label/requirements.txt ./
 COPY ./sam2/. /install/
 COPY ./sam3/. /install-3/
+COPY ./monai-label/requirements.txt ./
 
-RUN mkdir -p /code/assets
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel && \
+    pip install -e /install/. && \
+    pip install -e /install-3/. && \
+    pip install -r requirements.txt
+
+# ── Stage 2: app ─────────────────────────────────────────────────────────────
+# Rebuilds only when monai-label/* code changes.
+FROM deps AS app
+
+RUN mkdir -p /code/assets /code/checkpoints /code/apps
 COPY ./sam3/assets/bpe_simple_vocab_16e6.txt.gz /code/assets/
-#ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH":/usr/lib/x86_64-linux-gnu:"
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"/usr/local/nvidia/lib64"
 
-RUN pip install --upgrade pip setuptools wheel
-RUN pip install -e /install/.
-RUN pip install -e /install-3/.
-RUN pip install --no-cache-dir -r requirements.txt
-#RUN pip install emoji ddd-dataset
-#RUN pip install "git+https://github.com/lvis-dataset/lvis-api.git"
+ENV LD_LIBRARY_PATH="/usr/local/nvidia/lib64"
+ENV PATH="$PATH:/code/monailabel/scripts"
+ENV PYTHONPATH="/code"
 
-#RUN mim install mmengine
-#RUN mim install "mmcv>=2.0.0rc4,<2.2.0"
-#RUN mim install mmdet
+RUN rm -rf /usr/local/lib/python3.10/dist-packages/dicomweb_client/web.py
+COPY ./monai-label/backup/web.py /usr/local/lib/python3.10/dist-packages/dicomweb_client/
 
 COPY ./monai-label/. ./
 
-ENV WEIGHTS_DIR="/code/checkpoints/"
-# SAM2 weights
-#ENV WEIGHTS_URL="https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt"
-# SAM2.1 weights
-ENV WEIGHTS_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
-RUN wget --directory-prefix ${WEIGHTS_DIR} ${WEIGHTS_URL}
+COPY ./monai-label/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# MEDSAM2 (Jun Ma) weights
-ENV MEDSAM2_WEIGHTS_URL="https://huggingface.co/wanglab/MedSAM2/resolve/main/MedSAM2_latest.pt"
-RUN wget --directory-prefix ${WEIGHTS_DIR} ${MEDSAM2_WEIGHTS_URL}
-
-#ENV GD_URL="https://download.openmmlab.com/mmdetection/v3.0/mm_grounding_dino/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth"
-
-#RUN wget --directory-prefix ${WEIGHTS_DIR} ${GD_URL}
-
-RUN rm -rf /usr/local/lib/python3.10/dist-packages/dicomweb_client/web.py
-
-COPY ./monai-label/backup/web.py /usr/local/lib/python3.10/dist-packages/dicomweb_client/
-
-ENV CUDA_VISIBLE_DEVICES=1
-ENV PATH=$PATH":/code/monailabel/scripts"
-
-ENV PYTHONPATH=/code:$PYTHONPATH
-RUN python -m monailabel.main apps --download --name radiology --output /code/apps
-EXPOSE 8002
-CMD ["python", "-m", "monailabel.main", "start_server", "--app", "/code/apps/radiology", "--studies", "http://orthanc:8042/dicom-web", "--conf", "models", "segmentation", "--conf", "use_pretrained_model", "false", "-p", "8002"]
+EXPOSE 8003
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python", "-m", "monailabel.main", "start_server", "--app", "/code/apps/radiology", "--studies", "http://orthanc:8043/dicom-web", "--conf", "models", "segmentation", "--conf", "use_pretrained_model", "false", "-p", "8003"]

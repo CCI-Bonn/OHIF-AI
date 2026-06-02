@@ -1,22 +1,27 @@
+# syntax=docker/dockerfile:1.7-labs
+
 # Stage 1: Build the application
 FROM node:20.18.1-slim as builder
 
-# Setup the working directory
 RUN mkdir /usr/src/app
 WORKDIR /usr/src/app
 
-# Install dependencies
-# apt-get update is combined with apt-get install to avoid using outdated packages
-RUN apt-get update && apt-get install -y build-essential python3
+# apt packages are cached across builds
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    apt-get update && apt-get install -y build-essential python3
 
-# Copy package.json and other dependency-related files first
-# Assuming your package.json and yarn.lock or similar are located in the project root
+# ── Dependency install — cached unless package.json / yarn.lock change ───────
+# Copy only package manifests first (preserving workspace directory structure).
+# A source-code edit does NOT invalidate this layer, so yarn install is skipped
+# for the common "I just changed a .ts/.tsx file" workflow.
+COPY --parents **/package.json yarn.lock lerna.json preinstall.js ./
 
-COPY ./ /usr/src/app/
-
-# Install node dependencies
 RUN yarn config set workspaces-experimental true
-RUN yarn install
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,sharing=locked \
+    yarn install
+
+# ── Source files — changes here skip yarn install entirely ───────────────────
+COPY ./ /usr/src/app/
 
 # To change color of negative prompts
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/AnnotationTool.js
@@ -80,13 +85,11 @@ COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.j
 
 COPY ./backup/vtkjs/ImageMarchingSquares.js /usr/src/app/node_modules/@kitware/vtk.js/Filters/General/ImageMarchingSquares.js
 
-# Copy the rest of the application code
-
 # set QUICK_BUILD to true to make the build faster for dev
 ENV APP_CONFIG=config/docker-nginx-orthanc.js
 
 # Build the application with production mode Use Run yarn run build:dev for development
-RUN yarn run build
+RUN yarn run build:dev
 
 # # Stage 2: Bundle the built application into a Docker container which runs NGINX using Alpine Linux
 FROM nginx:alpine

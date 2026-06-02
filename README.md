@@ -294,18 +294,19 @@ Radiology-style reports from **3D CT/MRI** are separate from segmentation. In th
 
 For faster workflow, you can use the following keyboard shortcuts:
 
-**Prompt Types:**
-- `a` - Point
+**Prompt Tools:**
+- `p` - Point
 - `s` - Scribble
-- `d` - Lasso
-- `f` - Bounding box
+- `l` - Lasso
+- `b` - Bounding box
+
+**Segment Management:**
+- `m` - Add Segment
+- `r` - Reset active Segment (clears prompts and mask)
 
 **Mode Controls:**
 - `q` - Toggle Live Mode
-- `w` - Toggle Positive/Negative
-- `e` - Toggle Refine/New
-- `r` - Run inference (if live mode off)
-- `t` - Circulate nnInteractive -> SAM2 -> MedSAM2 -> SAM3
+- `t` - Toggle Positive/Negative
 
 <a href="docs/images/hotkeys.png" target="_blank">
   <img src="docs/images/hotkeys.png" alt="List of hotkeys" width="700">

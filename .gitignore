@@ -263,3 +263,5 @@ xnat-docker/xnat-data
 xnat-docker/xnat/plugins
 
 .env
+.build-hashes/
+docs/superpowers/
