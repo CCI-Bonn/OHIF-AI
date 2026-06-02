@@ -1,4 +1,4 @@
-import { getEnabledElementByViewportId, VolumeViewport, } from '@cornerstonejs/core';
+import { getEnabledElementByViewportId, VolumeViewport, cache, } from '@cornerstonejs/core';
 import addLabelmapToElement from './addLabelmapToElement';
 import removeLabelmapFromElement from './removeLabelmapFromElement';
 import { getActiveSegmentation } from '../../../stateManagement/segmentation/activeSegmentation';
@@ -180,15 +180,41 @@ function _setLabelmapColorAndOpacity(viewportId, labelmapActorEntry, segmentatio
                     : outlineWidth;
         }
         labelmapActor.getProperty().setLabelOutlineThickness(outlineWidths);
-        labelmapActor.modified();
-        labelmapActor.getProperty().modified();
-        labelmapActor.getMapper().modified();
     }
     else {
         labelmapActor
             .getProperty()
             .setLabelOutlineThickness(new Array(numColors - 1).fill(0));
     }
+    // Sync cache→VTK copy and mark the pipeline dirty so the GPU texture is
+    // re-uploaded on every segmentation render event.
+    //
+    // Root cause: StackViewport.createVTKImageData() allocates a NEW empty
+    // TypedArray (not a reference to the cache buffer).  updateVTKImageDataWithCornerstoneImage
+    // copies cache→VTK via scalarData.set(pixelData) — but only when scrolling.
+    // After brush/inference modifies the cache, VTK's copy is stale.
+    // Calling scalars.modified() alone is wrong: it marks the stale copy as
+    // "changed" but re-uploads the same stale data.  We must copy first.
+    const inputData = labelmapActor.getMapper()?.getInputData?.();
+    if (inputData) {
+        const imageId = labelmapActorEntry.referencedId;
+        const csImage = imageId ? cache.getImage(imageId) : null;
+        if (csImage) {
+            const pixelData = csImage.voxelManager?.getScalarData?.();
+            const vtkScalars = inputData.getPointData?.()?.getScalars?.();
+            if (pixelData && vtkScalars) {
+                const vtkData = vtkScalars.getData?.();
+                if (vtkData && vtkData.length === pixelData.length) {
+                    vtkData.set(pixelData);
+                }
+                vtkScalars.modified();
+            }
+        }
+        inputData.modified();
+    }
+    labelmapActor.modified();
+    labelmapActor.getProperty().modified();
+    labelmapActor.getMapper().modified();
     const visible = isActiveLabelmap || renderInactiveSegmentations;
     labelmapActor.setVisibility(visible);
 }

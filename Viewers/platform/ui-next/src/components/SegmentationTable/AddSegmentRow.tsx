@@ -5,9 +5,11 @@ import { useSegmentationTableContext, useSegmentationExpanded } from './contexts
 export const AddSegmentRow: React.FC<{ children?: React.ReactNode }> = ({ children = null }) => {
   const {
     activeRepresentation,
+    activeSegmentation,
     disableEditing,
     activeSegmentationId,
     onSegmentAdd,
+    onSegmentReset,
     onToggleSegmentationRepresentationVisibility,
     data,
     showAddSegment,
@@ -45,9 +47,17 @@ export const AddSegmentRow: React.FC<{ children?: React.ReactNode }> = ({ childr
 
   const allowAddSegment = showAddSegment && !disableEditing;
 
+  // Find the active segment index for reset
+  const activeSegmentIndex = activeSegmentation
+    ? Number(Object.keys(activeSegmentation.segments).find(
+        k => (activeSegmentation.segments as any)[k]?.active
+      ))
+    : NaN;
+  const canReset = !disableEditing && onSegmentReset && !isNaN(activeSegmentIndex);
+
   return (
-    <div className="my-px flex h-7 w-full items-center justify-between rounded pl-0.5 pr-7">
-      <div className="mt-1 flex-1">
+    <div className="my-px flex min-h-7 w-full items-center justify-between rounded pl-0.5 pr-7">
+      <div className="mt-1 flex flex-row items-center gap-1">
         {allowAddSegment ? (
           <Button
             size="sm"
@@ -56,7 +66,18 @@ export const AddSegmentRow: React.FC<{ children?: React.ReactNode }> = ({ childr
             onClick={() => onSegmentAdd(segmentationId)}
           >
             <Icons.Add />
-            Add Segment
+            Add Segment <span className="ml-1 opacity-50 text-xs">[M]</span>
+          </Button>
+        ) : null}
+        {canReset ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="pr pl-0.5"
+            onClick={() => onSegmentReset(segmentationId, activeSegmentIndex)}
+          >
+            <Icons.Refresh className="h-4 w-4" />
+            Reset Segment <span className="ml-1 opacity-50 text-xs">[R]</span>
           </Button>
         ) : null}
       </div>

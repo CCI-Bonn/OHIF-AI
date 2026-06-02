@@ -31,7 +31,8 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
   const { servicesManager, commandsManager } = useSystem();
   const { t } = useTranslation();
 
-  const { toolbarService, customizationService } = servicesManager.services;
+  const { toolbarService, customizationService, segmentationService, viewportGridService } = servicesManager.services;
+  const onInteractionRef = React.useRef<((args: { itemId: string }) => void) | null>(null);
   const isAIToolBox = buttonSectionId === 'aiToolBox';
   const isTextPromptToolbox = buttonSectionId === 'textPromptSegmentationToolbox';
   const isTestMedgemmaToolbox = buttonSectionId === 'testMedgemmaToolbox';
@@ -42,7 +43,6 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
   // Local state for UI updates
   const [liveMode, setLiveMode] = useState(toolboxState.getLiveMode());
   const [posNeg, setPosNeg] = useState(toolboxState.getPosNeg());
-  const [refineNew, setRefineNew] = useState(toolboxState.getRefineNew());
   const [textPromptReplaceNew, setTextPromptReplaceNew] = useState(toolboxState.getTextPromptReplaceNew());
   const [selectedModel, setSelectedModel] = useState<'nnInteractive' | 'sam2' | 'medsam2' | 'sam3'>(toolboxState.getSelectedModel());
   const [medgemmaResult, setMedgemmaResult] = useState(toolboxState.getMedgemmaResult());
@@ -147,7 +147,6 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
     const updateLocalState = () => {
       setLiveMode(toolboxState.getLiveMode());
       setPosNeg(toolboxState.getPosNeg());
-      setRefineNew(toolboxState.getRefineNew());
       setTextPromptReplaceNew(toolboxState.getTextPromptReplaceNew());
       setSelectedModel(toolboxState.getSelectedModel());
       setIsLocked(toolboxState.getLocked());
@@ -159,110 +158,89 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
     // Set up an interval to check for changes (since toolboxState doesn't have events)
     const interval = setInterval(updateLocalState, 100);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      // Reset volatile interaction state when the user leaves the viewer (e.g. back to study list).
+      // This ensures the next mount always reads the default (positive) regardless of series UID.
+      toolboxState.setPosNeg(false);
+    };
   }, []);
 
-  // Keyboard hotkey handler for Live Mode toggle
+  // Consolidated keyboard hotkey handler (AI toolbox only)
+  // Q = Live Mode, T = Pos/Neg, P = Point, B = BBox, S = Scribble, L = Lasso
+  // M = Add Segment, R = Reset Segment
   useEffect(() => {
-    if (hotkeysDisabled) {
+    if (!isAIToolBox || hotkeysDisabled) {
       return;
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if the pressed key is 'Q' or 'q'
-      if ((event.key === 'Q' || event.key === 'q')) {
-        // Only trigger if we're not typing in an input field
-        const activeElement = document.activeElement;
-        const isInputField = activeElement?.tagName === 'INPUT' || 
-                           activeElement?.tagName === 'TEXTAREA' || 
+      const activeElement = document.activeElement;
+      const isInputField = activeElement?.tagName === 'INPUT' ||
+                           activeElement?.tagName === 'TEXTAREA' ||
                            (activeElement as HTMLElement)?.contentEditable === 'true';
-        
-        if (!isInputField) {
+      if (isInputField) return;
+
+      switch (event.key.toLowerCase()) {
+        case 'q': {
           event.preventDefault();
-          const newLiveMode = !liveMode;
+          const newLiveMode = !toolboxState.getLiveMode();
           setLiveMode(newLiveMode);
           toolboxState.setLiveMode(newLiveMode);
-          console.log('Live mode toggled via hotkey (q):', newLiveMode);
+          break;
         }
-      }
-    };
-
-    // Add event listener
-    document.addEventListener('keydown', handleKeyDown);
-
-    // Cleanup
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [liveMode, hotkeysDisabled]);
-
-  // Keyboard hotkey handler for Pos/Neg toggle
-  useEffect(() => {
-    if (hotkeysDisabled) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if the pressed key is 'W' or 'w'
-      if ((event.key === 'W' || event.key === 'w')) {
-        // Only trigger if we're not typing in an input field
-        const activeElement = document.activeElement;
-        const isInputField = activeElement?.tagName === 'INPUT' || 
-                           activeElement?.tagName === 'TEXTAREA' || 
-                           (activeElement as HTMLElement)?.contentEditable === 'true';
-        
-        if (!isInputField) {
+        case 't': {
           event.preventDefault();
-          const newPosNeg = !posNeg;
+          const newPosNeg = !toolboxState.getPosNeg();
           setPosNeg(newPosNeg);
           toolboxState.setPosNeg(newPosNeg);
-          console.log('Pos/Neg toggled via hotkey (w):', newPosNeg);
+          break;
         }
-      }
-    };
-
-    // Add event listener
-    document.addEventListener('keydown', handleKeyDown);
-
-    // Cleanup
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [posNeg, hotkeysDisabled]);
-
-  // Keyboard hotkey handler for Refine/New toggle
-  useEffect(() => {
-    if (hotkeysDisabled) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if the pressed key is 'E' or 'e'
-      if ((event.key === 'E' || event.key === 'e')) {
-        // Only trigger if we're not typing in an input field
-        const activeElement = document.activeElement;
-        const isInputField = activeElement?.tagName === 'INPUT' || 
-                           activeElement?.tagName === 'TEXTAREA' || 
-                           (activeElement as HTMLElement)?.contentEditable === 'true';
-        
-        if (!isInputField) {
+        case 'p':
           event.preventDefault();
-          const newRefineNew = !refineNew;
-          setRefineNew(newRefineNew);
-          toolboxState.setRefineNew(newRefineNew);
-          console.log('Refine/New toggled via hotkey (e):', newRefineNew);
+          onInteractionRef.current?.({ itemId: 'Probe2' });
+          break;
+        case 'b':
+          event.preventDefault();
+          onInteractionRef.current?.({ itemId: 'RectangleROI2' });
+          break;
+        case 's':
+          event.preventDefault();
+          onInteractionRef.current?.({ itemId: 'PlanarFreehandROI2' });
+          break;
+        case 'l':
+          event.preventDefault();
+          onInteractionRef.current?.({ itemId: 'PlanarFreehandROI3' });
+          break;
+        case 'm': {
+          event.preventDefault();
+          const { activeViewportId: avId } = viewportGridService.getState();
+          const activeSeg = segmentationService.getActiveSegmentation(avId);
+          if (activeSeg?.segmentationId) {
+            commandsManager.run('addSegment', { segmentationId: activeSeg.segmentationId });
+          }
+          break;
+        }
+        case 'r': {
+          event.preventDefault();
+          const { activeViewportId: avId } = viewportGridService.getState();
+          const activeSeg = segmentationService.getActiveSegmentation(avId);
+          const activeSeg2 = segmentationService.getActiveSegment(avId);
+          if (activeSeg?.segmentationId && activeSeg2?.segmentIndex != null) {
+            commandsManager.run('resetSegment', {
+              segmentationId: activeSeg.segmentationId,
+              segmentIndex: activeSeg2.segmentIndex,
+            });
+          }
+          break;
         }
       }
     };
 
-    // Add event listener
     document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [hotkeysDisabled, isAIToolBox]);
 
-    // Cleanup
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [refineNew, hotkeysDisabled]);
 
   // When locked, force Pan tool active, disable live prompts, and collapse section
   useEffect(() => {
@@ -281,48 +259,12 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
     }
   }, [isLocked]);
 
-  // Keyboard hotkey handler for model selection toggle (cycles through: nnInteractive -> sam2 -> medsam2 -> sam3 -> nnInteractive)
-  useEffect(() => {
-    if (hotkeysDisabled) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if the pressed key is 'T' or 't'
-      if ((event.key === 'T' || event.key === 't')) {
-        // Only trigger if we're not typing in an input field
-        const activeElement = document.activeElement;
-        const isInputField = activeElement?.tagName === 'INPUT' || 
-                           activeElement?.tagName === 'TEXTAREA' || 
-                           (activeElement as HTMLElement)?.contentEditable === 'true';
-        
-        if (!isInputField) {
-          event.preventDefault();
-          // Cycle through models: nnInteractive -> sam2 -> medsam2 -> sam3 -> nnInteractive
-          const nextModel = selectedModel === 'nnInteractive' ? 'sam2' : 
-                           selectedModel === 'sam2' ? 'medsam2' :
-                           selectedModel === 'medsam2' ? 'sam3' :
-                           'nnInteractive';
-          setSelectedModel(nextModel);
-          toolboxState.setSelectedModel(nextModel);
-          console.log('Model selection toggled via hotkey (t):', nextModel);
-        }
-      }
-    };
-
-    // Add event listener
-    document.addEventListener('keydown', handleKeyDown);
-
-    // Cleanup
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [selectedModel, hotkeysDisabled]);
 
   const { toolbarButtons: toolboxSections, onInteraction } = useToolbar({
     servicesManager,
     buttonSection: buttonSectionId,
   });
+  onInteractionRef.current = onInteraction;
 
   if (!toolboxSections.length) {
     return null;
@@ -431,7 +373,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
               {isAIToolBox && (
                 <div className="flex justify-center items-center gap-4 py-2 px-1">
                    <div className="flex items-center gap-2">
-                     <Label htmlFor="live-mode">Live Mode</Label>
+                     <Label htmlFor="live-mode">Live Mode [Q]</Label>
                      <Switch
                        id="live-mode"
                        checked={liveMode}
@@ -443,7 +385,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
                      />
                    </div>
                    <div className="flex items-center gap-2">
-                     <Label htmlFor="pos-neg">Pos/Neg</Label>
+                     <Label htmlFor="pos-neg">Pos/Neg [T]</Label>
                      <Switch
                        id="pos-neg"
                        checked={posNeg}
@@ -451,18 +393,6 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
                         setPosNeg(checked);
                         toolboxState.setPosNeg(checked);
                         console.log('Pos/Neg:', checked);
-                      }}
-                     />
-                   </div>
-                   <div className="flex items-center gap-2">
-                     <Label htmlFor="refine-new">Refine/New</Label>
-                     <Switch
-                       id="refine-new"
-                       checked={refineNew}
-                       onCheckedChange={(checked) => {
-                        setRefineNew(checked);
-                        toolboxState.setRefineNew(checked);
-                        console.log('Refine/New:', checked);
                       }}
                      />
                    </div>

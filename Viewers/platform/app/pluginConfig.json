@@ -68,16 +68,20 @@
       "packageName": "@ohif/mode-longitudinal"
     },
     {
-      "packageName": "@ohif/mode-segmentation"
+      "packageName": "@ohif/mode-segmentation",
+      "default": false
     },
     {
-      "packageName": "@ohif/mode-tmtv"
+      "packageName": "@ohif/mode-tmtv",
+      "default": false
     },
     {
-      "packageName": "@ohif/mode-microscopy"
+      "packageName": "@ohif/mode-microscopy",
+      "default": false
     },
     {
-      "packageName": "@ohif/mode-preclinical-4d"
+      "packageName": "@ohif/mode-preclinical-4d",
+      "default": false
     },
     {
       "packageName": "@ohif/mode-test",

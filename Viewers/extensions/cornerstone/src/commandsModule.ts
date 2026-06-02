@@ -721,6 +721,30 @@ function commandsModule({
         actions.setToolActive({ toolName, toolGroupId });
       });
     },
+    toggleToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [] }) => {
+      toolName = toolName || itemId || value;
+      toolGroupIds = toolGroupIds.length ? toolGroupIds : toolGroupService.getToolGroupIds();
+
+      // Check active viewport to decide toggle direction
+      const { activeViewportId } = viewportGridService.getState();
+      const activeToolGroup = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const isCurrentlyActive = activeToolGroup?.getActivePrimaryMouseButtonTool() === toolName;
+
+      if (isCurrentlyActive) {
+        // Deactivate: set passive and fall back to Pan
+        toolGroupIds.forEach(toolGroupId => {
+          const tg = toolGroupService.getToolGroup(toolGroupId);
+          if (tg?.hasTool(toolName)) {
+            tg.setToolPassive(toolName);
+          }
+          if (tg?.hasTool('Pan')) {
+            actions.setToolActive({ toolName: 'Pan', toolGroupId });
+          }
+        });
+      } else {
+        actions.setToolActiveToolbar({ value, itemId, toolName, toolGroupIds });
+      }
+    },
     setToolActive: ({ toolName, toolGroupId = null }) => {
       const { viewports } = viewportGridService.getState();
 
@@ -1882,6 +1906,9 @@ function commandsModule({
     },
     setToolActiveToolbar: {
       commandFn: actions.setToolActiveToolbar,
+    },
+    toggleToolActiveToolbar: {
+      commandFn: actions.toggleToolActiveToolbar,
     },
     setToolEnabled: {
       commandFn: actions.setToolEnabled,

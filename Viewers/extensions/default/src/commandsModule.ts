@@ -37,6 +37,17 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 
+/** Tracks the last series initialized by initNninter to detect study/series changes. */
+let _lastInitSeries: string | undefined = undefined;
+
+/** Safely parse a numeric timing field from multipart response metadata. */
+function metaNum(meta: Record<string, unknown>, key: string): number | undefined {
+  const v = meta[key];
+  if (v === undefined || v === null) return undefined;
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  return isFinite(n) ? n : undefined;
+}
+
 
 export type HangingProtocolParams = {
   protocolId?: string;
@@ -75,7 +86,10 @@ const commandsModule = ({
         evt.measurement.toolName
       )) {
         console.log('Live mode enabled, triggering nninter() for new measurement');
-        // Use setTimeout to ensure the measurement is fully processed
+        // Defer past the render cycle so _calculateCachedStats can populate
+        // cachedStats[targetId].scribble before nninter reads measurement data.
+        // Promise.resolve() (microtask) is too early — scribble data is set
+        // during the requestAnimationFrame render cycle that follows MEASUREMENT_ADDED.
         setTimeout(() => {
           if (toolboxState.getLocked()) {
             return;
@@ -155,8 +169,6 @@ const commandsModule = ({
         }
       ]);
     } else {
-      // Comment out at the moment (necessary for hiding previous segments), may need to uncomment some weird bugs.
-      servicesManager.services.segmentationService.clearSegmentationRepresentations(activeViewportId);
       const readableText = customizationService.getCustomization('panelSegmentation.readableText');
 
       // Get existing segmentation to preserve other representation data
@@ -206,81 +218,81 @@ const commandsModule = ({
     
     servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
     toolboxState.setCurrentActiveSegment(segmentNumber);
-    await servicesManager.services.segmentationService.addSegmentationRepresentation(activeViewportId, {
-      segmentationId: segmentationId,
-    });
-    
+
     if (toolboxState.getRefineNew()) {
       toolboxState.setRefineNew(false);
     }
-    
-    // semi-hack: to render segmentation properly on the current image for stack viewport
-    const viewport = activeViewportId.startsWith('default') 
-      ? servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId)
-      : null;
-    if (viewport?.setImageIdIndex && currentImageIdIndex !== undefined) {
-      const somewhereIndex = currentImageIdIndex === 0 ? 1 : 0;
-      await viewport.setImageIdIndex(somewhereIndex);
-      await viewport.setImageIdIndex(currentImageIdIndex);
-    }
-    
-    // Recover the visibility of the segments
-    for (let i = 0; i < representations.length; i++) {
-      const representation = representations[i];
-      const segments = Object.values(representation.segments);
-      
-      if (segments.length > 0) {
-        for (let j = 0; j < segments.length; j++) {
-          const segment = segments[j];
-          servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, segment.segmentIndex, segment.visible);
+
+    if (!existing) {
+      // ── First-ever inference: no actors exist yet, must do full viewport setup ──
+
+      // Recover the visibility of any pre-existing segments
+      for (let i = 0; i < representations.length; i++) {
+        const representation = representations[i];
+        const segs = Object.values(representation.segments);
+        for (let j = 0; j < segs.length; j++) {
+          const seg = segs[j];
+          servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, (seg as any).segmentIndex, (seg as any).visible);
         }
       }
-    }
 
-    // Update all viewports with the new segmentation representation
-    const currentViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
-    for (let i = 0; i < currentViewportIds.length; i++) {
-      const viewportId = currentViewportIds[i];
-      const viewport = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
-      const isVolume3D = viewport instanceof VolumeViewport3D;
+      // Add representations for all viewports
+      const currentViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+      const regularViewportIds: string[] = [];
+      const volume3DViewportIds: string[] = [];
+      for (const viewportId of currentViewportIds) {
+        const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
+        if (vp instanceof VolumeViewport3D) volume3DViewportIds.push(viewportId);
+        else regularViewportIds.push(viewportId);
+      }
 
-      servicesManager.services.segmentationService.removeSegmentationRepresentations(
-        viewportId,
-        { segmentationId }
-      );
-
-      // For VolumeViewport3D, update labelmap image references to trigger surface regeneration
-      if (isVolume3D) {
+      for (const viewportId of currentViewportIds) {
+        servicesManager.services.segmentationService.removeSegmentationRepresentations(viewportId, { segmentationId });
+      }
+      await Promise.all(regularViewportIds.map(viewportId =>
+        servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, { segmentationId })
+      ));
+      for (const viewportId of volume3DViewportIds) {
+        const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
         updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
-      }
-
-      // For VolumeViewport3D, explicitly specify Labelmap type to trigger viewport conversion to Surface
-      // This ensures the surface is properly computed from the updated labelmap
-      await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
-        segmentationId: segmentationId,
-        type: isVolume3D ? csToolsEnums.SegmentationRepresentations.Labelmap : undefined,
-      });
-
-      // For VolumeViewport3D, wait a bit for surface computation to complete, then render
-      if (isVolume3D) {
-        // Give time for surface computation to complete
-        await new Promise(resolve => setTimeout(resolve, 100));
-        // Use requestAnimationFrame to ensure the representation is fully added before rendering
-        requestAnimationFrame(() => {
-          if (viewport) {
-            viewport.render();
-          }
+        await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
+          segmentationId,
+          type: csToolsEnums.SegmentationRepresentations.Labelmap,
         });
+        await new Promise(resolve => setTimeout(resolve, 100));
+        requestAnimationFrame(() => vp?.render());
       }
-    }
 
-    // Trigger SEGMENTATION_DATA_MODIFIED event AFTER all representations are re-added
-    // This ensures surface representations exist before they try to update
-    eventTarget.dispatchEvent(
-      new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
-        detail: { segmentationId },
-      })
-    );
+      // Scroll-away-back so Cornerstone creates the VTK actors for the current slice
+      // and uploads the initial GPU texture (only needed on first-ever inference).
+      const activeVp = activeViewportId.startsWith('default')
+        ? servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId)
+        : null;
+      if (activeVp?.setImageIdIndex && currentImageIdIndex !== undefined) {
+        const away = currentImageIdIndex === 0 ? 1 : 0;
+        await activeVp.setImageIdIndex(away);
+        await activeVp.setImageIdIndex(currentImageIdIndex);
+      }
+
+      eventTarget.dispatchEvent(
+        new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
+          detail: { segmentationId },
+        })
+      );
+    } else {
+      // ── Refinement / update (existing segment) — fast path ──
+      // VTK actors for all viewports already exist and reference the same image
+      // buffers that were updated by the voxel-writing loop above.
+      // labelmapDisplay._setLabelmapColorAndOpacity now calls
+      // scalars.modified() + inputData.modified() unconditionally, so the GPU
+      // texture is re-uploaded on the next rAF render triggered by the event.
+      // No remove/re-add or scroll needed — saves ~300–350 ms per inference.
+      eventTarget.dispatchEvent(
+        new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
+          detail: { segmentationId },
+        })
+      );
+    }
   }
 
   const actions = {
@@ -787,7 +799,7 @@ const commandsModule = ({
       const selectedModel = toolboxState.getSelectedModel();
       const medsam2 = selectedModel //Check at monailabel server;
       const start = Date.now();
-      
+
       const segs = servicesManager.services.segmentationService.getSegmentations()
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
@@ -799,16 +811,15 @@ const commandsModule = ({
       const displaySets = displaySetService.activeDisplaySets;
 
       const displaySetInstanceUID = displaySetInstanceUIDs[0];
-      const currentDisplaySets = displaySets.filter(e => {
-        return e.displaySetInstanceUID == displaySetInstanceUID;
-      })[0];
+      const currentDisplaySets = displaySets.find(e => e.displaySetInstanceUID === displaySetInstanceUID);
+      if (!currentDisplaySets) return;
 
       const currentMeasurements = measurementService.getMeasurements()
 
-      const unAssignedMeasurements = currentMeasurements.filter(e => { 
+      const unAssignedMeasurements = currentMeasurements.filter(e => {
         return e.metadata.SegmentNumber === undefined;
       })
-    
+
 
     const activeSegmentation = servicesManager.services.segmentationService.getActiveSegmentation(activeViewportId)
     let segmentNumber = 1;
@@ -876,29 +887,19 @@ const commandsModule = ({
     }
   }
 
-      const pos_points = currentMeasurements
-        .filter(e => {
-          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => {
-          return Object.values(e.data)[0].index;
-        });
-      const neg_points = currentMeasurements
-        .filter(e => {
-          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => {
-          return Object.values(e.data)[0].index;
-        });
-
-      const pos_boxes = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'RectangleROI2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0].pointsInShape 
-        })
-        .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
+      const pos_points: any[] = [];
+      const neg_points: any[] = [];
+      const pos_boxes: any[] = [];
+      const seriesUID = currentDisplaySets.SeriesInstanceUID;
+      for (const e of currentMeasurements) {
+        if (e.referenceSeriesUID !== seriesUID || e.metadata.SegmentNumber !== segmentNumber) continue;
+        if (e.toolName === 'Probe2') {
+          (e.metadata.neg ? neg_points : pos_points).push(Object.values(e.data)[0].index);
+        } else if (e.toolName === 'RectangleROI2' && !e.metadata.neg) {
+          const pts = Object.values(e.data)[0].pointsInShape;
+          pos_boxes.push([pts.at(0).pointIJK, pts.at(-1).pointIJK]);
+        }
+      }
 
 
 
@@ -907,20 +908,11 @@ const commandsModule = ({
       //.filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
       //.map(e => { return e.label })
 
-      // Hide the measurements after inference
-      for (let i = 0; i < currentMeasurements.length; i++) {
-        const e = currentMeasurements[i];
-        if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID) {
-          measurementService.toggleVisibilityMeasurement(e.uid, false);
-        }
-      }
-
-      // Force a re-render of the segmentation table after a short delay
-      setTimeout(() => {
-        // This will trigger a re-render of components that depend on measurement state
-        const event = new Event('measurement-state-changed');
-        document.dispatchEvent(event);
-      }, 200);
+      // Hide measurements and notify in a single synchronous pass
+      currentMeasurements
+        .filter(e => e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID)
+        .forEach(e => measurementService.toggleVisibilityMeasurement(e.uid, false));
+      document.dispatchEvent(new Event('measurement-state-changed'));
       if (pos_points.length == 0 && neg_points.length == 0 && pos_boxes.length == 0 && text_prompts.length == 0){
         uiNotificationService.show({
           title: 'Prompt warning',
@@ -1046,7 +1038,6 @@ const commandsModule = ({
           if(flipped){
             derivedImages_new.reverse();
           }
-          console.log(`After reverse: ${(Date.now() - start)/1000} Seconds`);
           for (let i = 0; i < derivedImages_new.length; i++) {
             const voxelManager = derivedImages_new[i]
               .voxelManager as csTypes.IVoxelManager<number>;
@@ -1095,16 +1086,15 @@ const commandsModule = ({
           } else if (derivedImages.length > 0) {
             filteredDerivedImages = derivedImages;
           }
-          console.log(`After refinement & filteredDerivedImages: ${(Date.now() - start)/1000} Seconds`);
           merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
         } else {
           if (segImageIds.length == 0){
+            const _tCreate2 = Date.now();
             let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
 
             if(flipped){
               derivedImages_new.reverse();
             }
-            console.log(`After reverse: ${(Date.now() - start)/1000} Seconds`);
             for (let i = 0; i < derivedImages_new.length; i++) {
               const voxelManager = derivedImages_new[i]
                 .voxelManager as csTypes.IVoxelManager<number>;
@@ -1157,19 +1147,21 @@ const commandsModule = ({
                     
           const derivedImageIds = merged_derivedImages.map(image => image.imageId);  
           console.log(`Just after derivedImageIds: ${(Date.now() - start)/1000} Seconds`);
+          const _zMin = z_range.length > 0 ? Math.min(...z_range) : 0;
+          const _zMax = z_range.length > 0 ? Math.max(...z_range) + 1 : (merged_derivedImages?.length ?? 0);
           segments[segmentNumber] = {
             segmentIndex: segmentNumber,
             label: label_name,
             locked: false,
             active: false,
             cachedStats: {
-
               modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
-
               algorithmType: currentDisplaySets.SeriesInstanceUID,
               algorithmName: selectedModel+"_"+sam_elapsed,
               description: prompt_info,
-              center:  z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0
+              center:  z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0,
+              segZ0: _zMin,
+              segZ1: _zMax,
             }
           };
 
@@ -1220,6 +1212,14 @@ const commandsModule = ({
       if(currentDisplaySets === undefined || currentDisplaySets.Modality === "SEG"){
         return;
       }
+
+      // Detect series change — used both for posNeg reset and notification gating.
+      const _seriesChanged = currentDisplaySets.SeriesInstanceUID !== _lastInitSeries;
+      if (_seriesChanged) {
+        _lastInitSeries = currentDisplaySets.SeriesInstanceUID;
+        toolboxState.setPosNeg(false);
+      }
+
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -1231,6 +1231,12 @@ const commandsModule = ({
         nninter: "init",
       };
 
+      // Show notification only on the first initNninter for a new series.
+      // _seriesChanged is false for all repeat triggers (other MPR panes loading the
+      // same series, viewport-type switches stack↔volume, active-viewport clicks, etc.)
+      // so a single _seriesChanged gate is sufficient — no need to check viewport type.
+      const _showNotification = _seriesChanged;
+
       let data = MonaiLabelClient.constructFormData(params, null);
 
       // Create the axios promise
@@ -1241,18 +1247,19 @@ const commandsModule = ({
         },
       });
 
-      // Show notification with promise support
-      uiNotificationService.show({
-        title: 'NNInit',
-        message: 'Initializing nninter...',
-        type: 'info',
-        promise: initPromise,
-        promiseMessages: {
-          loading: 'Initializing nninter...',
-          success: () => 'Init nninter - Successful',
-          error: (error) => `Init nninter - Failed: ${error.message || 'Unknown error'}`,
-        },
-      });
+      if (_showNotification) {
+        uiNotificationService.show({
+          title: 'NNInit',
+          message: 'Initializing nninter...',
+          type: 'info',
+          promise: initPromise,
+          promiseMessages: {
+            loading: 'Initializing nninter...',
+            success: () => 'Init nninter - Successful',
+            error: (error) => `Init nninter - Failed: ${error.message || 'Unknown error'}`,
+          },
+        });
+      }
 
       try {
         const response = await initPromise;
@@ -1299,19 +1306,6 @@ const commandsModule = ({
         },
       });
 
-      // Show notification with promise support
-      uiNotificationService.show({
-        title: 'NNInter',
-        message: 'Resetting nninter...',
-        type: 'info',
-        promise: resetPromise,
-        promiseMessages: {
-          loading: 'Resetting nninter...',
-          success: () => 'Reset nninter - Successful',
-          error: (error) => `Reset nninter - Failed: ${error.message || 'Unknown error'}`,
-        },
-      });
-
       try {
         const response = await resetPromise;
         if (response.status === 200) {
@@ -1324,6 +1318,75 @@ const commandsModule = ({
         console.error('Reset nninter error:', error);
         throw error;
       }
+    },
+    async resetSegment({ segmentationId, segmentIndex }: { segmentationId: string; segmentIndex: number }) {
+      const segmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
+      const imageIds: string[] = (segmentation?.representationData?.Labelmap as any)?.imageIds ?? [];
+
+      const _zeroImageId = (imageId: string) => {
+        const image = cache.getImage(imageId);
+        if (!image) return;
+        const vm = image.voxelManager as csTypes.IVoxelManager<number>;
+        const scalarData = vm.getScalarData();
+        if (!scalarData.some((v: number) => v === segmentIndex)) return;
+        for (let j = 0; j < scalarData.length; j++) {
+          if (scalarData[j] === segmentIndex) scalarData[j] = 0;
+        }
+        vm.setScalarData(scalarData);
+      };
+
+      // 1. Find the labelmap actors currently in the active viewport.
+      //    Using referencedId (the actor's imageId) avoids the flipped-series
+      //    index mismatch that caused the "vague then gone" two-step.
+      const { activeViewportId } = viewportGridService.getState();
+      const activeVp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+      const allActors: any[] = (activeVp as any)?.getActors?.() ?? [];
+      const labelmapActors = allActors.filter((a: any) =>
+        a.representationUID?.startsWith(`${segmentationId}-Labelmap`)
+      );
+      const visibleImageIds = new Set(labelmapActors.map((a: any) => a.referencedId).filter(Boolean));
+
+      // 2. Zero the visible slice(s) and synchronously push the zeroed data into
+      //    VTK's internal buffer + force an immediate WebGL render.
+      //    Bypasses the rAF event queue → no intermediate "vague" frame.
+      for (const actorEntry of labelmapActors) {
+        const imageId = actorEntry.referencedId;
+        if (!imageId) continue;
+        _zeroImageId(imageId);
+        const inputData = actorEntry.actor?.getMapper?.()?.getInputData?.();
+        if (inputData) {
+          const csImage = cache.getImage(imageId);
+          if (csImage) {
+            const pixelData = csImage.voxelManager?.getScalarData?.();
+            const vtkScalars = inputData.getPointData?.()?.getScalars?.();
+            const vtkData = vtkScalars?.getData?.();
+            if (pixelData && vtkData && vtkData.length === pixelData.length) {
+              vtkData.set(pixelData);
+              vtkScalars?.modified();
+              inputData.modified();
+            }
+          }
+          actorEntry.actor?.modified?.();
+          actorEntry.actor?.getMapper?.()?.modified?.();
+        }
+      }
+      (activeVp as any)?.render?.();   // synchronous WebGL render — instant visual removal
+
+      // 3. Background: zero all remaining slices, remove measurements, reset server.
+      setTimeout(() => {
+        for (const imageId of imageIds) {
+          if (!visibleImageIds.has(imageId)) _zeroImageId(imageId);
+        }
+        const measurementUIDs = measurementService
+          .getMeasurements()
+          .filter(e => e?.metadata?.segmentationId === segmentationId && e?.metadata?.SegmentNumber === segmentIndex)
+          .map(e => e?.uid);
+        if (measurementUIDs.length > 0) measurementService.removeMany(measurementUIDs);
+        commandsManager.run('resetNninter', { clearMeasurements: false }).catch(() => {});
+        eventTarget.dispatchEvent(
+          new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, { detail: { segmentationId } })
+        );
+      }, 0);
     },
     async medGemma(
       query: string,
@@ -1895,9 +1958,9 @@ const commandsModule = ({
         return;
       }
 
-      const overlap = false
+      const overlap = false;
       const start = Date.now();
-      
+
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
 
@@ -1909,15 +1972,14 @@ const commandsModule = ({
       const displaySets = displaySetService.activeDisplaySets;
 
       const displaySetInstanceUID = displaySetInstanceUIDs[0];
-      const currentDisplaySets = displaySets.filter(e => {
-        return e.displaySetInstanceUID == displaySetInstanceUID;
-      })[0];
+      const currentDisplaySets = displaySets.find(e => e.displaySetInstanceUID === displaySetInstanceUID);
+      if (!currentDisplaySets) return;
       const currentMeasurements = measurementService.getMeasurements()
 
-      const unAssignedMeasurements = currentMeasurements.filter(e => { 
+      const unAssignedMeasurements = currentMeasurements.filter(e => {
           return e.metadata.SegmentNumber === undefined;
         })
-      
+
 
       const activeSegmentation = servicesManager.services.segmentationService.getActiveSegmentation(activeViewportId)
       let segmentNumber = 1;
@@ -1985,100 +2047,43 @@ const commandsModule = ({
     }
 
 
-      const pos_points = currentMeasurements
-        .filter(e => {
-          return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => {
-          return Object.values(e.data)[0].index;
-        });
-      const neg_points = currentMeasurements
-        .filter(e => {
-          return e.toolName === 'Probe2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => {
-          return Object.values(e.data)[0].index;
-        });
-
-      const pos_boxes = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0].pointsInShape 
-        })
-        .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
-
-      const neg_boxes = currentMeasurements
-      .filter(e => { 
-        return e.toolName === 'RectangleROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
-      })
-      .map(e => { 
-        return Object.values(e.data)[0].pointsInShape 
-      })
-      .map(e => { return [e.at(0).pointIJK, e.at(-1).pointIJK] })
-
-      const pos_lassos = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0]?.boundary 
-      })
-      .filter(Boolean)
-
-      const neg_lassos = currentMeasurements
-      .filter(e => { 
-        return e.toolName === 'PlanarFreehandROI3'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
-      })
-      .map(e => { 
-        return Object.values(e.data)[0]?.boundary 
-    })
-    .filter(Boolean)
-
-      const pos_scribbles = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0]?.scribble 
-      })
-      .filter(Boolean)
-
-      const neg_scribbles = currentMeasurements
-        .filter(e => { 
-          return e.toolName === 'PlanarFreehandROI2'&& e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === true && e.metadata.SegmentNumber === segmentNumber;
-        })
-        .map(e => { 
-          return Object.values(e.data)[0]?.scribble 
-      })
-      .filter(Boolean)
-
-      //VoxTell - Use provided textPrompts or extract from measurements
-      let text_prompts: string[] = [];
-      if (textPrompts) {
-        // Convert to array if it's a single string
-        text_prompts = Array.isArray(textPrompts) ? textPrompts : [textPrompts];
-      } else {
-        text_prompts = currentMeasurements
-          .filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
-          .map(e => { return e.label });
-      }
-
-      // Hide the measurements after inference
-      for (let i = 0; i < currentMeasurements.length; i++) {
-        const e = currentMeasurements[i];
-        if (e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID) {
-          measurementService.toggleVisibilityMeasurement(e.uid, false);
+      const pos_points: any[] = [];
+      const neg_points: any[] = [];
+      const pos_boxes: any[] = [];
+      const neg_boxes: any[] = [];
+      const pos_lassos: any[] = [];
+      const neg_lassos: any[] = [];
+      const pos_scribbles: any[] = [];
+      const neg_scribbles: any[] = [];
+      const probe2Labels: string[] = [];
+      const seriesUID = currentDisplaySets.SeriesInstanceUID;
+      for (const e of currentMeasurements) {
+        if (e.referenceSeriesUID !== seriesUID || e.metadata.SegmentNumber !== segmentNumber) continue;
+        const isNeg = !!e.metadata.neg;
+        if (e.toolName === 'Probe2') {
+          (isNeg ? neg_points : pos_points).push(Object.values(e.data)[0].index);
+          if (!isNeg && !textPrompts) probe2Labels.push(e.label);
+        } else if (e.toolName === 'RectangleROI2') {
+          const pts = Object.values(e.data)[0].pointsInShape;
+          (isNeg ? neg_boxes : pos_boxes).push([pts.at(0).pointIJK, pts.at(-1).pointIJK]);
+        } else if (e.toolName === 'PlanarFreehandROI3') {
+          const b = Object.values(e.data)[0]?.boundary;
+          if (b) (isNeg ? neg_lassos : pos_lassos).push(b);
+        } else if (e.toolName === 'PlanarFreehandROI2') {
+          const s = Object.values(e.data)[0]?.scribble;
+          if (s) (isNeg ? neg_scribbles : pos_scribbles).push(s);
         }
       }
+      //VoxTell - Use provided textPrompts or extract from measurements
+      const text_prompts: string[] = textPrompts
+        ? (Array.isArray(textPrompts) ? textPrompts : [textPrompts])
+        : probe2Labels;
 
-      // Force a re-render of the segmentation table after a short delay
-      setTimeout(() => {
-        // This will trigger a re-render of components that depend on measurement state
-        const event = new Event('measurement-state-changed');
-        document.dispatchEvent(event);
-      }, 200);
+      // Hide measurements and notify in a single synchronous pass
+      currentMeasurements
+        .filter(e => e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID)
+        .forEach(e => measurementService.toggleVisibilityMeasurement(e.uid, false));
+      document.dispatchEvent(new Event('measurement-state-changed'));
 
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
@@ -2134,17 +2139,83 @@ const commandsModule = ({
         console.debug(response);
         if (response.status === 200) {
             const afterPost = Date.now();
-            console.log(`Just after Post request: ${(afterPost - start)/1000} Seconds`);
+            const networkRoundTripMs = afterPost - beforePost;
             const ct = response.headers["content-type"] as string;
             const { meta, seg } = await parseMultipart(response.data, ct);
-            console.log(`Just after parseMultipart: ${(Date.now() - start)/1000} Seconds`);
-            //const arrayBuffer = response.data
+            const afterParse = Date.now();
+
+            // --- server-side timing breakdown ---
+            const sRequestTs     = metaNum(meta as Record<string,unknown>, 'server_request_ts');
+            const sBeginTs       = metaNum(meta as Record<string,unknown>, 'server_begin_ts');
+            const sEndTs         = metaNum(meta as Record<string,unknown>, 'server_end_ts');
+            const sLoad          = metaNum(meta as Record<string,unknown>, 'server_load_elapsed');
+            const sImgConvert    = metaNum(meta as Record<string,unknown>, 'server_img_convert_elapsed');
+            const sPromptPrep    = metaNum(meta as Record<string,unknown>, 'server_prompt_prep_elapsed');
+            const sModelCore     = metaNum(meta as Record<string,unknown>, 'nninter_core_elapsed');
+            const sResult        = metaNum(meta as Record<string,unknown>, 'server_result_elapsed');
+            const sTotal         = metaNum(meta as Record<string,unknown>, 'nninter_elapsed');
+            const sFirstTs       = metaNum(meta as Record<string,unknown>, 'nninter_first_interaction_ts');
+
+            // Four-leg split (all server timestamps share the same host clock as the container):
+            //   leg1: POST in flight          = server_request_ts - beforePost (client clock vs server clock; same host → accurate)
+            //   leg2: MONAI pre-processing    = server_begin_ts - server_request_ts (DICOM download from Orthanc, entirely server-side)
+            //   leg3: our infer()             = server_end_ts - server_begin_ts (same clock, exact)
+            //   leg4: response in flight      = afterPost - server_end_ts (same host → accurate)
+            const postInFlightMs    = (sRequestTs != null) ? sRequestTs * 1000 - beforePost                     : undefined;
+            const monaiPrepMs       = (sRequestTs != null && sBeginTs != null) ? (sBeginTs - sRequestTs) * 1000 : undefined;
+            const serverProcessMs   = (sBeginTs   != null && sEndTs   != null) ? (sEndTs   - sBeginTs)   * 1000 : undefined;
+            const responseInFlightMs= (sEndTs     != null)                     ? afterPost - sEndTs * 1000      : undefined;
+
+            console.log(
+              `[nninter timing]\n` +
+              `  client → nninter():              ${((beforePost - start)/1000).toFixed(3)}s\n` +
+              `  ── round-trip total:              ${(networkRoundTripMs/1000).toFixed(3)}s\n` +
+              (postInFlightMs     != null ? `     POST in flight:               ${(postInFlightMs/1000).toFixed(3)}s\n` : '') +
+              (monaiPrepMs        != null ? `     MONAI pre-processing:          ${(monaiPrepMs/1000).toFixed(3)}s  (Orthanc DICOM download)\n` : '') +
+              (serverProcessMs    != null ? `     server processing (infer):     ${(serverProcessMs/1000).toFixed(3)}s\n` : '') +
+              (sLoad        != null ? `       ↳ DICOM load:                ${sLoad.toFixed(3)}s\n` : '') +
+              (sImgConvert  != null ? `       ↳ img→numpy:                 ${sImgConvert.toFixed(3)}s\n` : '') +
+              (sPromptPrep  != null ? `       ↳ prompt prep:               ${sPromptPrep.toFixed(3)}s\n` : '') +
+              (sModelCore   != null ? `       ↳ model forward:             ${sModelCore.toFixed(3)}s\n` : '') +
+              (sResult      != null ? `       ↳ result retrieve:           ${sResult.toFixed(3)}s\n` : '') +
+              (responseInFlightMs != null ? `     response in flight:            ${(responseInFlightMs/1000).toFixed(3)}s\n` : '') +
+              `  client parse multipart:          ${((afterParse - afterPost)/1000).toFixed(3)}s`
+            );
+
             const flipped = meta.flipped.toLowerCase() === "true"
             const nninter_elapsed = meta.nninter_elapsed
             const prompt_info = meta.prompt_info
             const label_name = meta.label_name
             const raw = seg
-            const new_arrayBuffer = new Uint8Array(raw);
+
+            // Parse crop geometry. The slice loops write directly from cropBytes into
+            // each slice's scalar data buffer — no full-volume reconstruction needed.
+            // Avoiding the 182 MB allocation eliminates GC pauses that caused 0.3-1.3s jitter.
+            const cropBytes = new Uint8Array(raw);
+            const predOffset: number[] = JSON.parse((meta as any).pred_offset   || '[0,0,0]');
+            const predFull:   number[] = JSON.parse((meta as any).pred_full_shape || '[]');
+            const predCrop:   number[] = JSON.parse((meta as any).pred_crop_shape || '[]');
+
+            // Crop geometry (exposed to slice loops below)
+            let _segZ0 = 0, _segZ1 = Number.MAX_SAFE_INTEGER;
+            let _cropY = 0, _cropX = 0, _y0 = 0, _x0 = 0, _fullX = 0;
+            let _hasCropGeom = false;
+            if (predFull.length === 3 && predCrop.length === 3) {
+              const [, , fullX] = predFull;
+              const [cropZ, cropY, cropX] = predCrop;
+              const [z0, y0, x0] = predOffset;
+              _segZ0 = z0;  _segZ1 = z0 + cropZ;
+              _cropY = cropY; _cropX = cropX;
+              _y0 = y0; _x0 = x0; _fullX = fullX;
+              _hasCropGeom = true;
+            } else {
+            }
+            // Legacy fallback: reconstruct full-volume buffer when crop geometry is unavailable.
+            // This path should never trigger for current server builds.
+            let new_arrayBuffer: Uint8Array | null = null;
+            if (!_hasCropGeom) {
+              new_arrayBuffer = cropBytes;
+            }
 
             let imageIds = currentDisplaySets.imageIds
 
@@ -2181,30 +2252,43 @@ const commandsModule = ({
           let merged_derivedImages = [];
           let z_range = [];
           if(overlap){
+          const _tCreate = Date.now();
           let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
-          console.log(`Just after createAndCacheDerivedLabelmapImages: ${(Date.now() - start)/1000} Seconds`);
           let derivedImages = [];
           if (segImageIds.length > 0){
             derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
           }
 
-          // We should parse the segmentation as separate slices to support overlapping segments.
-          // This parsing should occur in the CornerstoneJS library adapters.
           if(flipped){
             derivedImages_new.reverse();
           }
-          console.log(`After reverse: ${(Date.now() - start)/1000} Seconds`);
           for (let i = 0; i < derivedImages_new.length; i++) {
-            const voxelManager = derivedImages_new[i]
-              .voxelManager as csTypes.IVoxelManager<number>;
-            let scalarData = voxelManager.getScalarData();
-            const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
-            if (sliceData.some(v => v === 1)){
-              voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
-              if (flipped) {
-                z_range.push(derivedImages_new.length - i - 1);
-              } else {
-                z_range.push(i);
+            if (_hasCropGeom && (i < _segZ0 || i >= _segZ1)) continue;
+            const voxelManager = derivedImages_new[i].voxelManager as csTypes.IVoxelManager<number>;
+            if (_hasCropGeom && i >= _segZ0 && i < _segZ1) {
+              const scalarData = voxelManager.getScalarData();
+              const c = i - _segZ0;
+              const cropSliceBase = c * _cropY * _cropX;
+              let wrote = false;
+              for (let cy = 0; cy < _cropY; cy++) {
+                const srcRow = cropSliceBase + cy * _cropX;
+                const dstRow = (_y0 + cy) * _fullX + _x0;
+                for (let cx = 0; cx < _cropX; cx++) {
+                  if (cropBytes[srcRow + cx] === 1) {
+                    scalarData[dstRow + cx] = segmentNumber;
+                    wrote = true;
+                  }
+                }
+              }
+              if (wrote) z_range.push(flipped ? derivedImages_new.length - i - 1 : i);
+            } else if (!_hasCropGeom && new_arrayBuffer) {
+              // Legacy: full-slice scan
+              const scalarData = voxelManager.getScalarData();
+              const sliceLen = scalarData.length;
+              const sliceData = new_arrayBuffer.slice(i * sliceLen, (i + 1) * sliceLen);
+              if (sliceData.some(v => v === 1)) {
+                voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
+                z_range.push(flipped ? derivedImages_new.length - i - 1 : i);
               }
             }
           }
@@ -2245,28 +2329,46 @@ const commandsModule = ({
           } else if (derivedImages.length > 0) {
             filteredDerivedImages = derivedImages;
           }
-          console.log(`After refinement & filteredDerivedImages: ${(Date.now() - start)/1000} Seconds`);
 
           merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
         } else {
+          const _tElse = Date.now();
           if (segImageIds.length == 0){
+            const _tCreate2 = Date.now();
             let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
 
             if(flipped){
               derivedImages_new.reverse();
             }
-            console.log(`After reverse: ${(Date.now() - start)/1000} Seconds`);
             for (let i = 0; i < derivedImages_new.length; i++) {
+              if (_hasCropGeom && (i < _segZ0 || i >= _segZ1)) continue;
               const voxelManager = derivedImages_new[i]
-                .voxelManager as csTypes.IVoxelManager<number>;
-              let scalarData = voxelManager.getScalarData();
-              const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
-              if (sliceData.some(v => v === 1)){
-                voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
-                if (flipped) {
-                  z_range.push(derivedImages_new.length - i - 1);
-                } else {
-                  z_range.push(i);
+                .voxelManager as csTypes.IVoxelManager<number>;              // Write directly from cropBytes into the slice's scalar buffer.
+              // Iterates only cropY×cropX elements (fits in L2 cache) vs 262K full-slice scan.
+              if (_hasCropGeom && i >= _segZ0 && i < _segZ1) {
+                const scalarData = voxelManager.getScalarData();
+                const c = i - _segZ0;
+                const cropSliceBase = c * _cropY * _cropX;
+                let wrote = false;
+                for (let cy = 0; cy < _cropY; cy++) {
+                  const srcRow = cropSliceBase + cy * _cropX;
+                  const dstRow = (_y0 + cy) * _fullX + _x0;
+                  for (let cx = 0; cx < _cropX; cx++) {
+                    if (cropBytes[srcRow + cx] === 1) {
+                      scalarData[dstRow + cx] = segmentNumber;
+                      wrote = true;
+                    }
+                  }
+                }
+                if (wrote) z_range.push(flipped ? derivedImages_new.length - i - 1 : i);
+              } else if (!_hasCropGeom && new_arrayBuffer) {
+                // Legacy: full-slice scan
+                const scalarData = voxelManager.getScalarData();
+                const sliceLen = scalarData.length;
+                const sliceData = new_arrayBuffer.subarray(i * sliceLen, (i + 1) * sliceLen);
+                if (sliceData.some(v => v === 1)){
+                  for (let j = 0; j < sliceLen; j++) { if (sliceData[j] === 1) scalarData[j] = segmentNumber; }
+                  z_range.push(flipped ? derivedImages_new.length - i - 1 : i);
                 }
               }
             }
@@ -2279,23 +2381,53 @@ const commandsModule = ({
             if(flipped){
               merged_derivedImages.reverse();
             }
-            for (let i = 0; i < merged_derivedImages.length; i++) {
+            // Limit scan to the union of [prevZ0,prevZ1) (where old data lives) and
+            // [_segZ0,_segZ1) (where new data will be written).  Avoids scanning all
+            // ~500 slices × 262K pixels every inference — the previous bottleneck.
+            const _prevZ0: number = (_hasCropGeom && (existingSegments[segmentNumber] as any)?.cachedStats?.segZ0 != null)
+              ? (existingSegments[segmentNumber] as any).cachedStats.segZ0 as number
+              : 0;
+            const _prevZ1: number = (_hasCropGeom && (existingSegments[segmentNumber] as any)?.cachedStats?.segZ1 != null)
+              ? (existingSegments[segmentNumber] as any).cachedStats.segZ1 as number
+              : merged_derivedImages.length;
+            const scanZ0 = _hasCropGeom ? Math.min(_prevZ0, _segZ0) : 0;
+            const scanZ1 = _hasCropGeom ? Math.max(_prevZ1, _segZ1) : merged_derivedImages.length;
+
+            for (let i = scanZ0; i < scanZ1; i++) {
               const voxelManager = merged_derivedImages[i]
                 .voxelManager as csTypes.IVoxelManager<number>;
               let scalarData = voxelManager.getScalarData();
-              const sliceData = new_arrayBuffer.slice(i * scalarData.length, (i + 1) * scalarData.length);
-              if (!toolboxState.getRefineNew()){
-                if (scalarData.some(v => v === segmentNumber)){
-                  voxelManager.setScalarData(scalarData.map(v => v === segmentNumber ? 0 : v));
-                  scalarData = voxelManager.getScalarData();
+              const sliceLen = scalarData.length;
+
+              // Clear old segment pixels in-place (refine always overwrites)
+              if (scalarData.some(v => v === segmentNumber)){
+                for (let j = 0; j < sliceLen; j++) {
+                  if (scalarData[j] === segmentNumber) scalarData[j] = 0;
                 }
               }
-              if (sliceData.some(v => v === 1)){
-                voxelManager.setScalarData(sliceData.map((v, idx) => v === 1 ? segmentNumber : scalarData[idx]));
-                if (flipped) {
-                  z_range.push(merged_derivedImages.length - i - 1);
-                } else {
-                  z_range.push(i);
+
+              // Write new data from crop (cache-friendly, no 182 MB buffer)
+              if (_hasCropGeom && i >= _segZ0 && i < _segZ1) {
+                const c = i - _segZ0;
+                const cropSliceBase = c * _cropY * _cropX;
+                let wrote = false;
+                for (let cy = 0; cy < _cropY; cy++) {
+                  const srcRow = cropSliceBase + cy * _cropX;
+                  const dstRow = (_y0 + cy) * _fullX + _x0;
+                  for (let cx = 0; cx < _cropX; cx++) {
+                    if (cropBytes[srcRow + cx] === 1) {
+                      scalarData[dstRow + cx] = segmentNumber;
+                      wrote = true;
+                    }
+                  }
+                }
+                if (wrote) z_range.push(flipped ? merged_derivedImages.length - i - 1 : i);
+              } else if (!_hasCropGeom && new_arrayBuffer) {
+                // Legacy: full-slice scan
+                const sliceData = new_arrayBuffer.subarray(i * sliceLen, (i + 1) * sliceLen);
+                if (sliceData.some(v => v === 1)){
+                  for (let j = 0; j < sliceLen; j++) { if (sliceData[j] === 1) scalarData[j] = segmentNumber; }
+                  z_range.push(flipped ? merged_derivedImages.length - i - 1 : i);
                 }
               }
             }
@@ -2316,13 +2448,14 @@ const commandsModule = ({
             locked: false,
             active: false,
             cachedStats: {
-
               modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
-
               algorithmType: currentDisplaySets.SeriesInstanceUID,
               algorithmName: "nninter_"+nninter_elapsed,
               description: prompt_info,
               center:  z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0,
+              // z-range of this result — used next inference to limit the refine scan
+              segZ0: _hasCropGeom ? _segZ0 : 0,
+              segZ1: _hasCropGeom ? _segZ1 : (merged_derivedImages?.length ?? 0),
             }
           };
           console.log(`Before add or update segs: ${(Date.now() - start)/1000} Seconds`);
@@ -2341,10 +2474,12 @@ const commandsModule = ({
             currentImageIdIndex,
             z_range,
           });
-          console.log(`After add and update segs: ${(Date.now() - start)/1000} Seconds`);
-          
-          const end = Date.now();
-          console.log(`Time taken: ${(end - start)/1000} Seconds`);
+          const tViz = Date.now();
+          console.log(
+            `[nninter timing]\n` +
+            `  OHIF post-processing:         ${((tViz - afterParse)/1000).toFixed(3)}s  (parse→visible)\n` +
+            `  total client time:            ${((tViz - start)/1000).toFixed(3)}s`
+          );
           return response;
         }
       } catch (error) {
@@ -2754,6 +2889,7 @@ const commandsModule = ({
     sam2: actions.sam2,
     initNninter: actions.initNninter,
     resetNninter: actions.resetNninter,
+    resetSegment: actions.resetSegment,
     medGemma: actions.medGemma,
     gemini: actions.gemini,
     openai: actions.openai,

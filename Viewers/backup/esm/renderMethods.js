@@ -63,8 +63,7 @@ function renderClosedContour(enabledElement, svgDrawingHelper, annotation) {
 function renderOpenContour(enabledElement, svgDrawingHelper, annotation) {
     const { viewport } = enabledElement;
     const options = this._getRenderingOptions(enabledElement, annotation);
-    //Thicker for scribble
-    options.width = 3;
+    options.width = 2;
     const canvasPoints = annotation.data.contour.polyline.map((worldPos) => viewport.worldToCanvas(worldPos));
     const polylineUID = '1';
     drawPolylineSvg(svgDrawingHelper, annotation.annotationUID, polylineUID, canvasPoints, options);

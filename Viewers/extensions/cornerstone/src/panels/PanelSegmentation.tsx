@@ -3,7 +3,6 @@ import { SegmentationTable } from '@ohif/ui-next';
 import { useActiveViewportSegmentationRepresentations } from '../hooks/useActiveViewportSegmentationRepresentations';
 import { metaData } from '@cornerstonejs/core';
 import { useSystem } from '@ohif/core/src';
-import { toolboxState } from '@ohif/extension-default/src/stores/toolboxState';
 
 export default function PanelSegmentation({ children }: withAppTypes) {
   const { commandsManager, servicesManager } = useSystem();
@@ -51,6 +50,9 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     onSegmentColorClick: (segmentationId, segmentIndex) => {
       commandsManager.run('editSegmentColor', { segmentationId, segmentIndex });
     },
+    onSegmentReset: (segmentationId, segmentIndex) => {
+      commandsManager.run('resetSegment', { segmentationId, segmentIndex });
+    },
     onSegmentDelete: (segmentationId, segmentIndex) => {
       const deletePromise = new Promise<void>((resolve, reject) => {
         setTimeout(() => {
@@ -82,8 +84,6 @@ export default function PanelSegmentation({ children }: withAppTypes) {
             }
 
             commandsManager.run('deleteSegment', { segmentationId, segmentIndex });
-            // Turn on Refine/New button after deleting segment
-            toolboxState.setRefineNew(true);
             resolve();
           } catch (error) {
             reject(error);
@@ -249,7 +249,6 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     <SegmentationTable {...tableProps}>
       {children}
       <SegmentationTable.Config />
-      <SegmentationTable.AddSegmentationRow />
       {renderModeContent()}
     </SegmentationTable>
   );

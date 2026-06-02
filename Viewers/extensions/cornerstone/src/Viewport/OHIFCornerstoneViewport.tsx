@@ -276,7 +276,7 @@ const OHIFCornerstoneViewport = React.memo(
           displaySetOptions,
           presentations
         );
-        commandsManager.run('initNninter');
+        commandsManager.run('initNninter', { viewportId });
       };
 
       loadViewportData();

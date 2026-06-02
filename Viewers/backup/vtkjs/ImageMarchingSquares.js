@@ -171,8 +171,6 @@ function vtkImageMarchingSquares(publicAPI, model) {
       vtkErrorMacro('Invalid or missing slicing mode');
       return;
     }
-    console.time('msquares');
-
     // Retrieve output and volume data
     const origin = input.getOrigin();
     const spacing = input.getSpacing();
@@ -214,7 +212,6 @@ function vtkImageMarchingSquares(publicAPI, model) {
     polydata.getLines().setData(new Uint32Array(lines));
     outData[0] = polydata;
     vtkDebugMacro('Produced output');
-    console.timeEnd('msquares');
   };
 }
 

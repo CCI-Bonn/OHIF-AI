@@ -19,6 +19,13 @@ export const setToolActiveToolbar = {
   },
 };
 
+const toggleToolActiveToolbar = {
+  commandName: 'toggleToolActiveToolbar',
+  commandOptions: {
+    toolGroupIds: ['default', 'mpr', 'SRToolGroup', 'volume3d'],
+  },
+};
+
 const toolbarButtons: Button[] = [
   // sections
   {
@@ -234,9 +241,9 @@ const toolbarButtons: Button[] = [
     uiType: 'ohif.toolBoxButton',
     props: {
       icon: 'tool-probe',
-      label: 'Points',
-      tooltip: 'Points',
-      commands: setToolActiveToolbar,
+      label: 'Point',
+      tooltip: 'Point [P]',
+      commands: toggleToolActiveToolbar,
       evaluate: 'evaluate.cornerstoneTool',
     },
   },
@@ -434,9 +441,9 @@ const toolbarButtons: Button[] = [
     uiType: 'ohif.toolBoxButton',
     props: {
       icon: 'tool-rectangle',
-      label: 'Bounding Box',
-      tooltip: 'Rectangle ROI',
-      commands: setToolActiveToolbar,
+      label: 'BBox',
+      tooltip: 'Bounding Box [B]',
+      commands: toggleToolActiveToolbar,
       evaluate: 'evaluate.cornerstoneTool',
     },
   },
@@ -468,8 +475,8 @@ const toolbarButtons: Button[] = [
     props: {
       icon: 'icon-tool-lasso-roi',
       label: 'Lasso',
-      tooltip: 'Freehand ROI',
-      commands: setToolActiveToolbar,
+      tooltip: 'Lasso [L]',
+      commands: toggleToolActiveToolbar,
       evaluate: 'evaluate.cornerstoneTool',
     },
   },
@@ -479,8 +486,8 @@ const toolbarButtons: Button[] = [
     props: {
       icon: 'icon-tool-freehand-roi',
       label: 'Scribble',
-      tooltip: 'Freehand ROI',
-      commands: setToolActiveToolbar,
+      tooltip: 'Scribble [S]',
+      commands: toggleToolActiveToolbar,
       evaluate: 'evaluate.cornerstoneTool',
     },
   },
