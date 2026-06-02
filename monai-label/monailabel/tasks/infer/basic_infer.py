@@ -92,14 +92,14 @@ sam3_checkpoint = "/code/checkpoints/sam3.pt"
 from huggingface_hub import snapshot_download
 
 REPO_ID = "nnInteractive/nnInteractive"
-MODEL_NAME = "nnInteractive_v2.0"  # Updated models may be available in the future
+MODEL_NAME = "nnInteractive_v1.0"  # Updated models may be available in the future
 DOWNLOAD_DIR = "/code/checkpoints"  # Specify the download directory
 
-#download_path = snapshot_download(
-#    repo_id=REPO_ID,
-#    allow_patterns=[f"{MODEL_NAME}/*"],
-#    local_dir=DOWNLOAD_DIR
-#)
+download_path = snapshot_download(
+    repo_id=REPO_ID,
+    allow_patterns=[f"{MODEL_NAME}/*"],
+    local_dir=DOWNLOAD_DIR
+)
 
 VOX_MODEL_NAME = "voxtell_v1.1" # Updated models may be available in the future
 
