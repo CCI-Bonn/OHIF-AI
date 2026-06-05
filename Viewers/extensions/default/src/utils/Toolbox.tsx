@@ -168,7 +168,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
 
   // Consolidated keyboard hotkey handler (AI toolbox only)
   // Q = Live Mode, T = Pos/Neg, P = Point, B = BBox, S = Scribble, L = Lasso
-  // M = Add Segment, R = Reset Segment, V = Show/Hide Prompts
+  // M = Add Segment, R = Reset Segment, O = Show/Hide Prompts
   useEffect(() => {
     if (!isAIToolBox || hotkeysDisabled) {
       return;
@@ -247,7 +247,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
           }
           break;
         }
-        case 'v': {
+        case 'o': {
           event.preventDefault();
           event.stopPropagation();
           const next = !toolboxState.getPromptsVisible();

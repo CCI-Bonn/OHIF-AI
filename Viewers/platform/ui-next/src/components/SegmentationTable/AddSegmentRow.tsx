@@ -90,7 +90,7 @@ export const AddSegmentRow: React.FC<{ children?: React.ReactNode }> = ({ childr
             onClick={() => onTogglePromptsVisibility()}
           >
             <Icons.Pencil className="h-4 w-4" />
-            {promptsVisible ? 'Hide Prompts' : 'Show Prompts'}
+            {promptsVisible ? 'Hide Prompts' : 'Show Prompts'} <span className="ml-1 opacity-50 text-xs">[O]</span>
           </Button>
         ) : null}
       </div>
