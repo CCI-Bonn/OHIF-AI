@@ -168,7 +168,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
 
   // Consolidated keyboard hotkey handler (AI toolbox only)
   // Q = Live Mode, T = Pos/Neg, P = Point, B = BBox, S = Scribble, L = Lasso
-  // M = Add Segment, R = Reset Segment
+  // M = Add Segment, R = Reset Segment, V = Show/Hide Prompts
   useEffect(() => {
     if (!isAIToolBox || hotkeysDisabled) {
       return;
@@ -245,6 +245,19 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
               segmentIndex: activeSeg2.segmentIndex,
             });
           }
+          break;
+        }
+        case 'v': {
+          event.preventDefault();
+          event.stopPropagation();
+          const next = !toolboxState.getPromptsVisible();
+          toolboxState.setPromptsVisible(next);
+          const AI_PROMPT_TOOLS = ['Probe2', 'RectangleROI2', 'PlanarFreehandROI2', 'PlanarFreehandROI3'];
+          const uids = measurementService
+            .getMeasurements()
+            .filter(m => AI_PROMPT_TOOLS.includes(m.toolName))
+            .map(m => m.uid);
+          measurementService.toggleVisibilityMeasurementMany(uids, next);
           break;
         }
         case 'delete': {
