@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { SegmentationTable } from '@ohif/ui-next';
 import { useActiveViewportSegmentationRepresentations } from '../hooks/useActiveViewportSegmentationRepresentations';
 import { metaData } from '@cornerstonejs/core';
@@ -11,6 +11,15 @@ export default function PanelSegmentation({ children }: withAppTypes) {
   const { commandsManager, servicesManager } = useSystem();
   const { customizationService, displaySetService, measurementService, uiNotificationService } = servicesManager.services;
   const [promptsVisible, setPromptsVisible] = useState(toolboxState.getPromptsVisible());
+
+  // Sync promptsVisible when changed externally (e.g. O hotkey updates toolboxState directly)
+  useEffect(() => {
+    const id = setInterval(() => {
+      const current = toolboxState.getPromptsVisible();
+      setPromptsVisible(prev => prev !== current ? current : prev);
+    }, 100);
+    return () => clearInterval(id);
+  }, []);
 
   const { segmentationsWithRepresentations, disabled } =
     useActiveViewportSegmentationRepresentations({
