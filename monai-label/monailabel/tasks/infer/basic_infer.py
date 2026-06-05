@@ -125,6 +125,20 @@ session = nnInteractiveInferenceSession(
 model_path = os.path.join(DOWNLOAD_DIR, MODEL_NAME)
 session.initialize_from_trained_model_folder(model_path)
 
+# Warmup: trigger torch.compile JIT at startup so the first real inference is fast.
+# session.warmup() uses the correct patch_size from the model plan — no set_image needed.
+try:
+    import threading
+    def _warmup_session():
+        import logging
+        _wlog = logging.getLogger(__name__)
+        _wlog.info("nnInteractive warmup: starting...")
+        ran = session.warmup()
+        _wlog.info(f"nnInteractive warmup: {'done' if ran else 'skipped (torch.compile not enabled)'}.")
+    threading.Thread(target=_warmup_session, daemon=True).start()
+except Exception as _warmup_err:
+    print(f"nnInteractive warmup failed (non-fatal): {_warmup_err}")
+
 # Config for the text prompt detector, it is disabled for now
 #config_path = '/code/dino_configs/dino.py'
 # Setup a checkpoint file to load
@@ -1045,6 +1059,15 @@ class BasicInferTask(InferTask):
             # features, so img_np and dicom_dir remain valid for subsequent interactions.
             logger.info("Reset nninter")
             return f'/code/predictions/reset.nii.gz', {}
+
+        # Folded reset: caller needs a segment switch + inference in one round-trip.
+        # Resetting here (before image loading) keeps the same semantics as a
+        # separate reset call, but saves ~1.4 s of network overhead on slow links.
+        if request.get('nninter_reset_first'):
+            for key, lst in self._session_used_interactions.items():
+                lst.clear()
+            session.reset_interactions()
+            logger.info("Folded reset before inference")
 
         req = copy.deepcopy(self._config)
         req.update(request)

@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ScrollArea, DataRow } from '../../components';
+import { Button } from '../Button/Button';
+import { Icons } from '../Icons/Icons';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '../../components/HoverCard';
 import { useSystem } from '@ohif/core';
 import { useSegmentationTableContext, useSegmentationExpanded } from './contexts';
@@ -17,6 +19,7 @@ import { useDynamicMaxHeight } from '../../hooks/useDynamicMaxHeight';
 export const SegmentationSegments = ({ children = null }: { children?: React.ReactNode }) => {
   const { servicesManager } = useSystem();
   const [forceUpdate, setForceUpdate] = useState(0);
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const {
     activeSegmentationId,
     disableEditing,
@@ -79,7 +82,14 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
     return null;
   }
 
+  const handleDeleteSelected = () => {
+    const indices = Array.from(selectedIndices).sort((a, b) => b - a); // descending to avoid index shift
+    setSelectedIndices(new Set());
+    indices.forEach(idx => onSegmentDelete(segmentation.segmentationId, idx));
+  };
+
   return (
+    <>
     <ScrollArea
       className={`bg-bkg-low space-y-px`}
       showArrows={true}
@@ -116,10 +126,10 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
               key={segmentIndex}
               number={segmentIndex}
               title={label}
-              // details={displayText}
               description={displayText}
               colorHex={cssColor}
               isSelected={active}
+              isMultiSelected={selectedIndices.has(segmentIndex)}
               isVisible={visible}
               isMeasurementVisible={isMeasurementVisible}
               isLocked={locked}
@@ -135,7 +145,17 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
               }
               onToggleMeasurement={() => onToggleSegmentMeasurement(segmentation.segmentationId, segmentIndex)}
               onToggleLocked={() => onToggleSegmentLock(segmentation.segmentationId, segmentIndex)}
-              onSelect={() => onSegmentClick(segmentation.segmentationId, segmentIndex)}
+              onSelect={() => {
+                setSelectedIndices(new Set());
+                onSegmentClick(segmentation.segmentationId, segmentIndex);
+              }}
+              onToggleMultiSelect={() => {
+                setSelectedIndices(prev => {
+                  const next = new Set(prev);
+                  next.has(segmentIndex) ? next.delete(segmentIndex) : next.add(segmentIndex);
+                  return next;
+                });
+              }}
               onRename={() => onSegmentEdit(segmentation.segmentationId, segmentIndex)}
               onDelete={() => onSegmentDelete(segmentation.segmentationId, segmentIndex)}
             />
@@ -179,6 +199,31 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
         })}
       </div>
     </ScrollArea>
+    {selectedIndices.size > 0 && (
+      <div className="flex items-center justify-between px-1 py-0.5">
+        <span className="text-muted-foreground text-xs">{selectedIndices.size} selected</span>
+        <div className="flex gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-1.5 text-xs"
+            onClick={() => setSelectedIndices(new Set())}
+          >
+            Clear
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive hover:text-destructive h-6 px-1.5 text-xs"
+            onClick={handleDeleteSelected}
+          >
+            <Icons.Delete className="mr-1 h-3 w-3" />
+            Delete
+          </Button>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
 

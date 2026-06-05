@@ -33,7 +33,7 @@ const bindings = [
   {
     commandName: 'rotateViewportCCW',
     label: 'Rotate Left',
-    keys: ['l'],
+    keys: ['ctrl+l'],
     isEditable: true,
   },
   {
@@ -196,12 +196,6 @@ const bindings = [
     isEditable: true,
   },
   {
-    commandName: 'runAiSegmentation',
-    label: 'Run inference',
-    keys: ['r'],
-    isEditable: true,
-  },
-  {
     commandName: 'resetNninter',
     label: 'Reset NNInteractive',
     keys: ['g'],
@@ -236,41 +230,7 @@ const bindings = [
     commandName: 'setToolActive',
     commandOptions: { toolName: 'CircularBrush' },
     label: 'Brush',
-    keys: ['b'],
-    isEditable: true,
-  },
-  {
-    commandName: 'setAiToolActive',
-    commandOptions: { toolName: 'Probe2' },
-    label: 'Point',
-    keys: ['a'],
-    isEditable: true,
-  },
-  {
-    commandName: 'setAiToolActive',
-    commandOptions: { toolName: 'RectangleROI2' },
-    label: 'Bounding Box',
-    keys: ['f'],
-    isEditable: true,
-  },
-  {
-    commandName: 'setAiToolActive',
-    commandOptions: { toolName: 'PlanarFreehandROI3' },
-    label: 'Lasso',
-    keys: ['d'],
-    isEditable: true,
-  },
-  {
-    commandName: 'setAiToolActive',
-    commandOptions: { toolName: 'PlanarFreehandROI2' },
-    label: 'Scribble',
-    keys: ['s'],
-    isEditable: true,
-  },
-  {
-    commandName: 'addNewSegment',
-    label: 'Add New Segment',
-    keys: ['y'],
+    keys: ['ctrl+b'],
     isEditable: true,
   },
 ];

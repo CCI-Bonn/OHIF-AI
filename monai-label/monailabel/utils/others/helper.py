@@ -34,6 +34,9 @@ def clean_and_densify_polyline(polyline, max_segment_length=1):
                 if last[0] != px or last[1] != py:
                     cleaned.append([px, py, z])
 
+    if not cleaned:
+        return []
+
     first_x, first_y, _ = cleaned[0]
     last_x, last_y, _ = cleaned[-1]
     if first_x != last_x or first_y != last_y:

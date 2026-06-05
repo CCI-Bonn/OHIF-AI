@@ -908,11 +908,13 @@ const commandsModule = ({
       //.filter(e => { return e.toolName === 'Probe2' && e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID && e.metadata.neg === false && e.metadata.SegmentNumber === segmentNumber; })
       //.map(e => { return e.label })
 
-      // Hide measurements and notify in a single synchronous pass
-      currentMeasurements
-        .filter(e => e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID)
-        .forEach(e => measurementService.toggleVisibilityMeasurement(e.uid, false));
-      document.dispatchEvent(new Event('measurement-state-changed'));
+      // Hide measurements after inference unless user has set prompts to always-show
+      if (!toolboxState.getPromptsVisible()) {
+        currentMeasurements
+          .filter(e => e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID)
+          .forEach(e => measurementService.toggleVisibilityMeasurement(e.uid, false));
+        document.dispatchEvent(new Event('measurement-state-changed'));
+      }
       if (pos_points.length == 0 && neg_points.length == 0 && pos_boxes.length == 0 && text_prompts.length == 0){
         uiNotificationService.show({
           title: 'Prompt warning',
@@ -1985,6 +1987,7 @@ const commandsModule = ({
       let segmentNumber = 1;
       let segments: { [segmentIndex: string]: cstTypes.Segment } = {};
       let segmentationId = `${csUtils.uuidv4()}`
+      let _needsReset = false; // set true when switching segments; folded into inference POST
       if (activeSegmentation !== undefined){
         segments = activeSegmentation.segments;
       if (Object.values(segments).length > 0) {
@@ -2008,8 +2011,8 @@ const commandsModule = ({
               e.metadata.segmentationId = activeSegmentation.segmentationId;
             }
             segmentNumber = activeSegment.segmentIndex;
-            if (toolboxState.getCurrentActiveSegment() !== segmentNumber){
-              await commandsManager.run('resetNninter');
+            _needsReset = toolboxState.getCurrentActiveSegment() !== segmentNumber;
+            if (_needsReset) {
               toolboxState.setCurrentActiveSegment(segmentNumber);
             }
           } else {
@@ -2079,11 +2082,13 @@ const commandsModule = ({
         ? (Array.isArray(textPrompts) ? textPrompts : [textPrompts])
         : probe2Labels;
 
-      // Hide measurements and notify in a single synchronous pass
-      currentMeasurements
-        .filter(e => e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID)
-        .forEach(e => measurementService.toggleVisibilityMeasurement(e.uid, false));
-      document.dispatchEvent(new Event('measurement-state-changed'));
+      // Hide measurements after inference unless user has set prompts to always-show
+      if (!toolboxState.getPromptsVisible()) {
+        currentMeasurements
+          .filter(e => e.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID)
+          .forEach(e => measurementService.toggleVisibilityMeasurement(e.uid, false));
+        document.dispatchEvent(new Event('measurement-state-changed'));
+      }
 
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
@@ -2104,6 +2109,7 @@ const commandsModule = ({
         neg_scribbles: neg_scribbles,
         texts: text_prompts,
         nninter: true,
+        nninter_reset_first: _needsReset,
       };
 
       let data = MonaiLabelClient.constructFormData(params, null);
@@ -2336,10 +2342,12 @@ const commandsModule = ({
           if (segImageIds.length == 0){
             const _tCreate2 = Date.now();
             let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+            console.log(`[nninter] createAndCache: ${((Date.now()-_tCreate2)/1000).toFixed(3)}s (${imageIds.length} slices)`);
 
             if(flipped){
               derivedImages_new.reverse();
             }
+            const _tWrite2 = Date.now();
             for (let i = 0; i < derivedImages_new.length; i++) {
               if (_hasCropGeom && (i < _segZ0 || i >= _segZ1)) continue;
               const voxelManager = derivedImages_new[i]
@@ -2375,39 +2383,64 @@ const commandsModule = ({
             if(flipped){
               derivedImages_new.reverse();
             }
+            console.log(`[nninter] pixel write (first): ${((Date.now()-_tWrite2)/1000).toFixed(3)}s`);
             merged_derivedImages = derivedImages_new
           } else {
+            const _tCacheGet = Date.now();
             merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
+            console.log(`[nninter] cache.getImage (refine): ${((Date.now()-_tCacheGet)/1000).toFixed(3)}s`);
             if(flipped){
               merged_derivedImages.reverse();
             }
-            // Limit scan to the union of [prevZ0,prevZ1) (where old data lives) and
-            // [_segZ0,_segZ1) (where new data will be written).  Avoids scanning all
-            // ~500 slices × 262K pixels every inference — the previous bottleneck.
-            const _prevZ0: number = (_hasCropGeom && (existingSegments[segmentNumber] as any)?.cachedStats?.segZ0 != null)
-              ? (existingSegments[segmentNumber] as any).cachedStats.segZ0 as number
-              : 0;
-            const _prevZ1: number = (_hasCropGeom && (existingSegments[segmentNumber] as any)?.cachedStats?.segZ1 != null)
-              ? (existingSegments[segmentNumber] as any).cachedStats.segZ1 as number
-              : merged_derivedImages.length;
-            const scanZ0 = _hasCropGeom ? Math.min(_prevZ0, _segZ0) : 0;
-            const scanZ1 = _hasCropGeom ? Math.max(_prevZ1, _segZ1) : merged_derivedImages.length;
 
-            for (let i = scanZ0; i < scanZ1; i++) {
-              const voxelManager = merged_derivedImages[i]
-                .voxelManager as csTypes.IVoxelManager<number>;
-              let scalarData = voxelManager.getScalarData();
-              const sliceLen = scalarData.length;
+            // ── Pass 1: Clear old pixels ─────────────────────────────────────
+            // Use dirtySlices (exact indices that have pixels) when available.
+            // Falls back to the range-based scan on first refinement or old data.
+            const _prevDirtySlices = (existingSegments[segmentNumber] as any)
+              ?.cachedStats?.dirtySlices as number[] | undefined;
+            const _tClear = Date.now();
 
-              // Clear old segment pixels in-place (refine always overwrites)
-              if (scalarData.some(v => v === segmentNumber)){
-                for (let j = 0; j < sliceLen; j++) {
-                  if (scalarData[j] === segmentNumber) scalarData[j] = 0;
+            const _prevCachedStats = (existingSegments[segmentNumber] as any)?.cachedStats;
+            const _hasPrevData = _prevDirtySlices?.length ||
+              _prevCachedStats?.segZ0 != null || _prevCachedStats?.segZ1 != null;
+
+            if (_prevDirtySlices?.length) {
+              // Fast path: only touch slices that actually contain pixels (~20-50 vs 500+)
+              for (const origIdx of _prevDirtySlices) {
+                const arrIdx = flipped ? (merged_derivedImages.length - 1 - origIdx) : origIdx;
+                const vm = merged_derivedImages[arrIdx]?.voxelManager as csTypes.IVoxelManager<number>;
+                if (!vm) continue;
+                const sd = vm.getScalarData();
+                for (let j = 0; j < sd.length; j++) {
+                  if (sd[j] === segmentNumber) sd[j] = 0;
                 }
               }
+              console.log(`[nninter] clear (${_prevDirtySlices.length} dirty slices): ${((Date.now()-_tClear)/1000).toFixed(3)}s`);
+            } else if (_hasPrevData) {
+              // Fallback: bounding-box range scan (dirtySlices not yet stored, e.g. first run after migration)
+              const _prevZ0: number = (_hasCropGeom && _prevCachedStats?.segZ0 != null)
+                ? _prevCachedStats.segZ0 as number : 0;
+              const _prevZ1: number = (_hasCropGeom && _prevCachedStats?.segZ1 != null)
+                ? _prevCachedStats.segZ1 as number : merged_derivedImages.length;
+              const scanZ0 = _hasCropGeom ? Math.min(_prevZ0, _segZ0) : 0;
+              const scanZ1 = _hasCropGeom ? Math.max(_prevZ1, _segZ1) : merged_derivedImages.length;
+              for (let i = scanZ0; i < scanZ1; i++) {
+                const sd = (merged_derivedImages[i].voxelManager as csTypes.IVoxelManager<number>).getScalarData();
+                for (let j = 0; j < sd.length; j++) {
+                  if (sd[j] === segmentNumber) sd[j] = 0;
+                }
+              }
+              console.log(`[nninter] clear fallback (${scanZ1-scanZ0} slices): ${((Date.now()-_tClear)/1000).toFixed(3)}s`);
+            } else {
+              // Brand-new segment — nothing to clear, skip entirely
+              console.log(`[nninter] clear skipped (new segment)`);
+            }
 
-              // Write new data from crop (cache-friendly, no 182 MB buffer)
-              if (_hasCropGeom && i >= _segZ0 && i < _segZ1) {
+            // ── Pass 2: Write new pixels from crop only ───────────────────────
+            const _tWrite3 = Date.now();
+            if (_hasCropGeom) {
+              for (let i = _segZ0; i < _segZ1; i++) {
+                const scalarData = (merged_derivedImages[i].voxelManager as csTypes.IVoxelManager<number>).getScalarData();
                 const c = i - _segZ0;
                 const cropSliceBase = c * _cropY * _cropX;
                 let wrote = false;
@@ -2422,21 +2455,24 @@ const commandsModule = ({
                   }
                 }
                 if (wrote) z_range.push(flipped ? merged_derivedImages.length - i - 1 : i);
-              } else if (!_hasCropGeom && new_arrayBuffer) {
-                // Legacy: full-slice scan
-                const sliceData = new_arrayBuffer.subarray(i * sliceLen, (i + 1) * sliceLen);
+              }
+            } else if (new_arrayBuffer) {
+              for (let i = 0; i < merged_derivedImages.length; i++) {
+                const sd = (merged_derivedImages[i].voxelManager as csTypes.IVoxelManager<number>).getScalarData();
+                const sliceData = new_arrayBuffer.subarray(i * sd.length, (i + 1) * sd.length);
                 if (sliceData.some(v => v === 1)){
-                  for (let j = 0; j < sliceLen; j++) { if (sliceData[j] === 1) scalarData[j] = segmentNumber; }
+                  for (let j = 0; j < sd.length; j++) { if (sliceData[j] === 1) sd[j] = segmentNumber; }
                   z_range.push(flipped ? merged_derivedImages.length - i - 1 : i);
                 }
               }
             }
+            console.log(`[nninter] write (${z_range.length} slices): ${((Date.now()-_tWrite3)/1000).toFixed(3)}s`);
+
             if(flipped){
               merged_derivedImages.reverse();
             }
-
           }
-          
+
         }
           
                     
@@ -2453,9 +2489,10 @@ const commandsModule = ({
               algorithmName: "nninter_"+nninter_elapsed,
               description: prompt_info,
               center:  z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0,
-              // z-range of this result — used next inference to limit the refine scan
+              // z-range kept for fallback; dirtySlices is the fast-path clear target
               segZ0: _hasCropGeom ? _segZ0 : 0,
               segZ1: _hasCropGeom ? _segZ1 : (merged_derivedImages?.length ?? 0),
+              dirtySlices: z_range,
             }
           };
           console.log(`Before add or update segs: ${(Date.now() - start)/1000} Seconds`);

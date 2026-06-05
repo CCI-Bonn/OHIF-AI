@@ -11,6 +11,8 @@ export const AddSegmentRow: React.FC<{ children?: React.ReactNode }> = ({ childr
     onSegmentAdd,
     onSegmentReset,
     onToggleSegmentationRepresentationVisibility,
+    onTogglePromptsVisibility,
+    promptsVisible,
     data,
     showAddSegment,
   } = useSegmentationTableContext('AddSegmentRow');
@@ -78,6 +80,17 @@ export const AddSegmentRow: React.FC<{ children?: React.ReactNode }> = ({ childr
           >
             <Icons.Refresh className="h-4 w-4" />
             Reset Segment <span className="ml-1 opacity-50 text-xs">[R]</span>
+          </Button>
+        ) : null}
+        {onTogglePromptsVisibility ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="pr pl-0.5"
+            onClick={() => onTogglePromptsVisibility()}
+          >
+            <Icons.Pencil className="h-4 w-4" />
+            {promptsVisible ? 'Hide Prompts' : 'Show Prompts'}
           </Button>
         ) : null}
       </div>

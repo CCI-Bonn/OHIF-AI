@@ -9,6 +9,9 @@ window.config = {
   showCPUFallbackMessage: true,
   showLoadingIndicator: true,
   disableConfirmationPrompts: true,
+  // Allow drawing in any viewport on the first pointer event without needing
+  // a prior click to "activate" it. Essential for MPR multi-viewport workflows.
+  activateViewportBeforeInteraction: false,
   showPatientInfo: 'disabled',
   measurementTrackingMode: 'none',
   experimentalStudyBrowserSort: false,

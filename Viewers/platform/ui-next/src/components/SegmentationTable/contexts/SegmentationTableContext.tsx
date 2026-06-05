@@ -82,6 +82,8 @@ export interface SegmentationTableContextType {
   onSegmentColorClick?: (segmentationId: string, segmentIndex: number) => void;
   onSegmentDelete?: (segmentationId: string, segmentIndex: number) => void;
   onSegmentReset?: (segmentationId: string, segmentIndex: number) => void;
+  onTogglePromptsVisibility?: () => void;
+  promptsVisible?: boolean;
   onToggleSegmentVisibility?: (
     segmentationId: string,
     segmentIndex: number,

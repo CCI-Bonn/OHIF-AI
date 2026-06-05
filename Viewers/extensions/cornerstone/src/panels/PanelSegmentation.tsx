@@ -1,12 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { SegmentationTable } from '@ohif/ui-next';
 import { useActiveViewportSegmentationRepresentations } from '../hooks/useActiveViewportSegmentationRepresentations';
 import { metaData } from '@cornerstonejs/core';
 import { useSystem } from '@ohif/core/src';
+import { toolboxState } from '@ohif/extension-default/src/stores/toolboxState';
+
+const AI_PROMPT_TOOLS = ['Probe2', 'RectangleROI2', 'PlanarFreehandROI2', 'PlanarFreehandROI3'];
 
 export default function PanelSegmentation({ children }: withAppTypes) {
   const { commandsManager, servicesManager } = useSystem();
   const { customizationService, displaySetService, measurementService, uiNotificationService } = servicesManager.services;
+  const [promptsVisible, setPromptsVisible] = useState(toolboxState.getPromptsVisible());
 
   const { segmentationsWithRepresentations, disabled } =
     useActiveViewportSegmentationRepresentations({
@@ -37,6 +41,10 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     },
     onSegmentAdd: segmentationId => {
       commandsManager.run('addSegment', { segmentationId });
+      // Always start a new segment in positive (include) mode
+      if (toolboxState.getPosNeg()) {
+        toolboxState.setPosNeg(false);
+      }
     },
     onSegmentClick: (segmentationId, segmentIndex) => {
       commandsManager.run('setActiveSegmentAndCenter', { segmentationId, segmentIndex });
@@ -130,6 +138,16 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     onSegmentationDelete: segmentationId => {
       commandsManager.run('deleteSegmentation', { segmentationId });
     },
+    onTogglePromptsVisibility: () => {
+      const next = !toolboxState.getPromptsVisible();
+      toolboxState.setPromptsVisible(next);
+      setPromptsVisible(next);
+      const uids = measurementService
+        .getMeasurements()
+        .filter(m => AI_PROMPT_TOOLS.includes(m.toolName))
+        .map(m => m.uid);
+      measurementService.toggleVisibilityMeasurementMany(uids, next);
+    },
     setFillAlpha: ({ type }, value) => {
       commandsManager.run('setFillAlpha', { type, value });
     },
@@ -191,6 +209,7 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     onSegmentationAdd,
     showAddSegment,
     renderInactiveSegmentations: handlers.getRenderInactiveSegmentations(),
+    promptsVisible,
     ...handlers,
   };
 

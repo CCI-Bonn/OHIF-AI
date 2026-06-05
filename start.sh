@@ -23,10 +23,15 @@ fi
 
 _service_hash() {
     local paths="$@"
-    local commit diff_hash
-    commit=$(git -C "$REPO_ROOT" log -1 --format="%H" -- $paths 2>/dev/null || echo "nogit")
-    diff_hash=$(git -C "$REPO_ROOT" diff HEAD -- $paths 2>/dev/null | md5sum | cut -d' ' -f1)
-    echo "${commit}_${diff_hash}"
+    # ls-tree lists every committed file with its blob SHA1 (content-addressed).
+    # Unlike `git log -1 -- $paths`, this changes whenever any file's content changes,
+    # and it differs across branches even after a fast-forward merge because the
+    # tree objects are distinct once any file diverges.
+    # We combine it with the diff of any uncommitted changes.
+    {
+        git -C "$REPO_ROOT" ls-tree -r HEAD -- $paths 2>/dev/null
+        git -C "$REPO_ROOT" diff HEAD -- $paths 2>/dev/null
+    } | md5sum | cut -d' ' -f1
 }
 
 OHIF_HASH=$(_service_hash Viewers/)

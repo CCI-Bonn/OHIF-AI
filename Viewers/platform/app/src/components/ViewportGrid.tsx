@@ -351,7 +351,15 @@ function ViewerViewportGrid(props: withAppTypes) {
       });
 
       const onInteractionHandler = event => {
-        if (isActive) {
+        // Read current active viewport directly from the service instead of the
+        // stale closure value. This matters for onMouseEnter: setActiveViewportId
+        // updates the service synchronously, but the React re-render (which would
+        // update `isActive` in the closure) is async. Without this, the first
+        // pointerDown after a hover-activate still sees isActive=false and swallows
+        // the event.
+        const alreadyActive =
+          viewportGridService.getState().activeViewportId === viewportId;
+        if (alreadyActive) {
           return;
         }
 

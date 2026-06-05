@@ -60,6 +60,7 @@ function ViewportPane({
       // https://stackoverflow.com/questions/8378243/catch-scrolling-event-on-overflowhidden-element
       // Use onPointerDown so that for the config property activateViewportBeforeInteraction===false,
       // a touch drag will activate the viewport as well as apply the tool selected.
+      onMouseEnter={onInteractionHandler}
       onPointerDown={onInteractionHandler}
       onDoubleClick={onDoubleClick}
       onClick={onInteractionHandler}

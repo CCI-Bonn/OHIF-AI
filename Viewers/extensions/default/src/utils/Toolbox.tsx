@@ -31,7 +31,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
   const { servicesManager, commandsManager } = useSystem();
   const { t } = useTranslation();
 
-  const { toolbarService, customizationService, segmentationService, viewportGridService } = servicesManager.services;
+  const { toolbarService, customizationService, segmentationService, viewportGridService, measurementService } = servicesManager.services;
   const onInteractionRef = React.useRef<((args: { itemId: string }) => void) | null>(null);
   const isAIToolBox = buttonSectionId === 'aiToolBox';
   const isTextPromptToolbox = buttonSectionId === 'textPromptSegmentationToolbox';
@@ -184,6 +184,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
       switch (event.key.toLowerCase()) {
         case 'q': {
           event.preventDefault();
+          event.stopPropagation();
           const newLiveMode = !toolboxState.getLiveMode();
           setLiveMode(newLiveMode);
           toolboxState.setLiveMode(newLiveMode);
@@ -191,6 +192,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
         }
         case 't': {
           event.preventDefault();
+          event.stopPropagation();
           const newPosNeg = !toolboxState.getPosNeg();
           setPosNeg(newPosNeg);
           toolboxState.setPosNeg(newPosNeg);
@@ -198,31 +200,42 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
         }
         case 'p':
           event.preventDefault();
+          event.stopPropagation();
           onInteractionRef.current?.({ itemId: 'Probe2' });
           break;
         case 'b':
           event.preventDefault();
+          event.stopPropagation();
           onInteractionRef.current?.({ itemId: 'RectangleROI2' });
           break;
         case 's':
           event.preventDefault();
+          event.stopPropagation();
           onInteractionRef.current?.({ itemId: 'PlanarFreehandROI2' });
           break;
         case 'l':
           event.preventDefault();
+          event.stopPropagation();
           onInteractionRef.current?.({ itemId: 'PlanarFreehandROI3' });
           break;
         case 'm': {
           event.preventDefault();
+          event.stopPropagation();
           const { activeViewportId: avId } = viewportGridService.getState();
-          const activeSeg = segmentationService.getActiveSegmentation(avId);
+          const activeSeg = segmentationService.getActiveSegmentation(avId)
+            ?? segmentationService.getSegmentations()?.[0];
           if (activeSeg?.segmentationId) {
             commandsManager.run('addSegment', { segmentationId: activeSeg.segmentationId });
+            // Always start fresh in positive mode
+            if (toolboxState.getPosNeg()) {
+              toolboxState.setPosNeg(false);
+            }
           }
           break;
         }
         case 'r': {
           event.preventDefault();
+          event.stopPropagation();
           const { activeViewportId: avId } = viewportGridService.getState();
           const activeSeg = segmentationService.getActiveSegmentation(avId);
           const activeSeg2 = segmentationService.getActiveSegment(avId);
@@ -234,11 +247,32 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
           }
           break;
         }
+        case 'delete': {
+          event.preventDefault();
+          event.stopPropagation();
+          const { activeViewportId: avId } = viewportGridService.getState();
+          const activeSeg = segmentationService.getActiveSegmentation(avId);
+          const activeSeg2 = segmentationService.getActiveSegment(avId);
+          if (activeSeg?.segmentationId && activeSeg2?.segmentIndex != null) {
+            const { segmentationId } = activeSeg;
+            const { segmentIndex } = activeSeg2;
+            const measurementUIDs = measurementService
+              .getMeasurements()
+              .filter(m => m?.metadata?.segmentationId === segmentationId && m?.metadata?.SegmentNumber === segmentIndex)
+              .map(m => m?.uid);
+            if (measurementUIDs.length > 0) measurementService.removeMany(measurementUIDs);
+            commandsManager.run('resetNninter', { clearMeasurements: false });
+            commandsManager.run('deleteSegment', { segmentationId, segmentIndex });
+          }
+          break;
+        }
       }
     };
 
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    // Use capture phase so this fires before Mousetrap (bubble phase), preventing
+    // global hotkey bindings from also firing for keys we own in the AI toolbox.
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
   }, [hotkeysDisabled, isAIToolBox]);
 
 

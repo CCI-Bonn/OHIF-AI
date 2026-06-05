@@ -65,7 +65,9 @@ interface DataRowProps {
   details?: { primary: string[]; secondary: string[] };
   //
   isSelected?: boolean;
+  isMultiSelected?: boolean;
   onSelect?: (e) => void;
+  onToggleMultiSelect?: (e: React.MouseEvent) => void;
   //
   isVisible: boolean;
   isMeasurementVisible?: boolean;
@@ -91,6 +93,7 @@ export const DataRow: React.FC<DataRowProps> = ({
   colorHex,
   details,
   onSelect,
+  onToggleMultiSelect,
   isLocked,
   onToggleVisibility,
   onToggleMeasurement = () => {},
@@ -99,6 +102,7 @@ export const DataRow: React.FC<DataRowProps> = ({
   onDelete,
   onColor,
   isSelected = false,
+  isMultiSelected = false,
   isVisible = true,
   isMeasurementVisible = true,
   disableEditing = false,
@@ -218,6 +222,18 @@ export const DataRow: React.FC<DataRowProps> = ({
       >
         {/* Hover Overlay */}
         <div className="bg-primary/20 pointer-events-none absolute inset-0 opacity-0 transition-opacity group-hover:opacity-100"></div>
+
+        {/* Checkbox (only when multi-select is enabled for this row) */}
+        {onToggleMultiSelect && (
+          <div
+            className="flex h-7 w-5 flex-shrink-0 cursor-pointer items-center justify-center"
+            onClick={e => { e.stopPropagation(); onToggleMultiSelect(e); }}
+          >
+            {isMultiSelected
+              ? <Icons.CheckBoxChecked className="h-3.5 w-3.5" />
+              : <Icons.CheckBoxUnchecked className="h-3.5 w-3.5 opacity-30" />}
+          </div>
+        )}
 
         {/* Number Box */}
         <div
