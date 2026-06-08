@@ -5,6 +5,7 @@ import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 function ViewportSegmentationMenu({
   viewportId,
   servicesManager,
+  commandsManager,
 }: withAppTypes<{ viewportId: string }>) {
   const { segmentationService } = servicesManager.services;
   const [activeSegmentations, setActiveSegmentations] = useState([]);
