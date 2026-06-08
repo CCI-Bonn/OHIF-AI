@@ -9,7 +9,7 @@ services:
       context: ./Viewers/
       # Relative to context
       dockerfile: ./platform/app/.recipes/Nginx-Orthanc/dockerfile
-    image: webapp:latest
+    image: ohif-ai-webapp:latest
     container_name: ohif_viewer
     volumes:
       # Nginx config
@@ -48,7 +48,7 @@ services:
       context: ./
       # Relative to context
       dockerfile: ./monai-label/Dockerfile
-    image: monai
+    image: ohif-ai-monai:latest
     runtime: nvidia
     container_name: monai_server
     volumes:
