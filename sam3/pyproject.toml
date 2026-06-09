@@ -43,7 +43,7 @@ dev = [
     "ufmt==2.8.0",
     "ruff-api==0.1.0",
     "usort==1.0.2",
-    "gitpython==3.1.31",
+    "gitpython==3.1.50",
     "yt-dlp",
     "pandas",
     "opencv-python",
