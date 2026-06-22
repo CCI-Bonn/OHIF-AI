@@ -1060,6 +1060,58 @@ class BasicInferTask(InferTask):
             logger.info("Reset nninter")
             return f'/code/predictions/reset.nii.gz', {}
 
+        # Fast path: single-level undo of the last interaction (mirrors reset).
+        # Returns the restored target_buffer in the same cropped format as a
+        # normal interaction so the client can repaint the segment.
+        if request.get('nninter') == "undo":
+            undo_json = {"nninter_op": "undo"}
+            supports_undo = hasattr(session, "undo") and getattr(session, "supports_undo", True)
+            if not supports_undo:
+                logger.warning("nnInteractive session has no undo()/supports_undo; ignoring undo request")
+                undo_json["nninter_op"] = "unsupported"
+                undo_json["undone"] = False
+                undo_json["server_end_ts"] = time.time()
+                return np.zeros((0, 0, 0), dtype=np.uint8), undo_json
+
+            try:
+                undone = bool(session.undo())
+            except Exception as e:
+                logger.error(f"nninter undo() raised: {e}")
+                undone = False
+            logger.info(f"nninter undo: undone={undone}")
+            undo_json["undone"] = undone
+
+            # Restored full object buffer, cropped to its tight non-zero bbox
+            # (identical packaging to the normal nninter result path).
+            pred = session.target_buffer.clone().numpy()  # (Z, Y, X) uint8
+            pred_full_shape = list(pred.shape)
+            z_nz = np.where(np.any(pred, axis=(1, 2)))[0]
+            if z_nz.size > 0:
+                y_nz = np.where(np.any(pred, axis=(0, 2)))[0]
+                x_nz = np.where(np.any(pred, axis=(0, 1)))[0]
+                z0, z1 = int(z_nz[0]), int(z_nz[-1]) + 1
+                y0, y1 = int(y_nz[0]), int(y_nz[-1]) + 1
+                x0, x1 = int(x_nz[0]), int(x_nz[-1]) + 1
+                pred = pred[z0:z1, y0:y1, x0:x1]
+                pred_offset = [z0, y0, x0]
+            else:
+                # Undid the only interaction: object is now empty. Send an empty
+                # crop; the client clears the segment and writes nothing.
+                pred = np.zeros((0, 0, 0), dtype=np.uint8)
+                pred_offset = [0, 0, 0]
+
+            undo_json["pred_offset"] = pred_offset
+            undo_json["pred_full_shape"] = pred_full_shape
+            undo_json["pred_crop_shape"] = list(pred.shape)
+
+            _inst = self._session_image.get("instanceNumber")
+            _inst2 = self._session_image.get("instanceNumber2")
+            undo_json["flipped"] = bool(_inst is not None and _inst2 is not None and _inst > _inst2)
+
+            undo_json["label_name"] = f"nninter_pred_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            undo_json["server_end_ts"] = time.time()
+            return pred, undo_json
+
         # Folded reset: caller needs a segment switch + inference in one round-trip.
         # Resetting here (before image loading) keeps the same semantics as a
         # separate reset call, but saves ~1.4 s of network overhead on slow links.

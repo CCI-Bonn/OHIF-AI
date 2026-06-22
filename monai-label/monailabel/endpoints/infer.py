@@ -261,6 +261,8 @@ def run_inference(
             "pred_offset": json.dumps(res_json.get("pred_offset")),
             "pred_full_shape": json.dumps(res_json.get("pred_full_shape")),
             "pred_crop_shape": json.dumps(res_json.get("pred_crop_shape")),
+            "nninter_op": json.dumps(res_json.get("nninter_op")),
+            "undone": json.dumps(res_json.get("undone")),
         }
         boundary = f"monai-{secrets.token_hex(12)}"
         meta_json = json.dumps(fields, separators=(",", ":"))
