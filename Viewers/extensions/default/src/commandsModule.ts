@@ -1341,7 +1341,9 @@ const commandsModule = ({
           return;
         }
         const ct = response.headers['content-type'] as string;
-        const { meta, seg } = await parseMultipart(response.data, ct);
+        // allowEmptySeg: undoing the only interaction restores an empty segment,
+        // which arrives as a zero-length seg part.
+        const { meta, seg } = await parseMultipart(response.data, ct, { allowEmptySeg: true });
 
         const undone = String((meta as any).undone).toLowerCase() === 'true';
         if (!undone) {

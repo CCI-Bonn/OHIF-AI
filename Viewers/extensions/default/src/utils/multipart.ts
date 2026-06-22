@@ -72,7 +72,8 @@ function uint8ToString(u8: Uint8Array): string {
    */
   export async function parseMultipart(
     bodyBuf: ArrayBuffer,
-    contentType: string
+    contentType: string,
+    opts?: { allowEmptySeg?: boolean }
   ): Promise<{ meta: any; seg: Uint8Array }> {
     const boundary = getBoundary(contentType);
     const u8 = new Uint8Array(bodyBuf);
@@ -165,7 +166,9 @@ function uint8ToString(u8: Uint8Array): string {
     }
   
     if (!metaObj) throw new Error("meta part not found");
-    if (!seg.length) throw new Error("seg part not found");
+    // An empty seg is legitimate for some responses (e.g. nnInteractive undo that
+    // restores an empty segment); callers opt into it via allowEmptySeg.
+    if (!seg.length && !opts?.allowEmptySeg) throw new Error("seg part not found");
 
     if (typeof metaObj === 'string') {
       metaObj = JSON.parse(metaObj);
