@@ -1274,6 +1274,185 @@ const commandsModule = ({
       }
 
     },
+    async undoNninter() {
+      if (toolboxState.getLocked()) {
+        return;
+      }
+      if (toolboxState.getSelectedModel() !== 'nnInteractive') {
+        return;
+      }
+
+      const { activeViewportId, viewports } = viewportGridService.getState();
+      const activeViewportSpecificData = viewports.get(activeViewportId);
+      const { displaySetInstanceUIDs } = activeViewportSpecificData;
+      const displaySets = displaySetService.activeDisplaySets;
+      const displaySetInstanceUID = displaySetInstanceUIDs[0];
+      const currentDisplaySets = displaySets.filter(
+        e => e.displaySetInstanceUID == displaySetInstanceUID
+      )[0];
+
+      // Locate the active nnInteractive segmentation for this series.
+      const { segmentationService, cornerstoneViewportService } = servicesManager.services;
+      const activeSegmentation = segmentationService.getActiveSegmentation(activeViewportId);
+      const activeSegmentObj = segmentationService.getActiveSegment(activeViewportId);
+      if (!activeSegmentation || !activeSegmentObj) {
+        return;
+      }
+      const segmentationId = activeSegmentation.segmentationId;
+      const segmentNumber = activeSegmentObj.segmentIndex;
+      const segImageIds: string[] =
+        (csToolsSegmentation.state.getSegmentation(segmentationId)
+          ?.representationData?.Labelmap as any)?.imageIds ?? [];
+      if (segImageIds.length === 0) {
+        return;
+      }
+
+      const url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
+      const params = {
+        largest_cc: false,
+        result_extension: '.nii.gz',
+        result_dtype: 'uint16',
+        result_compress: false,
+        studyInstanceUID: currentDisplaySets.StudyInstanceUID,
+        restore_label_idx: false,
+        nninter: 'undo',
+      };
+      const data = MonaiLabelClient.constructFormData(params, null);
+
+      const undoPromise = axios.post(url, data, {
+        responseType: 'arraybuffer',
+        headers: { accept: 'application/octet-stream' },
+      });
+
+      uiNotificationService.show({
+        title: 'MONAI Label',
+        message: 'Undoing last interaction...',
+        type: 'info',
+        promise: undoPromise,
+        promiseMessages: {
+          loading: 'Undoing last interaction...',
+          success: () => 'Undo - Successful',
+          error: error => `Undo - Failed: ${error.message || 'Unknown error'}`,
+        },
+      });
+
+      try {
+        const response = await undoPromise;
+        if (response.status !== 200) {
+          return;
+        }
+        const ct = response.headers['content-type'] as string;
+        const { meta, seg } = await parseMultipart(response.data, ct);
+
+        const undone = String((meta as any).undone).toLowerCase() === 'true';
+        if (!undone) {
+          uiNotificationService.show({
+            title: 'MONAI Label',
+            message: 'Nothing to undo',
+            type: 'info',
+          });
+          return;
+        }
+
+        const flipped = String((meta as any).flipped).toLowerCase() === 'true';
+        const predOffset: number[] = JSON.parse((meta as any).pred_offset || '[0,0,0]');
+        const predFull: number[] = JSON.parse((meta as any).pred_full_shape || '[]');
+        const predCrop: number[] = JSON.parse((meta as any).pred_crop_shape || '[]');
+        const cropBytes = new Uint8Array(seg);
+
+        let _hasCropGeom = false;
+        let _segZ0 = 0, _segZ1 = 0, _cropY = 0, _cropX = 0, _y0 = 0, _x0 = 0, _fullX = 0;
+        if (predFull.length === 3 && predCrop.length === 3 && predCrop.every(v => v > 0)) {
+          const [, , fullX] = predFull;
+          const [cropZ, cropY, cropX] = predCrop;
+          const [z0, y0, x0] = predOffset;
+          _segZ0 = z0; _segZ1 = z0 + cropZ;
+          _cropY = cropY; _cropX = cropX;
+          _y0 = y0; _x0 = x0; _fullX = fullX;
+          _hasCropGeom = true;
+        }
+
+        let merged = segImageIds.map(imageId => cache.getImage(imageId));
+        if (flipped) merged.reverse();
+
+        // Pass 1: clear all voxels of the active segment (use dirtySlices when available).
+        const prevStats = (activeSegmentation.segments?.[segmentNumber] as any)?.cachedStats;
+        const prevDirty: number[] | undefined = prevStats?.dirtySlices;
+        const clearSlice = (arrIdx: number) => {
+          const vm = merged[arrIdx]?.voxelManager;
+          if (!vm) return;
+          const sd = vm.getScalarData();
+          for (let j = 0; j < sd.length; j++) {
+            if (sd[j] === segmentNumber) sd[j] = 0;
+          }
+        };
+        if (prevDirty?.length) {
+          for (const origIdx of prevDirty) {
+            clearSlice(flipped ? merged.length - 1 - origIdx : origIdx);
+          }
+        } else {
+          for (let i = 0; i < merged.length; i++) clearSlice(i);
+        }
+
+        // Pass 2: write the restored crop (skipped entirely when the object is now empty).
+        const z_range: number[] = [];
+        if (_hasCropGeom) {
+          for (let i = _segZ0; i < _segZ1; i++) {
+            const sd = merged[i].voxelManager.getScalarData();
+            const c = i - _segZ0;
+            const cropSliceBase = c * _cropY * _cropX;
+            let wrote = false;
+            for (let cy = 0; cy < _cropY; cy++) {
+              const srcRow = cropSliceBase + cy * _cropX;
+              const dstRow = (_y0 + cy) * _fullX + _x0;
+              for (let cx = 0; cx < _cropX; cx++) {
+                if (cropBytes[srcRow + cx] === 1) {
+                  sd[dstRow + cx] = segmentNumber;
+                  wrote = true;
+                }
+              }
+            }
+            if (wrote) z_range.push(flipped ? merged.length - i - 1 : i);
+          }
+        }
+        if (flipped) merged.reverse();
+
+        // Keep cachedStats.dirtySlices in sync so the next interaction clears correctly.
+        if ((activeSegmentation.segments?.[segmentNumber] as any)?.cachedStats) {
+          (activeSegmentation.segments[segmentNumber] as any).cachedStats.dirtySlices = z_range;
+          (activeSegmentation.segments[segmentNumber] as any).cachedStats.segZ0 = _hasCropGeom ? _segZ0 : 0;
+          (activeSegmentation.segments[segmentNumber] as any).cachedStats.segZ1 = _hasCropGeom ? _segZ1 : merged.length;
+        }
+
+        // Remove the most-recently-added prompt measurement for this series.
+        const AI_PROMPT_TOOLS = ['Probe2', 'RectangleROI2', 'PlanarFreehandROI2', 'PlanarFreehandROI3'];
+        const promptsForSeries = measurementService
+          .getMeasurements()
+          .filter(
+            m =>
+              AI_PROMPT_TOOLS.includes(m.toolName) &&
+              m.referenceSeriesUID === currentDisplaySets.SeriesInstanceUID
+          );
+        const lastPrompt = promptsForSeries[promptsForSeries.length - 1];
+        if (lastPrompt?.uid) {
+          measurementService.removeMany([lastPrompt.uid]);
+        }
+
+        // Repaint.
+        const activeVp = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+        (activeVp as any)?.render?.();
+        eventTarget.dispatchEvent(
+          new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
+            detail: { segmentationId },
+          })
+        );
+        return response;
+      } catch (error) {
+        console.error('Undo nninter error:', error);
+        throw error;
+      }
+    },
+
     async resetNninter(options: {clearMeasurements: boolean} = {clearMeasurements: false}){
       if (toolboxState.getLocked()) {
         return;
@@ -2925,6 +3104,7 @@ const commandsModule = ({
     runAiSegmentation: actions.runAiSegmentation,
     sam2: actions.sam2,
     initNninter: actions.initNninter,
+    undoNninter: actions.undoNninter,
     resetNninter: actions.resetNninter,
     resetSegment: actions.resetSegment,
     medGemma: actions.medGemma,
