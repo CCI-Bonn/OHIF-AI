@@ -1073,16 +1073,19 @@ class BasicInferTask(InferTask):
                 undo_json["server_end_ts"] = time.time()
                 return np.zeros((0, 0, 0), dtype=np.uint8), undo_json
 
+            _t_undo = time.time()
             try:
                 undone = bool(session.undo())
             except Exception as e:
                 logger.error(f"nninter undo() raised: {e}")
                 undone = False
+            undo_core_elapsed = time.time() - _t_undo  # time inside session.undo() only
             logger.info(f"nninter undo: undone={undone}")
             undo_json["undone"] = undone
 
             # Restored full object buffer, cropped to its tight non-zero bbox
             # (identical packaging to the normal nninter result path).
+            _t_result = time.time()
             pred = session.target_buffer.clone().numpy()  # (Z, Y, X) uint8
             pred_full_shape = list(pred.shape)
             z_nz = np.where(np.any(pred, axis=(1, 2)))[0]
@@ -1099,6 +1102,7 @@ class BasicInferTask(InferTask):
                 # crop; the client clears the segment and writes nothing.
                 pred = np.zeros((0, 0, 0), dtype=np.uint8)
                 pred_offset = [0, 0, 0]
+            result_elapsed = time.time() - _t_result  # target_buffer → numpy + bbox crop
 
             undo_json["pred_offset"] = pred_offset
             undo_json["pred_full_shape"] = pred_full_shape
@@ -1109,7 +1113,18 @@ class BasicInferTask(InferTask):
             undo_json["flipped"] = bool(_inst is not None and _inst2 is not None and _inst > _inst2)
 
             undo_json["label_name"] = f"nninter_pred_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            undo_json["server_end_ts"] = time.time()
+
+            # --- round-trip timing breakdown (mirrors the normal nninter path) ---
+            undo_elapsed = time.time() - begin  # total time inside this undo block
+            logger.info(
+                f"[timing] undo_core={undo_core_elapsed:.3f}s  "
+                f"result_retrieve={result_elapsed:.3f}s  total_undo={undo_elapsed:.3f}s"
+            )
+            undo_json["server_begin_ts"] = server_begin_ts          # Unix ts; client computes network-to-server latency
+            undo_json["nninter_core_elapsed"] = undo_core_elapsed   # GPU session.undo()
+            undo_json["server_result_elapsed"] = result_elapsed     # target_buffer → numpy + bbox crop
+            undo_json["nninter_elapsed"] = undo_elapsed             # total undo block
+            undo_json["server_end_ts"] = time.time()  # wall-clock just before serialization; client isolates server→client latency
             return pred, undo_json
 
         # Folded reset: caller needs a segment switch + inference in one round-trip.

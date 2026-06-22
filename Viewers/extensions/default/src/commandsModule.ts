@@ -1282,6 +1282,7 @@ const commandsModule = ({
         return;
       }
 
+      const start = Date.now();
       const { activeViewportId, viewports } = viewportGridService.getState();
       const activeViewportSpecificData = viewports.get(activeViewportId);
       const { displaySetInstanceUIDs } = activeViewportSpecificData;
@@ -1319,6 +1320,7 @@ const commandsModule = ({
       };
       const data = MonaiLabelClient.constructFormData(params, null);
 
+      const beforePost = Date.now();
       const undoPromise = axios.post(url, data, {
         responseType: 'arraybuffer',
         headers: { accept: 'application/octet-stream' },
@@ -1337,6 +1339,7 @@ const commandsModule = ({
 
       try {
         const response = await undoPromise;
+        const afterPost = Date.now();
         if (response.status !== 200) {
           return;
         }
@@ -1344,6 +1347,31 @@ const commandsModule = ({
         // allowEmptySeg: undoing the only interaction restores an empty segment,
         // which arrives as a zero-length seg part.
         const { meta, seg } = await parseMultipart(response.data, ct, { allowEmptySeg: true });
+        const afterParse = Date.now();
+
+        // --- round-trip timing breakdown (mirrors the normal nninter path) ---
+        const networkRoundTripMs = afterPost - beforePost;
+        const sRequestTs = metaNum(meta as Record<string, unknown>, 'server_request_ts');
+        const sBeginTs   = metaNum(meta as Record<string, unknown>, 'server_begin_ts');
+        const sEndTs     = metaNum(meta as Record<string, unknown>, 'server_end_ts');
+        const sUndoCore  = metaNum(meta as Record<string, unknown>, 'nninter_core_elapsed');
+        const sResult    = metaNum(meta as Record<string, unknown>, 'server_result_elapsed');
+        const postInFlightMs     = (sRequestTs != null) ? sRequestTs * 1000 - beforePost : undefined;
+        const monaiPrepMs        = (sRequestTs != null && sBeginTs != null) ? (sBeginTs - sRequestTs) * 1000 : undefined;
+        const serverProcessMs    = (sBeginTs != null && sEndTs != null) ? (sEndTs - sBeginTs) * 1000 : undefined;
+        const responseInFlightMs = (sEndTs != null) ? afterPost - sEndTs * 1000 : undefined;
+        console.log(
+          `[nninter undo timing]\n` +
+          `  client → undoNninter():          ${((beforePost - start) / 1000).toFixed(3)}s\n` +
+          `  ── round-trip total:              ${(networkRoundTripMs / 1000).toFixed(3)}s\n` +
+          (postInFlightMs     != null ? `     POST in flight:               ${(postInFlightMs / 1000).toFixed(3)}s\n` : '') +
+          (monaiPrepMs        != null ? `     MONAI pre-processing:          ${(monaiPrepMs / 1000).toFixed(3)}s\n` : '') +
+          (serverProcessMs    != null ? `     server processing (undo):      ${(serverProcessMs / 1000).toFixed(3)}s\n` : '') +
+          (sUndoCore != null ? `       ↳ session.undo():            ${sUndoCore.toFixed(3)}s\n` : '') +
+          (sResult   != null ? `       ↳ result retrieve:           ${sResult.toFixed(3)}s\n` : '') +
+          (responseInFlightMs != null ? `     response in flight:            ${(responseInFlightMs / 1000).toFixed(3)}s\n` : '') +
+          `  client parse multipart:          ${((afterParse - afterPost) / 1000).toFixed(3)}s`
+        );
 
         const undone = String((meta as any).undone).toLowerCase() === 'true';
         if (!undone) {
@@ -1447,6 +1475,7 @@ const commandsModule = ({
             detail: { segmentationId },
           })
         );
+        console.log(`[nninter undo timing] total client: ${((Date.now() - start) / 1000).toFixed(3)}s`);
         uiNotificationService.show({
           title: 'MONAI Label',
           message: 'Undo - Successful',
