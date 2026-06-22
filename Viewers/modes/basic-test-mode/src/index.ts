@@ -152,7 +152,7 @@ function modeFactory() {
               {
                 commandName: 'undo',
                 label: 'Undo',
-                keys: ['ctrl+z'],
+                keys: ['ctrl+shift+z'],
                 isEditable: true,
               },
             ],

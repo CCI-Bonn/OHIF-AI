@@ -260,6 +260,14 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
           measurementService.toggleVisibilityMeasurementMany(uids, next);
           break;
         }
+        case 'z': {
+          if (event.ctrlKey && !event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            commandsManager.run('undoNninter');
+          }
+          break;
+        }
         case 'delete': {
           event.preventDefault();
           event.stopPropagation();
@@ -463,7 +471,17 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
                          <SelectItem value="medsam2">MedSAM2</SelectItem>
                          <SelectItem value="sam3">SAM3</SelectItem>
                        </SelectContent>
-                     </Select>
+                      </Select>
+                   </div>
+                   <div className="flex items-center gap-2">
+                     <Button
+                       variant="secondary"
+                       size="sm"
+                       onClick={() => commandsManager.run('undoNninter')}
+                       title="Undo last interaction (Ctrl+Z)"
+                     >
+                       Undo
+                     </Button>
                    </div>
                  </div>
                 )}

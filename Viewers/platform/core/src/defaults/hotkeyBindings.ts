@@ -186,6 +186,12 @@ const bindings = [
   {
     commandName: 'undo',
     label: 'Undo',
+    keys: ['ctrl+shift+z'],
+    isEditable: true,
+  },
+  {
+    commandName: 'undoNninter',
+    label: 'Undo NNInteractive',
     keys: ['ctrl+z'],
     isEditable: true,
   },
