@@ -473,16 +473,6 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
                        </SelectContent>
                     </Select>
                    </div>
-                   <div className="flex items-center gap-2">
-                     <Button
-                       variant="secondary"
-                       size="sm"
-                       onClick={() => commandsManager.run('undoNninter')}
-                       title="Undo last interaction (Ctrl+Z)"
-                     >
-                       Undo
-                     </Button>
-                   </div>
                  </div>
                 )}
               {isTextPromptToolbox && (

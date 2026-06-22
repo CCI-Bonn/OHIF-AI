@@ -156,6 +156,7 @@ function modeFactory({ modeConfiguration }) {
         'RectangleROI2',
         //'sam2',
         'nninter',
+        'undoNninter',
         //'resetNninter',
         //'jumpToSegment',
         //'toggleCurrentSegment',

@@ -622,6 +622,17 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'undoNninter',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      type: 'tool',
+      icon: 'Undo',
+      label: 'Undo',
+      tooltip: 'Undo (Ctrl+Z)',
+      commands: 'undoNninter',
+    },
+  },
+  {
     id: 'textPromptSegmentation',
     uiType: 'ohif.toolBoxButton',
     props: {
