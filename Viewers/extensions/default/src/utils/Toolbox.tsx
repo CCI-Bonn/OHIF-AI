@@ -471,7 +471,7 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
                          <SelectItem value="medsam2">MedSAM2</SelectItem>
                          <SelectItem value="sam3">SAM3</SelectItem>
                        </SelectContent>
-                      </Select>
+                    </Select>
                    </div>
                    <div className="flex items-center gap-2">
                      <Button

@@ -1331,7 +1331,6 @@ const commandsModule = ({
         promise: undoPromise,
         promiseMessages: {
           loading: 'Undoing last interaction...',
-          success: () => 'Undo - Successful',
           error: error => `Undo - Failed: ${error.message || 'Unknown error'}`,
         },
       });
@@ -1446,6 +1445,11 @@ const commandsModule = ({
             detail: { segmentationId },
           })
         );
+        uiNotificationService.show({
+          title: 'MONAI Label',
+          message: 'Undo - Successful',
+          type: 'success',
+        });
         return response;
       } catch (error) {
         console.error('Undo nninter error:', error);
