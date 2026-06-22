@@ -66,4 +66,4 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 8002
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python", "-m", "monailabel.main", "start_server", "--app", "/code/apps/radiology", "--studies", "http://orthanc:8042/dicom-web", "--conf", "models", "segmentation", "--conf", "use_pretrained_model", "false", "-p", "8002"]
+CMD ["python", "-m", "monailabel.main", "start_server", "--app", "/code/sample-apps/radiology", "--studies", "http://orthanc:8042/dicom-web", "--conf", "models", "segmentation", "--conf", "use_pretrained_model", "false", "-p", "8002"]

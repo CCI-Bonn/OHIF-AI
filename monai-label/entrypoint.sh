@@ -1,10 +1,8 @@
 #!/bin/bash
 set -e
 
-# Download the radiology app on first run (avoids baking it into the image layer)
-if [ ! -d "/code/apps/radiology" ]; then
-    echo "[entrypoint] Downloading MONAI Label radiology app..."
-    python -m monailabel.main apps --download --name radiology --output /code/apps
-fi
+# The radiology app is vendored in the repo (monai-label/sample-apps/radiology) and
+# baked into the image at /code/sample-apps/radiology, so there is no runtime download.
+# The server CMD points --app at that bundled copy.
 
 exec "$@"
