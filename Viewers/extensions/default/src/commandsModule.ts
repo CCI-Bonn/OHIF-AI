@@ -19,7 +19,7 @@ import { useToggleOneUpViewportGridStore } from './stores/useToggleOneUpViewport
 import requestDisplaySetCreationForStudy from './Panels/requestDisplaySetCreationForStudy';
 import promptSaveReport from './utils/promptSaveReport';
 
-import { Enums as csToolsEnums, Types as cstTypes, segmentation as csToolsSegmentation } from '@cornerstonejs/tools';
+import { Enums as csToolsEnums, Types as cstTypes, segmentation as csToolsSegmentation, utilities as csToolsUtils } from '@cornerstonejs/tools';
 import { updateLabelmapSegmentationImageReferences } from '@cornerstonejs/tools/segmentation/updateLabelmapSegmentationImageReferences';
 import { cache, imageLoader, metaData, Types as csTypes, utilities as csUtils, VolumeViewport3D, eventTarget } from '@cornerstonejs/core';
 import { adaptersSEG } from '@cornerstonejs/adapters';
@@ -95,16 +95,7 @@ const commandsModule = ({
             return;
           }
 
-          const selectedModel = toolboxState.getSelectedModel();
-          if (selectedModel === 'nnInteractive') {
-            commandsManager.run('nninter');
-          } else if (selectedModel === 'sam2') {
-            commandsManager.run('sam2');
-          } else if (selectedModel === 'medsam2') {
-            commandsManager.run('sam2');
-          } else if (selectedModel === 'sam3') {
-            commandsManager.run('sam2');
-          }
+          runAiSegmentationCommand();
         }, 50);
       }
     }
@@ -112,6 +103,303 @@ const commandsModule = ({
 
   // Define a context menu controller for use with any context menus
   const contextMenuController = new ContextMenuController(servicesManager, commandsManager);
+
+  function runAiSegmentationCommand() {
+    const selectedModel = toolboxState.getSelectedModel();
+    if (selectedModel === 'nnInteractive') {
+      commandsManager.run('nninter');
+    } else if (selectedModel === 'sam2' || selectedModel === 'medsam2' || selectedModel === 'sam3') {
+      commandsManager.run('sam2');
+    }
+  }
+
+  function finishInferenceRun() {
+    toolboxState.setInferenceInFlight(false);
+    if (toolboxState.consumePendingInferenceRun()) {
+      setTimeout(() => runAiSegmentationCommand(), 0);
+    }
+  }
+
+  function beginInferenceRunOrQueue(): boolean {
+    if (toolboxState.getLocked()) {
+      return false;
+    }
+    if (toolboxState.getInferenceInFlight()) {
+      toolboxState.requestPendingInferenceRun();
+      return false;
+    }
+    toolboxState.setInferenceInFlight(true);
+    return true;
+  }
+
+  function buildMultiBlockLabelmapRepresentation({
+    segmentationId,
+    derivedImageIds,
+    imageIds,
+    currentDisplaySets,
+    segments,
+  }: {
+    segmentationId: string;
+    derivedImageIds: string[];
+    imageIds: string[];
+    currentDisplaySets: any;
+    segments: { [segmentIndex: string]: cstTypes.Segment };
+  }) {
+    const N = imageIds.length;
+    const blockCount = N > 0 ? Math.floor(derivedImageIds.length / N) : 1;
+    const primaryLabelmapId = `${segmentationId}-storage-0`;
+    const labelmaps: Record<string, object> = {};
+    const segmentBindings: Record<number, object> = {};
+
+    for (let b = 0; b < blockCount; b++) {
+      const segIdx = b + 1;
+      const blockImageIds = derivedImageIds.slice(b * N, (b + 1) * N);
+      const labelmapId = b === 0 ? primaryLabelmapId : `${segmentationId}-private-${segIdx}`;
+      labelmaps[labelmapId] = {
+        labelmapId,
+        type: 'stack',
+        imageIds: blockImageIds,
+        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
+        referencedImageIds: imageIds,
+        labelToSegmentIndex: {},
+      };
+      segmentBindings[segIdx] = { labelmapId, labelValue: segIdx };
+    }
+
+    // Single-layer labelmaps (e.g. SAM2 overlap=false) store multiple segment values in one block.
+    if (blockCount === 1) {
+      const primaryId = primaryLabelmapId;
+      Object.keys(segments)
+        .map(Number)
+        .filter(index => index > 0)
+        .forEach(segIdx => {
+          segmentBindings[segIdx] = { labelmapId: primaryId, labelValue: segIdx };
+        });
+    }
+
+    return {
+      blockCount,
+      labelmapRepresentation: {
+        imageIds: derivedImageIds,
+        allImageIds: derivedImageIds,
+        referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
+        referencedImageIds: imageIds,
+        labelmaps,
+        segmentBindings,
+        primaryLabelmapId,
+        sourceRepresentationName: 'binaryLabelmap',
+      },
+    };
+  }
+
+  function refreshActiveSegmentationContext(
+    activeViewportId: string,
+    currentDisplaySets: any,
+    fallbackSegmentationId: string,
+  ) {
+    const freshActiveSegmentation =
+      servicesManager.services.segmentationService.getActiveSegmentation(activeViewportId);
+
+    if (!freshActiveSegmentation) {
+      return {
+        segments: {} as { [segmentIndex: string]: cstTypes.Segment },
+        segmentationId: fallbackSegmentationId,
+        segImageIds: [] as string[],
+        existingSegments: {} as { [segmentIndex: string]: cstTypes.Segment },
+        existing: false,
+      };
+    }
+
+    let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
+    let segImageIds: string[] = [];
+    let existing = false;
+    let segmentationId = freshActiveSegmentation.segmentationId;
+
+    let existingseriesInstanceUid = freshActiveSegmentation.cachedStats?.seriesInstanceUid;
+    if (existingseriesInstanceUid === undefined) {
+      for (const segment of Object.values(freshActiveSegmentation.segments ?? {})) {
+        if (segment.cachedStats?.algorithmType !== undefined) {
+          existingseriesInstanceUid = segment.cachedStats.algorithmType;
+          break;
+        }
+      }
+    }
+
+    if (existingseriesInstanceUid === currentDisplaySets.SeriesInstanceUID) {
+      existingSegments = freshActiveSegmentation.segments || {};
+      segImageIds =
+        freshActiveSegmentation.representationData?.Labelmap?.allImageIds ??
+        freshActiveSegmentation.representationData?.Labelmap?.imageIds ??
+        [];
+      existing = true;
+    }
+
+    return {
+      segments: { ...(freshActiveSegmentation.segments ?? {}) },
+      segmentationId,
+      segImageIds,
+      existingSegments,
+      existing,
+    };
+  }
+
+  function mergeSegmentsForUpdate(
+    segmentationId: string,
+    segmentsUpdate: { [segmentIndex: string]: cstTypes.Segment },
+  ) {
+    const latest = csToolsSegmentation.state.getSegmentation(segmentationId);
+    const merged: { [segmentIndex: string]: cstTypes.Segment } = {
+      ...(latest?.segments ?? {}),
+    };
+
+    for (const [key, segment] of Object.entries(segmentsUpdate)) {
+      const segmentIndex = Number(key);
+      if (!Number.isFinite(segmentIndex) || segmentIndex <= 0) {
+        continue;
+      }
+      merged[segmentIndex] = {
+        ...(merged[segmentIndex] ?? {}),
+        ...segment,
+        segmentIndex,
+      };
+    }
+
+    return merged;
+  }
+
+  function ensureAllSegmentsVisible(segmentationId: string) {
+    const latest = csToolsSegmentation.state.getSegmentation(segmentationId);
+    if (!latest?.segments) {
+      return;
+    }
+
+    const viewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+    for (const viewportId of viewportIds) {
+      for (const key of Object.keys(latest.segments)) {
+        const segmentIndex = Number(key);
+        if (!Number.isFinite(segmentIndex) || segmentIndex <= 0) {
+          continue;
+        }
+        servicesManager.services.segmentationService.setSegmentVisibility(
+          viewportId,
+          segmentationId,
+          segmentIndex,
+          true
+        );
+      }
+    }
+  }
+
+  async function syncLabelmapRepresentations({
+    activeViewportId,
+    segmentationId,
+    existing,
+    blockCount,
+    prevBlockCount,
+    currentImageIdIndex,
+    representations,
+  }: {
+    activeViewportId: string;
+    segmentationId: string;
+    existing: boolean;
+    blockCount: number;
+    prevBlockCount: number;
+    currentImageIdIndex?: number;
+    representations: any[];
+  }) {
+    const blockCountIncreased = existing && blockCount > prevBlockCount;
+
+    if (!existing) {
+      await remountSegmentationRepresentations({
+        activeViewportId,
+        segmentationId,
+        currentImageIdIndex,
+        representations,
+      });
+      return;
+    }
+
+    if (blockCountIncreased) {
+      const viewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+      for (const viewportId of viewportIds) {
+        updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
+      }
+      csToolsUtils.segmentation.triggerSegmentationRenderBySegmentationId(segmentationId);
+    }
+
+    eventTarget.dispatchEvent(
+      new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
+        detail: { segmentationId },
+      })
+    );
+  }
+
+  async function remountSegmentationRepresentations({
+    activeViewportId,
+    segmentationId,
+    currentImageIdIndex,
+    representations,
+  }: {
+    activeViewportId: string;
+    segmentationId: string;
+    currentImageIdIndex?: number;
+    representations: any[];
+  }) {
+    for (let i = 0; i < representations.length; i++) {
+      const representation = representations[i];
+      const segs = Object.values(representation.segments);
+      for (let j = 0; j < segs.length; j++) {
+        const seg = segs[j];
+        servicesManager.services.segmentationService.setSegmentVisibility(
+          activeViewportId,
+          representation.segmentationId,
+          (seg as any).segmentIndex,
+          (seg as any).visible
+        );
+      }
+    }
+
+    const currentViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+    const regularViewportIds: string[] = [];
+    const volume3DViewportIds: string[] = [];
+    for (const viewportId of currentViewportIds) {
+      const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      if (vp instanceof VolumeViewport3D) volume3DViewportIds.push(viewportId);
+      else regularViewportIds.push(viewportId);
+    }
+
+    for (const viewportId of currentViewportIds) {
+      servicesManager.services.segmentationService.removeSegmentationRepresentations(viewportId, { segmentationId });
+    }
+    await Promise.all(regularViewportIds.map(viewportId =>
+      servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, { segmentationId })
+    ));
+    for (const viewportId of volume3DViewportIds) {
+      const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
+      await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
+        segmentationId,
+        type: csToolsEnums.SegmentationRepresentations.Labelmap,
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      requestAnimationFrame(() => vp?.render());
+    }
+
+    const activeVp = activeViewportId.startsWith('default')
+      ? servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId)
+      : null;
+    if (activeVp?.setImageIdIndex && currentImageIdIndex !== undefined) {
+      const away = currentImageIdIndex === 0 ? 1 : 0;
+      await activeVp.setImageIdIndex(away);
+      await activeVp.setImageIdIndex(currentImageIdIndex);
+    }
+
+    eventTarget.dispatchEvent(
+      new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
+        detail: { segmentationId },
+      })
+    );
+  }
 
   /**
    * Helper function to handle post-segmentation processing after segmentation data is created/updated.
@@ -146,76 +434,80 @@ const commandsModule = ({
   }) {
     // Get the representations for the segmentation to recover the visibility of the segments
     const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId });
-    
+
+    const prevSegmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
+    const prevAllImageIds =
+      prevSegmentation?.representationData?.Labelmap?.allImageIds ??
+      prevSegmentation?.representationData?.Labelmap?.imageIds ??
+      [];
+    const prevBlockCount = imageIds.length > 0 ? Math.floor(prevAllImageIds.length / imageIds.length) : 0;
+
+    const { blockCount, labelmapRepresentation } = buildMultiBlockLabelmapRepresentation({
+      segmentationId,
+      derivedImageIds,
+      imageIds,
+      currentDisplaySets,
+      segments,
+    });
+    const mergedSegments = mergeSegmentsForUpdate(segmentationId, segments);
+
     if (segmentNumber === 1 && Object.keys(existingSegments).length === 0 && !existing) {
       csToolsSegmentation.addSegmentations([
         {
           segmentationId,
           representation: {
             type: LABELMAP,
-            data: {
-              imageIds: derivedImageIds,
-              referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-              referencedImageIds: imageIds,
-            }
+            data: labelmapRepresentation,
           },
           config: {
             cachedStats: {
               center: z_range.length > 0 ? z_range.reduce((sum, z) => sum + z, 0) / z_range.length : 0
             },
             label: currentDisplaySets.SeriesDescription,
-            segments,
+            segments: mergedSegments,
           },
         }
       ]);
     } else {
       const readableText = customizationService.getCustomization('panelSegmentation.readableText');
 
-      // Get existing segmentation to preserve other representation data
-      const existingSegmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
+      const existingSegmentation = prevSegmentation ?? csToolsSegmentation.state.getSegmentation(segmentationId);
       const existingRepresentationData = existingSegmentation?.representationData || {};
-      const existingLabelmapData = existingRepresentationData[LABELMAP] || {};
-      
-      // For Surface representation, remove it entirely to force regeneration from updated labelmap
-      // This ensures surfaces are recomputed from the new labelmap data
+
       const updatedRepresentationData = { ...existingRepresentationData };
       const SURFACE = csToolsEnums.SegmentationRepresentations.Surface;
       if (updatedRepresentationData[SURFACE]) {
-        // Remove Surface representation data to force regeneration from updated labelmap
         delete updatedRepresentationData[SURFACE];
       }
-      
-      // Update the segmentation data, preserving other representation data (but not Surface)
+
       csToolsSegmentation.updateSegmentations([
         {
           segmentationId,
           payload: {
-            segments: segments,
+            segments: mergedSegments,
             representationData: {
-              ...updatedRepresentationData, // Surface data removed to force regeneration
-              [LABELMAP]: {
-                ...existingLabelmapData, // Preserve existing labelmap data (e.g., volumeId)
-                imageIds: derivedImageIds,
-                referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-                referencedImageIds: imageIds,
-              }
+              ...updatedRepresentationData,
+              [LABELMAP]: labelmapRepresentation,
             }
           },
         },
       ]);
-      
-      // Update the segmentation stats
-      Promise.resolve().then(() => 
-        updateSegmentationStats({
-          segmentation: activeSegmentation,
+
+      try {
+        await updateSegmentationStats({
+          segmentation: csToolsSegmentation.state.getSegmentation(segmentationId) ?? {
+            segments: mergedSegments,
+            segmentationId,
+          },
           segmentationId,
           readableText,
-        })
-      ).catch(error => {
+        });
+      } catch (error) {
         console.warn('Failed to update segmentation stats:', error);
-      });
+      }
     }
-    
+
+    ensureAllSegmentsVisible(segmentationId);
     servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
     toolboxState.setCurrentActiveSegment(segmentNumber);
 
@@ -223,76 +515,15 @@ const commandsModule = ({
       toolboxState.setRefineNew(false);
     }
 
-    if (!existing) {
-      // ── First-ever inference: no actors exist yet, must do full viewport setup ──
-
-      // Recover the visibility of any pre-existing segments
-      for (let i = 0; i < representations.length; i++) {
-        const representation = representations[i];
-        const segs = Object.values(representation.segments);
-        for (let j = 0; j < segs.length; j++) {
-          const seg = segs[j];
-          servicesManager.services.segmentationService.setSegmentVisibility(activeViewportId, representation.segmentationId, (seg as any).segmentIndex, (seg as any).visible);
-        }
-      }
-
-      // Add representations for all viewports
-      const currentViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
-      const regularViewportIds: string[] = [];
-      const volume3DViewportIds: string[] = [];
-      for (const viewportId of currentViewportIds) {
-        const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
-        if (vp instanceof VolumeViewport3D) volume3DViewportIds.push(viewportId);
-        else regularViewportIds.push(viewportId);
-      }
-
-      for (const viewportId of currentViewportIds) {
-        servicesManager.services.segmentationService.removeSegmentationRepresentations(viewportId, { segmentationId });
-      }
-      await Promise.all(regularViewportIds.map(viewportId =>
-        servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, { segmentationId })
-      ));
-      for (const viewportId of volume3DViewportIds) {
-        const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
-        updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
-        await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
-          segmentationId,
-          type: csToolsEnums.SegmentationRepresentations.Labelmap,
-        });
-        await new Promise(resolve => setTimeout(resolve, 100));
-        requestAnimationFrame(() => vp?.render());
-      }
-
-      // Scroll-away-back so Cornerstone creates the VTK actors for the current slice
-      // and uploads the initial GPU texture (only needed on first-ever inference).
-      const activeVp = activeViewportId.startsWith('default')
-        ? servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(activeViewportId)
-        : null;
-      if (activeVp?.setImageIdIndex && currentImageIdIndex !== undefined) {
-        const away = currentImageIdIndex === 0 ? 1 : 0;
-        await activeVp.setImageIdIndex(away);
-        await activeVp.setImageIdIndex(currentImageIdIndex);
-      }
-
-      eventTarget.dispatchEvent(
-        new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
-          detail: { segmentationId },
-        })
-      );
-    } else {
-      // ── Refinement / update (existing segment) — fast path ──
-      // VTK actors for all viewports already exist and reference the same image
-      // buffers that were updated by the voxel-writing loop above.
-      // labelmapDisplay._setLabelmapColorAndOpacity now calls
-      // scalars.modified() + inputData.modified() unconditionally, so the GPU
-      // texture is re-uploaded on the next rAF render triggered by the event.
-      // No remove/re-add or scroll needed — saves ~300–350 ms per inference.
-      eventTarget.dispatchEvent(
-        new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
-          detail: { segmentationId },
-        })
-      );
-    }
+    await syncLabelmapRepresentations({
+      activeViewportId,
+      segmentationId,
+      existing,
+      blockCount,
+      prevBlockCount,
+      currentImageIdIndex,
+      representations,
+    });
   }
 
   const actions = {
@@ -791,7 +1022,7 @@ const commandsModule = ({
     },
 
     async sam2() {
-      if (toolboxState.getLocked()) {
+      if (!beginInferenceRunOrQueue()) {
         return;
       }
 
@@ -826,7 +1057,8 @@ const commandsModule = ({
     let segments: { [segmentIndex: string]: cstTypes.Segment } = {};
     let segmentationId = `${csUtils.uuidv4()}`
     if (activeSegmentation !== undefined){
-      segments = activeSegmentation.segments;
+      segmentationId = activeSegmentation.segmentationId;
+      segments = { ...activeSegmentation.segments };
     if (Object.values(segments).length > 0) {
       // Find the minimum available segment number
       const existingSegmentNumbers = Object.values(segments).map(e => e.segmentIndex).sort((a, b) => a - b);
@@ -1023,7 +1255,9 @@ const commandsModule = ({
             if (existingseriesInstanceUid === currentDisplaySets.SeriesInstanceUID) {
               existingSegments = activeSegmentation.segments || {};
               segmentationId = activeSegmentation.segmentationId;
-              segImageIds = activeSegmentation.representationData.Labelmap.imageIds;
+              // allImageIds preserves all blocks; imageIds is reverted to block1 by syncLegacyLabelmapData
+              segImageIds = activeSegmentation.representationData.Labelmap.allImageIds
+                ?? activeSegmentation.representationData.Labelmap.imageIds;
               existing = true;
             }
           }
@@ -1189,6 +1423,8 @@ const commandsModule = ({
       } catch (error) {
         console.error('Segmentation error:', error);
         throw error;
+      } finally {
+        finishInferenceRun();
       }
     },
     async initNninter( options: {viewportId: string} = {viewportId: undefined} ){
@@ -1301,9 +1537,15 @@ const commandsModule = ({
       }
       const segmentationId = activeSegmentation.segmentationId;
       const segmentNumber = activeSegmentObj.segmentIndex;
+      // With multi-layer labelmaps (5.x), each segment has its own layer.
+      // Prefer the layer-specific imageIds; fall back to the flat legacy field.
+      const labelmapState = (csToolsSegmentation.state.getSegmentation(segmentationId)
+        ?.representationData?.Labelmap as any);
+      const segBinding = labelmapState?.segmentBindings?.[segmentNumber];
+      const segLayerId = segBinding?.labelmapId;
       const segImageIds: string[] =
-        (csToolsSegmentation.state.getSegmentation(segmentationId)
-          ?.representationData?.Labelmap as any)?.imageIds ?? [];
+        (segLayerId && labelmapState?.labelmaps?.[segLayerId]?.imageIds) ||
+        (labelmapState?.imageIds ?? []);
       if (segImageIds.length === 0) {
         return;
       }
@@ -2170,11 +2412,11 @@ const commandsModule = ({
       }
     },
     async nninter(textPrompts?: string | string[]) {
-      if (toolboxState.getLocked()) {
+      if (!beginInferenceRunOrQueue()) {
         return;
       }
 
-      const overlap = false;
+      const overlap = true;
       const start = Date.now();
 
       const { activeViewportId, viewports } = viewportGridService.getState();
@@ -2203,7 +2445,8 @@ const commandsModule = ({
       let segmentationId = `${csUtils.uuidv4()}`
       let _needsReset = false; // set true when switching segments; folded into inference POST
       if (activeSegmentation !== undefined){
-        segments = activeSegmentation.segments;
+        segmentationId = activeSegmentation.segmentationId;
+        segments = { ...activeSegmentation.segments };
       if (Object.values(segments).length > 0) {
         // Find the minimum available segment number
         const existingSegmentNumbers = Object.values(segments).map(e => e.segmentIndex).sort((a, b) => a - b);
@@ -2239,7 +2482,16 @@ const commandsModule = ({
             return
           }
         } else {
-          // For new Segment
+          // For new Segment — fill an empty placeholder from Add Segment when present.
+          const activeSegment = servicesManager.services.segmentationService.getActiveSegment(activeViewportId);
+          const activeIdx = activeSegment?.segmentIndex;
+          const isEmptyActiveSegment =
+            activeIdx != null &&
+            segments[activeIdx] &&
+            !(segments[activeIdx] as any)?.cachedStats?.algorithmName;
+          if (isEmptyActiveSegment) {
+            segmentNumber = activeIdx;
+          }
           for (let i = 0; i < unAssignedMeasurements.length; i++) {
             const e = unAssignedMeasurements[i];
             e.metadata.SegmentNumber = segmentNumber;
@@ -2331,6 +2583,7 @@ const commandsModule = ({
       
       const beforePost = Date.now();
       console.log(`Before Post request: ${(beforePost - start)/1000} Seconds`);
+
       // Create the axios promise
       const segmentationPromise = axios.post(url, data, {
         responseType: 'arraybuffer',
@@ -2439,35 +2692,16 @@ const commandsModule = ({
 
             let imageIds = currentDisplaySets.imageIds
 
-
-
-            let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
-            
-            let segImageIds = [];
-
-            let existing = false;
-            // Find existing segmentation with matching seriesInstanceUid
-            if (activeSegmentation !== undefined){
-              let existingseriesInstanceUid = activeSegmentation.cachedStats?.seriesInstanceUid;
-              
-              if (existingseriesInstanceUid === undefined) {
-                const segments = Object.values(activeSegmentation.segments);
-                for (let j = 0; j < segments.length; j++) {
-                  const segment = segments[j];
-                  if (segment.cachedStats?.algorithmType !== undefined) {
-                    existingseriesInstanceUid = segment.cachedStats.algorithmType;
-                  }
-                }
-              }
-              
-              if (existingseriesInstanceUid === currentDisplaySets.SeriesInstanceUID) {
-                existingSegments = activeSegmentation.segments || {};
-                segmentationId = activeSegmentation.segmentationId;
-                segImageIds = activeSegmentation.representationData.Labelmap.imageIds;
-                existing = true;
-              }
-            }
-
+            const refreshedContext = refreshActiveSegmentationContext(
+              activeViewportId,
+              currentDisplaySets,
+              segmentationId,
+            );
+            segments = refreshedContext.segments;
+            segmentationId = refreshedContext.segmentationId;
+            const segImageIds = refreshedContext.segImageIds;
+            const existingSegments = refreshedContext.existingSegments;
+            const existing = refreshedContext.existing;
 
           let merged_derivedImages = [];
           let z_range = [];
@@ -2736,6 +2970,8 @@ const commandsModule = ({
       } catch (error) {
         console.error('Nninter segmentation error:', error);
         throw error;
+      } finally {
+        finishInferenceRun();
       }
     },
 
