@@ -320,11 +320,13 @@ const commandsModule = ({
     }
 
     if (blockCountIncreased) {
-      const viewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
-      for (const viewportId of viewportIds) {
-        updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
-      }
-      csToolsUtils.segmentation.triggerSegmentationRenderBySegmentationId(segmentationId);
+      console.log(`[syncLabelmap] blockCountIncreased ${prevBlockCount}→${blockCount}, remounting`);
+      await remountSegmentationRepresentations({
+        activeViewportId,
+        segmentationId,
+        currentImageIdIndex,
+        representations,
+      });
     }
 
     eventTarget.dispatchEvent(
