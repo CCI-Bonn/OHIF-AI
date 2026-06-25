@@ -22,17 +22,21 @@ export async function getSegmentLargestBidirectional({ segmentationId, segmentIn
         for (const segmentIndex of indices) {
             const input = getMultiBlockSegmentStatsInput(Labelmap, segmentIndex);
             if (!input) {
+                console.warn(`[bidirectional] seg${segmentIndex}: no multiblock input`);
                 continue;
             }
+            console.log(`[bidirectional] seg${segmentIndex}: segImageIds.length=${input.segImageIds?.length}, pixelIndex=${input.pixelIndex}`);
             const stackResults = await calculateStackBidirectional({
                 segImageIds: input.segImageIds,
                 indices: [input.pixelIndex],
                 mode: 'individual',
             });
+            console.log(`[bidirectional] seg${segmentIndex}: stackResults.length=${stackResults?.length}, sliceIndices=[${stackResults?.map(r=>r?.sliceIndex).join(',')}]`);
             const candidates = stackResults?.filter((result) => result?.segmentIndex === input.pixelIndex);
             const measurement = candidates?.length
                 ? candidates.reduce((best, cur) => ((cur.maxMajor ?? 0) > (best.maxMajor ?? 0) ? cur : best))
                 : stackResults?.[0];
+            console.log(`[bidirectional] seg${segmentIndex}: best sliceIndex=${measurement?.sliceIndex}, maxMajor=${measurement?.maxMajor}`);
             if (measurement) {
                 bidirectionalResults.push({
                     ...measurement,
@@ -41,7 +45,14 @@ export async function getSegmentLargestBidirectional({ segmentationId, segmentIn
             }
         }
         //triggerWorkerProgress(WorkerTypes.COMPUTE_LARGEST_BIDIRECTIONAL, 100);
-        return bidirectionalResults.map((measurement) => attachReferencedImageId(measurement, inputSegImageIds(Labelmap, measurement.segmentIndex)));
+        const finalResults = bidirectionalResults.map((measurement) => {
+            // Use includedSegImageIds (from prepareStackDataForWorker) to correctly map
+            // sliceIndex back to the original segImageId, accounting for any skipped slices.
+            const effectiveIds = measurement._includedSegImageIds ?? inputSegImageIds(Labelmap, measurement.segmentIndex);
+            return attachReferencedImageId(measurement, effectiveIds);
+        });
+        finalResults.forEach(r => console.log(`[bidirectional] seg${r?.segmentIndex}: referencedImageId=${r?.referencedImageId}`));
+        return finalResults;
     }
     const segData = getSegmentationDataForWorker(segmentationId, segmentIndices);
     if (!segData) {
@@ -60,7 +71,10 @@ export async function getSegmentLargestBidirectional({ segmentationId, segmentIn
             mode,
         });
     //triggerWorkerProgress(WorkerTypes.COMPUTE_LARGEST_BIDIRECTIONAL, 100);
-    return bidirectionalData.map(measurement => attachReferencedImageId(measurement, segImageIds, operationData));
+    return bidirectionalData.map(measurement => {
+        const effectiveIds = measurement._includedSegImageIds ?? segImageIds;
+        return attachReferencedImageId(measurement, effectiveIds, operationData);
+    });
 }
 function inputSegImageIds(Labelmap, segmentIndex) {
     const input = getMultiBlockSegmentStatsInput(Labelmap, segmentIndex);
@@ -108,7 +122,7 @@ async function calculateVolumeBidirectional({ operationData, indices, mode }) {
     return bidirectionalData;
 }
 async function calculateStackBidirectional({ segImageIds, indices, mode }) {
-    const { segmentationInfo } = prepareStackDataForWorker(segImageIds);
+    const { segmentationInfo, includedSegImageIds } = prepareStackDataForWorker(segImageIds);
     if (!segmentationInfo.length) {
         return [];
     }
@@ -118,5 +132,8 @@ async function calculateStackBidirectional({ segImageIds, indices, mode }) {
         mode,
         isStack: true,
     });
-    return bidirectionalData;
+    // Tag each result with the correctly-aligned imageIds so resolveReferencedImageId
+    // maps sliceIndex → the right segImageId even when some slices were skipped.
+    const effectiveIds = includedSegImageIds ?? segImageIds;
+    return bidirectionalData.map(r => ({ ...r, _includedSegImageIds: effectiveIds }));
 }
