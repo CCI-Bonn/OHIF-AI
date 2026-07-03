@@ -21,7 +21,7 @@ import promptSaveReport from './utils/promptSaveReport';
 
 import { Enums as csToolsEnums, Types as cstTypes, segmentation as csToolsSegmentation, utilities as csToolsUtils } from '@cornerstonejs/tools';
 import { updateLabelmapSegmentationImageReferences } from '@cornerstonejs/tools/segmentation/updateLabelmapSegmentationImageReferences';
-import { cache, imageLoader, metaData, Types as csTypes, utilities as csUtils, VolumeViewport3D, eventTarget } from '@cornerstonejs/core';
+import { cache, imageLoader, metaData, Types as csTypes, utilities as csUtils, VolumeViewport, VolumeViewport3D, eventTarget } from '@cornerstonejs/core';
 import { adaptersSEG } from '@cornerstonejs/adapters';
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 import MonaiLabelClient from '../../monai-label/src/services/MonaiLabelClient';
@@ -327,6 +327,23 @@ const commandsModule = ({
         currentImageIdIndex,
         representations,
       });
+    } else {
+      // Refine case (same block count): VolumeViewport (MPR) actors are VTK-based and need
+      // remount when the block's imageIds change — SEGMENTATION_DATA_MODIFIED alone is not enough.
+      const allViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+      const hasMprViewport = allViewportIds.some(vid => {
+        const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(vid);
+        return vp instanceof VolumeViewport && !(vp instanceof VolumeViewport3D);
+      });
+      if (hasMprViewport) {
+        await remountSegmentationRepresentations({
+          activeViewportId,
+          segmentationId,
+          currentImageIdIndex,
+          representations,
+        });
+        return; // remountSegmentationRepresentations already dispatches SEGMENTATION_DATA_MODIFIED
+      }
     }
 
     eventTarget.dispatchEvent(
@@ -362,21 +379,72 @@ const commandsModule = ({
     }
 
     const currentViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
-    const regularViewportIds: string[] = [];
+    const stackViewportIds: string[] = [];
+    const mprViewportIds: string[] = [];
     const volume3DViewportIds: string[] = [];
     for (const viewportId of currentViewportIds) {
       const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
       if (vp instanceof VolumeViewport3D) volume3DViewportIds.push(viewportId);
-      else regularViewportIds.push(viewportId);
+      else if (vp instanceof VolumeViewport) mprViewportIds.push(viewportId);
+      else stackViewportIds.push(viewportId);
     }
 
-    for (const viewportId of currentViewportIds) {
+    // Purge stale MPR volume caches synchronously BEFORE any events that could trigger
+    // the SegmentationRenderingEngine reconcile for MPR viewports.
+    if (mprViewportIds.length > 0) {
+      const csToolsAny = cornerstoneTools as any;
+      const seg = csToolsAny.segmentation.state.getSegmentation(segmentationId);
+      const labelmapData = seg?.representationData?.Labelmap as any;
+      if (labelmapData) {
+        if (labelmapData.volumeId) {
+          cache.removeVolumeLoadObject(labelmapData.volumeId);
+          delete labelmapData.volumeId;
+        }
+        for (const [labelmapId, layer] of Object.entries(labelmapData.labelmaps ?? {}) as [string, any][]) {
+          if ((layer as any).geometryVolumeId) {
+            if (cache.getVolume((layer as any).geometryVolumeId)) {
+              cache.removeVolumeLoadObject((layer as any).geometryVolumeId);
+            }
+            delete (layer as any).geometryVolumeId;
+          }
+          const defaultKey = `${labelmapId}-geometry`;
+          if (cache.getVolume(defaultKey)) {
+            cache.removeVolumeLoadObject(defaultKey);
+          }
+        }
+      }
+    }
+
+    // Update MPR image references synchronously before triggering any renders.
+    for (const viewportId of mprViewportIds) {
+      updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
+    }
+
+    // Remove + re-add STACK viewports only.
+    // MPR viewports are intentionally NOT removed here. The SegmentationRenderingEngine's
+    // reconcile (triggered as a side effect of the stack re-add's triggerSegmentationModified)
+    // handles the MPR remove+remount atomically as microtasks. No animation frame can fire
+    // between reconcile's remove() and mount(), so the MPR canvas never shows a blank frame.
+    for (const viewportId of stackViewportIds) {
       servicesManager.services.segmentationService.removeSegmentationRepresentations(viewportId, { segmentationId });
     }
-    await Promise.all(regularViewportIds.map(viewportId =>
+    await Promise.all(stackViewportIds.map(viewportId =>
       servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, { segmentationId })
     ));
+
+    // Explicitly trigger MPR reconcile (idempotent: if representation exists, this just fires
+    // REPRESENTATION_MODIFIED → triggerSegmentationRender → reconcile with new volume/actors).
+    for (const viewportId of mprViewportIds) {
+      updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
+      await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
+        segmentationId,
+        type: csToolsEnums.SegmentationRepresentations.Labelmap,
+      });
+    }
+
+    // Volume3D viewports: explicit remove+re-add with timeout to ensure actors mount.
     for (const viewportId of volume3DViewportIds) {
+      servicesManager.services.segmentationService.removeSegmentationRepresentations(viewportId, { segmentationId });
       const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(viewportId);
       updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
       await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
@@ -503,14 +571,31 @@ const commandsModule = ({
           },
           segmentationId,
           readableText,
+          targetSegmentIndex: segmentNumber,
         });
       } catch (error) {
         console.warn('Failed to update segmentation stats:', error);
       }
     }
 
-    ensureAllSegmentsVisible(segmentationId);
-    servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
+    console.log(`[nninter post] segNum=${segmentNumber}, blockCount=${blockCount}, prevBlockCount=${prevBlockCount}, existing=${existing}`);
+    // Only make the target segment visible if it's newly added — not a refinement.
+    // ensureAllSegmentsVisible was clobbering user-hidden segments on every prediction.
+    if (!existingSegments[segmentNumber]) {
+      const viewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+      for (const viewportId of viewportIds) {
+        servicesManager.services.segmentationService.setSegmentVisibility(
+          viewportId, segmentationId, segmentNumber, true
+        );
+      }
+    }
+    // Don't override active segment if user already switched (e.g. pressed 'm' during inference).
+    // The pending queued inference run must fire with the user's chosen segment, not the just-completed one.
+    const _currentActive = servicesManager.services.segmentationService.getActiveSegment(activeViewportId);
+    if (!_currentActive || _currentActive.segmentIndex === segmentNumber) {
+      servicesManager.services.segmentationService.setActiveSegment(segmentationId, segmentNumber);
+    }
+    // Always update toolboxState — it tracks the server's last segment context for _needsReset detection.
     toolboxState.setCurrentActiveSegment(segmentNumber);
 
     if (toolboxState.getRefineNew()) {
@@ -1125,13 +1210,18 @@ const commandsModule = ({
       const neg_points: any[] = [];
       const pos_boxes: any[] = [];
       const seriesUID = currentDisplaySets.SeriesInstanceUID;
+      const imageIdsSam2: string[] = currentDisplaySets.imageIds ?? [];
       for (const e of currentMeasurements) {
         if (e.referenceSeriesUID !== seriesUID || e.metadata.SegmentNumber !== segmentNumber) continue;
         if (e.toolName === 'Probe2') {
           (e.metadata.neg ? neg_points : pos_points).push(Object.values(e.data)[0].index);
         } else if (e.toolName === 'RectangleROI2' && !e.metadata.neg) {
           const pts = Object.values(e.data)[0].pointsInShape;
-          pos_boxes.push([pts.at(0).pointIJK, pts.at(-1).pointIJK]);
+          const p0 = [...pts.at(0).pointIJK];
+          const p1 = [...pts.at(-1).pointIJK];
+          // Stack viewports: pointsInShape k=0 from 2D imageData; use referencedImageId for correct slice.
+          if (p0[2] === 0) { const refK = imageIdsSam2.indexOf(e.referencedImageId); if (refK > 0) { p0[2] = refK; p1[2] = refK; } }
+          pos_boxes.push([p0, p1]);
         }
       }
 
@@ -1391,7 +1481,6 @@ const commandsModule = ({
             segmentIndex: segmentNumber,
             label: label_name,
             locked: false,
-            active: false,
             cachedStats: {
               modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
               algorithmType: currentDisplaySets.SeriesInstanceUID,
@@ -2463,6 +2552,7 @@ const commandsModule = ({
         segmentNumber = minAvailableNumber;
         if (!toolboxState.getRefineNew()) {
           const activeSegment = servicesManager.services.segmentationService.getActiveSegment(activeViewportId);
+          console.log(`[nninter] refine branch: minAvail=${minAvailableNumber}, activeSegIdx=${activeSegment?.segmentIndex}, currentActiveSeg=${toolboxState.getCurrentActiveSegment()}`);
           if (activeSegment !== undefined){
             for (let i = 0; i < unAssignedMeasurements.length; i++) {
               const e = unAssignedMeasurements[i];
@@ -2518,6 +2608,7 @@ const commandsModule = ({
     }
 
 
+      const imageIdsForPrompts: string[] = currentDisplaySets.imageIds ?? [];
       const pos_points: any[] = [];
       const neg_points: any[] = [];
       const pos_boxes: any[] = [];
@@ -2536,7 +2627,11 @@ const commandsModule = ({
           if (!isNeg && !textPrompts) probe2Labels.push(e.label);
         } else if (e.toolName === 'RectangleROI2') {
           const pts = Object.values(e.data)[0].pointsInShape;
-          (isNeg ? neg_boxes : pos_boxes).push([pts.at(0).pointIJK, pts.at(-1).pointIJK]);
+          const p0 = [...pts.at(0).pointIJK];
+          const p1 = [...pts.at(-1).pointIJK];
+          // Stack viewports: pointsInShape k=0 from 2D imageData; use referencedImageId for correct slice.
+          if (p0[2] === 0) { const refK = imageIdsForPrompts.indexOf(e.referencedImageId); if (refK > 0) { p0[2] = refK; p1[2] = refK; } }
+          (isNeg ? neg_boxes : pos_boxes).push([p0, p1]);
         } else if (e.toolName === 'PlanarFreehandROI3') {
           const b = Object.values(e.data)[0]?.boundary;
           if (b) (isNeg ? neg_lassos : pos_lassos).push(b);
@@ -2704,6 +2799,7 @@ const commandsModule = ({
             const segImageIds = refreshedContext.segImageIds;
             const existingSegments = refreshedContext.existingSegments;
             const existing = refreshedContext.existing;
+            console.log(`[nninter] refreshed: segNum=${segmentNumber}, existing=${existing}, segImageIds.len=${segImageIds.length}, segKeys=${Object.keys(segments).join(',')}, _needsReset=${_needsReset}`);
 
           let merged_derivedImages = [];
           let z_range = [];
@@ -2753,40 +2849,42 @@ const commandsModule = ({
 
           let filteredDerivedImages = [];
           const imgLength = imageIds.length;
-          let updatedIndices = new Set<number>();
+          let excludedBlockIndex = -1; // 0-based block index of the segment being refined
 
-          // If toolboxState.getRefineNew() is false (Refine), exclude derivedImages that contain segmentNumber
-          // Each derivedImage is binary mask of a single slice ([0],[0,1],[0,2],[0,3].. etc)
-          // derivedImages size is imgLength * the number of segment
-          // We need to filter out the derivedImages block that contain segmentNumber (consists of [0] or [0, segmentNumber] masks)
-          // If filter out which contains segmentNumber and all [0] masks, it can lead to incorrect calculation of the segment. e.g. bidirectional measurement
+          // buildMultiBlockLabelmapRepresentation assigns block b → segment b+1, so we can
+          // compute the excluded block directly instead of scanning all images pixel-by-pixel.
+          // Old approach: O(N_segments × N_slices × pixels) — grows with every new segment.
+          // New approach: O(N_slices × pixels) — clears only the one target block.
           if (!toolboxState.getRefineNew() && derivedImages.length > 0) {
-            let addFlag = true;
-            for (let i = 0; i < derivedImages.length; i++) {
-              const image = derivedImages[i];
-              const voxelManager = image.voxelManager as csTypes.IVoxelManager<number>;
-              const scalarData = voxelManager.getScalarData();
-              if (scalarData.some(value => value === segmentNumber)) {
-                const updatedScalarData = scalarData.map(v => (v === segmentNumber ? 0 : v));
-                voxelManager.setScalarData(updatedScalarData);
-                if (addFlag) {
-                  for (let j = 0; j < imgLength; j++) {
-                    updatedIndices.add(Math.floor(i / imgLength) * imgLength + j);
-                  }
-                  addFlag = false;
+            const numBlocks = Math.ceil(derivedImages.length / imgLength);
+            const candidateBlock = segmentNumber - 1;
+            if (candidateBlock >= 0 && candidateBlock < numBlocks) {
+              excludedBlockIndex = candidateBlock;
+              const blockStart = excludedBlockIndex * imgLength;
+              const blockEnd = Math.min(blockStart + imgLength, derivedImages.length);
+              for (let i = blockStart; i < blockEnd; i++) {
+                const sd = (derivedImages[i].voxelManager as csTypes.IVoxelManager<number>).getScalarData();
+                for (let k = 0; k < sd.length; k++) {
+                  if (sd[k] === segmentNumber) sd[k] = 0;
                 }
               }
             }
             for (let i = 0; i < derivedImages.length; i++) {
-              if (!updatedIndices.has(i)) {
-                filteredDerivedImages.push(derivedImages[i]);
-              }
+              if (Math.floor(i / imgLength) !== excludedBlockIndex) filteredDerivedImages.push(derivedImages[i]);
             }
           } else if (derivedImages.length > 0) {
             filteredDerivedImages = derivedImages;
           }
 
-          merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new]
+          // Insert derivedImages_new at the excluded block's original position to preserve
+          // the block-index → segment-index invariant used by buildMultiBlockLabelmapRepresentation.
+          if (excludedBlockIndex >= 0) {
+            const blocksBefore = filteredDerivedImages.slice(0, excludedBlockIndex * imgLength);
+            const blocksAfter = filteredDerivedImages.slice(excludedBlockIndex * imgLength);
+            merged_derivedImages = [...blocksBefore, ...derivedImages_new, ...blocksAfter];
+          } else {
+            merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new];
+          }
         } else {
           const _tElse = Date.now();
           if (segImageIds.length == 0){
@@ -2932,7 +3030,6 @@ const commandsModule = ({
             segmentIndex: segmentNumber,
             label: label_name,
             locked: false,
-            active: false,
             cachedStats: {
               modifiedTime: utils.formatDate(Date.now(), 'YYYYMMDD'),
               algorithmType: currentDisplaySets.SeriesInstanceUID,
