@@ -110,6 +110,39 @@ export const prepareImageInfo = (imageVoxelManager, imageData) => {
         direction: imageData.getDirection(),
     };
 };
+// getImageDataMetadata() returns zSpacing = EPSILON (1e-3) for a 2D stack image — it
+// has no inherent slice spacing. Using that as spacing[2] makes stack-path volume
+// (count × sx × sy × sz) ~1000x too small vs the reconstructed-volume path. Recover the
+// real inter-slice spacing from the referenced source slices' imagePositionPatient
+// (distance between the first two slices), with metadata fallbacks.
+const computeStackSliceSpacing = (segImageIds) => {
+    const ippFor = (segImageId) => {
+        const refImageId = cache.getImage(segImageId)?.referencedImageId;
+        if (!refImageId) {
+            return null;
+        }
+        const plane = metaData.get('imagePlaneModule', refImageId);
+        return plane?.imagePositionPatient ?? null;
+    };
+    if (Array.isArray(segImageIds) && segImageIds.length >= 2) {
+        const p0 = ippFor(segImageIds[0]);
+        const p1 = ippFor(segImageIds[1]);
+        if (p0 && p1) {
+            const dx = p1[0] - p0[0];
+            const dy = p1[1] - p0[1];
+            const dz = p1[2] - p0[2];
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist > 1e-3) {
+                return dist;
+            }
+        }
+    }
+    // Fallbacks: explicit spacing-between-slices, then slice thickness.
+    const refImageId = cache.getImage(segImageIds?.[0])?.referencedImageId;
+    const plane = refImageId ? metaData.get('imagePlaneModule', refImageId) : null;
+    return plane?.spacingBetweenSlices || plane?.sliceThickness || null;
+};
+
 export const prepareStackDataForWorker = (segImageIds) => {
     const segmentationInfo = [];
     const imageInfo = [];
@@ -163,6 +196,17 @@ export const prepareStackDataForWorker = (segImageIds) => {
     if (skipped > 0) {
         console.warn(`[prepareStack] SKIPPED ${skipped}/${segImageIds.length} slices — sliceIndex will be misaligned without includedSegImageIds!`);
     }
+    // Replace the EPSILON z-spacing with the real inter-slice spacing so stack-path
+    // volume matches the reconstructed-volume path. The worker computes the block volume
+    // from segmentationInfo[0].spacing, so overriding every slice's spacing[2] is enough.
+    const realZ = computeStackSliceSpacing(includedSegImageIds);
+    if (realZ && realZ > 0) {
+        for (const info of segmentationInfo) {
+            info.spacing = [info.spacing[0], info.spacing[1], realZ];
+        }
+    } else {
+        console.warn('[prepareStack] could not determine real slice spacing — volume may be inaccurate');
+    }
     return { segmentationInfo, imageInfo, includedSegImageIds };
 };
 export function getMultiBlockSegmentStatsInput(Labelmap, segmentIndex) {
@@ -174,20 +218,36 @@ export function getMultiBlockSegmentStatsInput(Labelmap, segmentIndex) {
     if (!layer?.imageIds?.length) {
         return null;
     }
+    // By construction of the multi-block scheme, each block stores its own segment's
+    // value (= segmentIndex, and === binding.labelValue). So the pixel value is
+    // deterministic and we can EARLY-EXIT the scan as soon as we see the preferred
+    // value, instead of scanning every pixel of all ~321 block slices (~84M reads on
+    // the main thread) just to build a full foreground Set. Only when the preferred
+    // value is genuinely absent do we fall back to the previous first-foreground logic.
+    const preferred = Number.isFinite(segmentIndex) ? segmentIndex : null;
     const foregroundValues = new Set();
+    let foundPreferred = false;
     for (const imageId of layer.imageIds) {
         const data = getScalarData(cache.getImage(imageId));
         if (!data) {
             continue;
         }
         for (let i = 0; i < data.length; i++) {
-            if (data[i] > 0) {
-                foregroundValues.add(data[i]);
+            const v = data[i];
+            if (v > 0) {
+                if (v === preferred) {
+                    foundPreferred = true;
+                    break;
+                }
+                foregroundValues.add(v);
             }
         }
+        if (foundPreferred) {
+            break;
+        }
     }
-    let pixelIndex = segmentIndex;
-    if (!foregroundValues.has(pixelIndex)) {
+    let pixelIndex = preferred;
+    if (!foundPreferred) {
         if (binding.labelValue != null && foregroundValues.has(binding.labelValue)) {
             pixelIndex = binding.labelValue;
         }

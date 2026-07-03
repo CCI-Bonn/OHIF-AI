@@ -256,6 +256,7 @@ monai-label/checkpoints/*
 # data & prediction for experiments
 monai-label/data/*
 monai-label/predictions/*
+monai-label/img_cache/*
 
 # XNAT
 xnat-docker/postgres-data

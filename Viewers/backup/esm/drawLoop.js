@@ -7,7 +7,7 @@ import { shouldSmooth, getInterpolatedPoints, } from '../../../utilities/planarF
 import getMouseModifierKey from '../../../eventDispatchers/shared/getMouseModifier';
 import triggerAnnotationRenderForViewportIds from '../../../utilities/triggerAnnotationRenderForViewportIds';
 import { triggerAnnotationModified, triggerContourAnnotationCompleted, } from '../../../stateManagement/annotation/helpers/state';
-import findOpenUShapedContourVectorToPeak from './findOpenUShapedContourVectorToPeak';
+import { resolveVectorToPeak } from './findOpenUShapedContourVectorToPeak';
 import { polyline } from '../../../utilities/math';
 import { removeAnnotation } from '../../../stateManagement/annotation/annotationState';
 import { ContourWindingDirection } from '../../../types/ContourAnnotation';
@@ -89,15 +89,15 @@ function mouseDragDrawCallback(evt) {
         textBox.hasMoved = true;
     }
     else {
-            const crossingIndex = this.findCrossingIndexDuringCreate(evt);
-            if (crossingIndex !== undefined && annotation.metadata.toolName !== 'PlanarFreehandROI2') {
-                this.applyCreateOnCross(evt, crossingIndex);
-            }
-            else {
-                const numPointsAdded = addCanvasPointsToArray(element, canvasPoints, canvasPos, this.commonData);
-                this.drawData.polylineIndex = polylineIndex + numPointsAdded;
-            }
-            annotation.invalidated = true;
+        const crossingIndex = this.findCrossingIndexDuringCreate(evt);
+        if (crossingIndex !== undefined && annotation.metadata.toolName !== 'PlanarFreehandROI2') {
+            this.applyCreateOnCross(evt, crossingIndex);
+        }
+        else {
+            const numPointsAdded = addCanvasPointsToArray(element, canvasPoints, canvasPos, this.commonData);
+            this.drawData.polylineIndex = polylineIndex + numPointsAdded;
+        }
+        annotation.invalidated = true;
     }
     triggerAnnotationRenderForViewportIds(viewportIdsToRender);
     if (annotation.invalidated) {
@@ -131,9 +131,9 @@ function completeDrawClosedContour(element, options) {
     if (this.haltDrawing(element, canvasPoints)) {
         return false;
     }
-    const { annotation, viewportIdsToRender } = this.commonData;
+    const { annotation, viewportIdsToRender, movingTextBox } = this.commonData;
     const enabledElement = getEnabledElement(element);
-    const { viewport, renderingEngine } = enabledElement;
+    const { viewport } = enabledElement;
     addCanvasPointsToArray(element, canvasPoints, canvasPoints[0], this.commonData);
     canvasPoints.pop();
     const updatedPoints = shouldSmooth(this.configuration, annotation)
@@ -145,7 +145,7 @@ function completeDrawClosedContour(element, options) {
         targetWindingDirection: ContourWindingDirection.Clockwise,
     }, viewport);
     const { textBox } = annotation.data.handles;
-    if (!textBox?.hasMoved) {
+    if (!textBox?.hasMoved && !movingTextBox) {
         triggerContourAnnotationCompleted(annotation, contourHoleProcessingEnabled);
     }
     this.isDrawing = false;
@@ -177,9 +177,9 @@ function completeDrawOpenContour(element, options) {
     if (this.haltDrawing(element, canvasPoints)) {
         return false;
     }
-    const { annotation, viewportIdsToRender } = this.commonData;
+    const { annotation, viewportIdsToRender, movingTextBox } = this.commonData;
     const enabledElement = getEnabledElement(element);
-    const { viewport, renderingEngine } = enabledElement;
+    const { viewport } = enabledElement;
     const updatedPoints = shouldSmooth(this.configuration, annotation)
         ? getInterpolatedPoints(this.configuration, canvasPoints)
         : canvasPoints;
@@ -193,11 +193,14 @@ function completeDrawOpenContour(element, options) {
         worldPoints[0],
         worldPoints[worldPoints.length - 1],
     ];
-    if (annotation.data.isOpenUShapeContour) {
-        annotation.data.openUShapeContourVectorToPeak =
-            findOpenUShapedContourVectorToPeak(canvasPoints, viewport);
+    if (!annotation.data.isOpenUShapeContour &&
+        this.configuration?.openUShapeContour) {
+        annotation.data.isOpenUShapeContour = this.configuration.openUShapeContour;
     }
-    if (!textBox.hasMoved) {
+    if (annotation.data.isOpenUShapeContour) {
+        annotation.data.openUShapeContourVectorToPeak = resolveVectorToPeak(canvasPoints, viewport, annotation.data.isOpenUShapeContour);
+    }
+    if (!textBox.hasMoved && !movingTextBox) {
         triggerContourAnnotationCompleted(annotation, contourHoleProcessingEnabled);
     }
     this.isDrawing = false;
@@ -254,16 +257,13 @@ function cancelDrawing(element) {
     }
 }
 function shouldHaltDrawing(canvasPoints, subPixelResolution) {
-    // We need to support tiny scribbles as well
-    const minPoints = 3; //Math.max(subPixelResolution * 3, 3);
+    const minPoints = 3; //Math.max(subPixelResolution * 3, 3); // tiny scribbles
     return canvasPoints.length < minPoints;
 }
 function haltDrawing(element, canvasPoints) {
     const { subPixelResolution } = this.configuration;
     if (shouldHaltDrawing(canvasPoints, subPixelResolution)) {
         const { annotation, viewportIdsToRender } = this.commonData;
-        const enabledElement = getEnabledElement(element);
-        const { renderingEngine } = enabledElement;
         removeAnnotation(annotation.annotationUID);
         this.isDrawing = false;
         this.drawData = undefined;

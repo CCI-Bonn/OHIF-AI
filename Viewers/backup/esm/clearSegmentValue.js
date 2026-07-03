@@ -1,32 +1,37 @@
-import { cache } from '@cornerstonejs/core';
+import { cache, utilities } from '@cornerstonejs/core';
 import { getSegmentation } from '../getSegmentation';
 import { triggerSegmentationDataModified } from '../triggerSegmentationEvents';
-export function clearSegmentValue(segmentationId, segmentIndex) {
+import { createLabelmapMemo } from '../../../utilities/segmentation/createLabelmapMemo';
+import { getSegmentBinding, getLabelmapForSegment, removeSegmentBinding, } from './labelmapSegmentationState';
+const { DefaultHistoryMemo } = utilities.HistoryMemo;
+export function clearSegmentValue(segmentationId, segmentIndex, options) {
     const segmentation = getSegmentation(segmentationId);
     if (segmentation.representationData.Labelmap) {
-        const { representationData } = segmentation;
-        const labelmapData = representationData.Labelmap;
-        if ('imageIds' in labelmapData || 'volumeId' in labelmapData) {
-            const items = 'imageIds' in labelmapData
-                ? labelmapData.imageIds.map((imageId) => cache.getImage(imageId))
-                : [cache.getVolume(labelmapData.volumeId)];
+        const binding = getSegmentBinding(segmentation, segmentIndex);
+        const layer = getLabelmapForSegment(segmentation, segmentIndex);
+        if (binding && layer) {
+            const items = layer.volumeId
+                ? [cache.getVolume(layer.volumeId)]
+                : (layer.imageIds ?? []).map((imageId) => cache.getImage(imageId));
             items.forEach((item) => {
                 if (!item) {
                     return;
                 }
                 const { voxelManager } = item;
-                const scalarData = voxelManager.getScalarData();
-              // Check if scalarData contains segmentNumber
-              //return !scalarData.some(value => value === segmentNumber);
-              if (scalarData.some(value => value === segmentIndex)){
-                voxelManager.setScalarData(scalarData.map(v => v === segmentIndex ? 0 : v));
-              }
-              //  voxelManager.forEach(({ value, index }) => {
-              //      if (value === segmentIndex) {
-              //          voxelManager.setAtIndex(index, 0);
-              //      }
-              //  });
+                const memo = options?.recordHistory
+                    ? createLabelmapMemo(segmentationId, voxelManager)
+                    : null;
+                const useVoxelManager = memo?.voxelManager ?? voxelManager;
+                voxelManager.forEach(({ value, index }) => {
+                    if (value === binding.labelValue) {
+                        useVoxelManager.setAtIndex(index, 0);
+                    }
+                });
+                if (memo?.commitMemo()) {
+                    DefaultHistoryMemo.push(memo);
+                }
             });
+            removeSegmentBinding(segmentation, segmentIndex);
         }
         triggerSegmentationDataModified(segmentationId);
     }

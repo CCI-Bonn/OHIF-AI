@@ -15,6 +15,14 @@ export default function getSOPInstanceAttributes(imageId, displaySetService, ann
   const { metadata } = annotation;
   const { volumeId } = metadata;
 
+  if (!volumeId) {
+    return {
+      SOPInstanceUID: undefined,
+      SeriesInstanceUID: undefined,
+      StudyInstanceUID: undefined,
+    };
+  }
+
   const displaySet = displaySetService.getDisplaySetsBy(displaySet =>
     volumeId.includes(displaySet.uid)
   )[0];

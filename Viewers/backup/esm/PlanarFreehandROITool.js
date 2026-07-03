@@ -19,7 +19,6 @@ import { getTextBoxCoordsCanvas } from '../../utilities/drawing';
 import { getLineSegmentIntersectionsCoordinates } from '../../utilities/math/polyline';
 import { isViewportPreScaled } from '../../utilities/viewport/isViewportPreScaled';
 import { BasicStatsCalculator } from '../../utilities/math/basic';
-import calculatePerimeter from '../../utilities/contours/calculatePerimeter';
 import ContourSegmentationBaseTool from '../base/ContourSegmentationBaseTool';
 import { KeyboardBindings, ChangeTypes } from '../../enums';
 import { getPixelValueUnits } from '../../utilities/getPixelValueUnits';
@@ -231,6 +230,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
                         modalityUnit,
                         calibratedScale,
                         sliceIndex,
+                        closed,
                     });
                 }
                 else {
@@ -447,7 +447,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
             }
         }
     }
-    updateClosedCachedStats({ viewport, points, imageData, metadata, cachedStats, targetId, modalityUnit, canvasCoordinates, calibratedScale,sliceIndex }) {
+    updateClosedCachedStats({ viewport, points, imageData, metadata, cachedStats, targetId, modalityUnit, canvasCoordinates, calibratedScale, sliceIndex, closed }) {
         const { scale, areaUnit, unit } = calibratedScale;
         let boundary = points.map(array => csUtils.transformWorldToIndex(imageData, array));
         // z-coordinate should be assigned differently for stack viewport (imageId) and volume viewport (volumeId)
@@ -592,7 +592,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
         cachedStats[targetId] = {
             Modality: metadata.Modality,
             area,
-            perimeter: calculatePerimeter(canvasCoordinates, closed) / scale,
+            perimeter: PlanarFreehandROITool.calculateLengthInIndex(calibratedScale, boundary, closed),
             mean: stats.mean?.value,
             max: stats.max?.value,
             stdDev: stats.stdDev?.value,
@@ -659,7 +659,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
         
         cachedStats[targetId] = {
             Modality: metadata.Modality,
-            length: calculatePerimeter(canvasCoordinates, false) / scale,
+            length: PlanarFreehandROITool.calculateLengthInIndex(calibratedScale, polyline, false),
             modalityUnit,
             unit,
             scribble: polyline,

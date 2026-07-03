@@ -1,6 +1,6 @@
 import { drawHandles as drawHandlesSvg, drawPolyline as drawPolylineSvg, drawPath as drawPathSvg, } from '../../../drawingSvg';
 import { polyline } from '../../../utilities/math';
-import { findOpenUShapedContourVectorToPeakOnRender } from './findOpenUShapedContourVectorToPeak';
+import { resolveVectorToPeakOnRender } from './findOpenUShapedContourVectorToPeak';
 import getContourHolesDataCanvas from '../../../utilities/contours/getContourHolesDataCanvas';
 const { pointsAreWithinCloseContourProximity } = polyline;
 function _getRenderingOptions(enabledElement, annotation) {
@@ -20,7 +20,9 @@ function _getRenderingOptions(enabledElement, annotation) {
         width: lineWidth,
         lineDash,
         fillColor,
-        fillOpacity,
+        fillOpacity: this.configuration?.fillOpacity !== undefined
+            ? this.configuration.fillOpacity
+            : fillOpacity,
         closePath: isClosedContour,
     };
     return options;
@@ -34,7 +36,9 @@ function renderContour(enabledElement, svgDrawingHelper, annotation) {
     }
     else {
         if (annotation.data.isOpenUShapeContour) {
-            calculateUShapeContourVectorToPeakIfNotPresent(enabledElement, annotation);
+            if (annotation.data.isOpenUShapeContour !== 'lineSegment') {
+                calculateUShapeContourVectorToPeakIfNotPresent(enabledElement, annotation);
+            }
             this.renderOpenUShapedContour(enabledElement, svgDrawingHelper, annotation);
         }
         else {
@@ -44,8 +48,7 @@ function renderContour(enabledElement, svgDrawingHelper, annotation) {
 }
 function calculateUShapeContourVectorToPeakIfNotPresent(enabledElement, annotation) {
     if (!annotation.data.openUShapeContourVectorToPeak) {
-        annotation.data.openUShapeContourVectorToPeak =
-            findOpenUShapedContourVectorToPeakOnRender(enabledElement, annotation);
+        annotation.data.openUShapeContourVectorToPeak = resolveVectorToPeakOnRender(enabledElement, annotation);
     }
 }
 function renderClosedContour(enabledElement, svgDrawingHelper, annotation) {
@@ -63,7 +66,6 @@ function renderClosedContour(enabledElement, svgDrawingHelper, annotation) {
 function renderOpenContour(enabledElement, svgDrawingHelper, annotation) {
     const { viewport } = enabledElement;
     const options = this._getRenderingOptions(enabledElement, annotation);
-    options.width = 2;
     const canvasPoints = annotation.data.contour.polyline.map((worldPos) => viewport.worldToCanvas(worldPos));
     const polylineUID = '1';
     drawPolylineSvg(svgDrawingHelper, annotation.annotationUID, polylineUID, canvasPoints, options);
@@ -98,15 +100,12 @@ function renderOpenUShapedContour(enabledElement, svgDrawingHelper, annotation) 
     const { openUShapeContourVectorToPeak } = annotation.data;
     const { polyline } = annotation.data.contour;
     this.renderOpenContour(enabledElement, svgDrawingHelper, annotation);
-    if (!openUShapeContourVectorToPeak) {
+    const isLineSegmentOnly = annotation.data.isOpenUShapeContour === 'lineSegment';
+    if (!isLineSegmentOnly && !openUShapeContourVectorToPeak) {
         return;
     }
     const firstCanvasPoint = viewport.worldToCanvas(polyline[0]);
     const lastCanvasPoint = viewport.worldToCanvas(polyline[polyline.length - 1]);
-    const openUShapeContourVectorToPeakCanvas = [
-        viewport.worldToCanvas(openUShapeContourVectorToPeak[0]),
-        viewport.worldToCanvas(openUShapeContourVectorToPeak[1]),
-    ];
     const options = this._getRenderingOptions(enabledElement, annotation);
     drawPolylineSvg(svgDrawingHelper, annotation.annotationUID, 'first-to-last', [firstCanvasPoint, lastCanvasPoint], {
         color: options.color,
@@ -114,15 +113,31 @@ function renderOpenUShapedContour(enabledElement, svgDrawingHelper, annotation) 
         closePath: false,
         lineDash: '2,2',
     });
-    drawPolylineSvg(svgDrawingHelper, annotation.annotationUID, 'midpoint-to-open-contour', [
-        openUShapeContourVectorToPeakCanvas[0],
-        openUShapeContourVectorToPeakCanvas[1],
-    ], {
-        color: options.color,
-        width: options.width,
-        closePath: false,
-        lineDash: '2,2',
-    });
+    if (!isLineSegmentOnly) {
+        const openUShapeContourVectorToPeakCanvas = [
+            viewport.worldToCanvas(openUShapeContourVectorToPeak[0]),
+            viewport.worldToCanvas(openUShapeContourVectorToPeak[1]),
+        ];
+        drawPolylineSvg(svgDrawingHelper, annotation.annotationUID, 'midpoint-to-open-contour', [
+            openUShapeContourVectorToPeakCanvas[0],
+            openUShapeContourVectorToPeakCanvas[1],
+        ], {
+            color: options.color,
+            width: options.width,
+            closePath: false,
+            lineDash: '2,2',
+        });
+    }
+    if (options.fillOpacity > 0) {
+        const canvasPolyline = polyline.map((worldPos) => viewport.worldToCanvas(worldPos));
+        drawPathSvg(svgDrawingHelper, annotation.annotationUID, 'u-shape-fill', [[...canvasPolyline, firstCanvasPoint]], {
+            color: options.fillColor || options.color,
+            fillColor: options.fillColor || options.color,
+            fillOpacity: options.fillOpacity,
+            closePath: true,
+            width: 0,
+        });
+    }
 }
 function renderContourBeingDrawn(enabledElement, svgDrawingHelper, annotation) {
     const options = this._getRenderingOptions(enabledElement, annotation);

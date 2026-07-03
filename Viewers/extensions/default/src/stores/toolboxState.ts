@@ -6,6 +6,8 @@ let refineNew = false;
 let textPromptReplaceNew = false; // Replace/New toggle for Text Prompt Segmentation
 let selectedModel: 'nnInteractive' | 'sam2' | 'medsam2' | 'sam3' = 'nnInteractive'; // Model selection: nnInteractive, SAM2, MedSAM2, or SAM3
 let locked = false;
+let inferenceInFlight = false;
+let pendingInferenceRun = false;
 let promptsVisible = false; // default: hide prompts after each inference; pencil toggle to always-show
 let currentActiveSegment = 1;
 let medgemmaResult: string | null = null;
@@ -109,6 +111,18 @@ export const toolboxState = {
   getLocked: () => locked,
   setLocked: (isLocked: boolean) => {
     locked = isLocked;
+  },
+  getInferenceInFlight: () => inferenceInFlight,
+  setInferenceInFlight: (inFlight: boolean) => {
+    inferenceInFlight = inFlight;
+  },
+  requestPendingInferenceRun: () => {
+    pendingInferenceRun = true;
+  },
+  consumePendingInferenceRun: () => {
+    const pending = pendingInferenceRun;
+    pendingInferenceRun = false;
+    return pending;
   },
   getCurrentActiveSegment: () => currentActiveSegment,
   setCurrentActiveSegment: (segment: number) => {

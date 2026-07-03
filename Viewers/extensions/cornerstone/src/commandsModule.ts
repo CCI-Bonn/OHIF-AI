@@ -141,22 +141,38 @@ function commandsModule({
         segmentIndices: [targetIndex],
       });
 
+      if (!bidirectionalData?.length) {
+        return;
+      }
+
       const activeViewportId = viewportGridService.getActiveViewportId();
 
       // Process each bidirectional measurement
       bidirectionalData.forEach(measurement => {
         const { segmentIndex, majorAxis, minorAxis, referencedImageId } = measurement;
 
+        const hydrateOptions: {
+          segmentIndex: number;
+          segmentationId: string;
+          referencedImageId?: string;
+        } = {
+          segmentIndex,
+          segmentationId: targetId,
+        };
+        if (referencedImageId) {
+          hydrateOptions.referencedImageId = referencedImageId;
+        }
+
         // Create annotation
         const annotation = cornerstoneTools.SegmentBidirectionalTool.hydrate(
           activeViewportId,
           [majorAxis, minorAxis],
-          {
-            segmentIndex,
-            segmentationId: targetId,
-            referencedImageId: referencedImageId,
-          }
+          hydrateOptions
         );
+
+        if (!annotation) {
+          return;
+        }
 
         measurement.annotationUID = annotation.annotationUID;
 

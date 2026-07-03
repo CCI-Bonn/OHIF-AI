@@ -85,7 +85,7 @@ const commandsModule = ({
       ['Probe2', 'PlanarFreehandROI2', 'PlanarFreehandROI3', 'RectangleROI2'].includes(
         evt.measurement.toolName
       )) {
-        console.log('Live mode enabled, triggering nninter() for new measurement');
+        const _measCount = measurementService.getMeasurements().length;
         // Defer past the render cycle so _calculateCachedStats can populate
         // cachedStats[targetId].scribble before nninter reads measurement data.
         // Promise.resolve() (microtask) is too early — scribble data is set
@@ -112,10 +112,10 @@ const commandsModule = ({
       commandsManager.run('sam2');
     }
   }
-
   function finishInferenceRun() {
     toolboxState.setInferenceInFlight(false);
-    if (toolboxState.consumePendingInferenceRun()) {
+    const _hadPending = toolboxState.consumePendingInferenceRun();
+    if (_hadPending) {
       setTimeout(() => runAiSegmentationCommand(), 0);
     }
   }
@@ -130,6 +130,43 @@ const commandsModule = ({
     }
     toolboxState.setInferenceInFlight(true);
     return true;
+  }
+
+  // Segmentation stats (volume/mean/etc.) are display-only but expensive for the
+  // multi-block labelmap scheme — computing one segment's stats scans its full block
+  // (~5s). Running it inside the inference lock queued every subsequent live-mode
+  // trigger (lock-hold grew 5.9s→8s→11.8s). Instead schedule it debounced and
+  // OFF the critical path so the lock releases as soon as the segmentation renders.
+  // Keyed per (segmentationId, segmentIndex): rapid refinements of the same segment
+  // collapse to a single trailing run; distinct segments each get their own.
+  const _statsDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  function scheduleSegmentationStats(
+    segmentationId: string,
+    segmentNumber: number,
+    readableText: any,
+  ) {
+    const key = `${segmentationId}:${segmentNumber}`;
+    const prev = _statsDebounceTimers.get(key);
+    if (prev) {
+      clearTimeout(prev);
+    }
+    const timer = setTimeout(async () => {
+      _statsDebounceTimers.delete(key);
+      try {
+        await updateSegmentationStats({
+          segmentation: csToolsSegmentation.state.getSegmentation(segmentationId) ?? {
+            segments: {},
+            segmentationId,
+          },
+          segmentationId,
+          readableText,
+          targetSegmentIndex: segmentNumber,
+        });
+      } catch (error) {
+        console.warn('Failed to update segmentation stats (deferred):', error);
+      }
+    }, 400);
+    _statsDebounceTimers.set(key, timer);
   }
 
   function buildMultiBlockLabelmapRepresentation({
@@ -320,7 +357,6 @@ const commandsModule = ({
     }
 
     if (blockCountIncreased) {
-      console.log(`[syncLabelmap] blockCountIncreased ${prevBlockCount}→${blockCount}, remounting`);
       await remountSegmentationRepresentations({
         activeViewportId,
         segmentationId,
@@ -563,22 +599,11 @@ const commandsModule = ({
         },
       ]);
 
-      try {
-        await updateSegmentationStats({
-          segmentation: csToolsSegmentation.state.getSegmentation(segmentationId) ?? {
-            segments: mergedSegments,
-            segmentationId,
-          },
-          segmentationId,
-          readableText,
-          targetSegmentIndex: segmentNumber,
-        });
-      } catch (error) {
-        console.warn('Failed to update segmentation stats:', error);
-      }
+      // Off the critical path — do NOT await. Holding the inference lock on this
+      // ~5s multi-block stats computation queued every subsequent live-mode trigger.
+      scheduleSegmentationStats(segmentationId, segmentNumber, readableText);
     }
 
-    console.log(`[nninter post] segNum=${segmentNumber}, blockCount=${blockCount}, prevBlockCount=${prevBlockCount}, existing=${existing}`);
     // Only make the target segment visible if it's newly added — not a refinement.
     // ensureAllSegmentsVisible was clobbering user-hidden segments on every prediction.
     if (!existingSegments[segmentNumber]) {
@@ -1298,7 +1323,6 @@ const commandsModule = ({
             try {
         // Process the response
         const response = await segmentationPromise;
-        console.debug(response);
         if (response.status === 200) {
           const afterPost = Date.now();
           console.log(`Just after Post request: ${(afterPost - start)/1000} Seconds`);
@@ -1693,18 +1717,6 @@ const commandsModule = ({
         const monaiPrepMs        = (sRequestTs != null && sBeginTs != null) ? (sBeginTs - sRequestTs) * 1000 : undefined;
         const serverProcessMs    = (sBeginTs != null && sEndTs != null) ? (sEndTs - sBeginTs) * 1000 : undefined;
         const responseInFlightMs = (sEndTs != null) ? afterPost - sEndTs * 1000 : undefined;
-        console.log(
-          `[nninter undo timing]\n` +
-          `  client → undoNninter():          ${((beforePost - start) / 1000).toFixed(3)}s\n` +
-          `  ── round-trip total:              ${(networkRoundTripMs / 1000).toFixed(3)}s\n` +
-          (postInFlightMs     != null ? `     POST in flight:               ${(postInFlightMs / 1000).toFixed(3)}s\n` : '') +
-          (monaiPrepMs        != null ? `     MONAI pre-processing:          ${(monaiPrepMs / 1000).toFixed(3)}s\n` : '') +
-          (serverProcessMs    != null ? `     server processing (undo):      ${(serverProcessMs / 1000).toFixed(3)}s\n` : '') +
-          (sUndoCore != null ? `       ↳ session.undo():            ${sUndoCore.toFixed(3)}s\n` : '') +
-          (sResult   != null ? `       ↳ result retrieve:           ${sResult.toFixed(3)}s\n` : '') +
-          (responseInFlightMs != null ? `     response in flight:            ${(responseInFlightMs / 1000).toFixed(3)}s\n` : '') +
-          `  client parse multipart:          ${((afterParse - afterPost) / 1000).toFixed(3)}s`
-        );
 
         const undone = String((meta as any).undone).toLowerCase() === 'true';
         if (!undone) {
@@ -1808,7 +1820,6 @@ const commandsModule = ({
             detail: { segmentationId },
           })
         );
-        console.log(`[nninter undo timing] total client: ${((Date.now() - start) / 1000).toFixed(3)}s`);
         uiNotificationService.show({
           title: 'MONAI Label',
           message: 'Undo - Successful',
@@ -2552,7 +2563,6 @@ const commandsModule = ({
         segmentNumber = minAvailableNumber;
         if (!toolboxState.getRefineNew()) {
           const activeSegment = servicesManager.services.segmentationService.getActiveSegment(activeViewportId);
-          console.log(`[nninter] refine branch: minAvail=${minAvailableNumber}, activeSegIdx=${activeSegment?.segmentIndex}, currentActiveSeg=${toolboxState.getCurrentActiveSegment()}`);
           if (activeSegment !== undefined){
             for (let i = 0; i < unAssignedMeasurements.length; i++) {
               const e = unAssignedMeasurements[i];
@@ -2706,7 +2716,6 @@ const commandsModule = ({
       try {
         // Process the response
         const response = await segmentationPromise;
-        console.debug(response);
         if (response.status === 200) {
             const afterPost = Date.now();
             const networkRoundTripMs = afterPost - beforePost;
@@ -2736,21 +2745,6 @@ const commandsModule = ({
             const serverProcessMs   = (sBeginTs   != null && sEndTs   != null) ? (sEndTs   - sBeginTs)   * 1000 : undefined;
             const responseInFlightMs= (sEndTs     != null)                     ? afterPost - sEndTs * 1000      : undefined;
 
-            console.log(
-              `[nninter timing]\n` +
-              `  client → nninter():              ${((beforePost - start)/1000).toFixed(3)}s\n` +
-              `  ── round-trip total:              ${(networkRoundTripMs/1000).toFixed(3)}s\n` +
-              (postInFlightMs     != null ? `     POST in flight:               ${(postInFlightMs/1000).toFixed(3)}s\n` : '') +
-              (monaiPrepMs        != null ? `     MONAI pre-processing:          ${(monaiPrepMs/1000).toFixed(3)}s  (Orthanc DICOM download)\n` : '') +
-              (serverProcessMs    != null ? `     server processing (infer):     ${(serverProcessMs/1000).toFixed(3)}s\n` : '') +
-              (sLoad        != null ? `       ↳ DICOM load:                ${sLoad.toFixed(3)}s\n` : '') +
-              (sImgConvert  != null ? `       ↳ img→numpy:                 ${sImgConvert.toFixed(3)}s\n` : '') +
-              (sPromptPrep  != null ? `       ↳ prompt prep:               ${sPromptPrep.toFixed(3)}s\n` : '') +
-              (sModelCore   != null ? `       ↳ model forward:             ${sModelCore.toFixed(3)}s\n` : '') +
-              (sResult      != null ? `       ↳ result retrieve:           ${sResult.toFixed(3)}s\n` : '') +
-              (responseInFlightMs != null ? `     response in flight:            ${(responseInFlightMs/1000).toFixed(3)}s\n` : '') +
-              `  client parse multipart:          ${((afterParse - afterPost)/1000).toFixed(3)}s`
-            );
 
             const flipped = meta.flipped.toLowerCase() === "true"
             const nninter_elapsed = meta.nninter_elapsed
@@ -2799,12 +2793,10 @@ const commandsModule = ({
             const segImageIds = refreshedContext.segImageIds;
             const existingSegments = refreshedContext.existingSegments;
             const existing = refreshedContext.existing;
-            console.log(`[nninter] refreshed: segNum=${segmentNumber}, existing=${existing}, segImageIds.len=${segImageIds.length}, segKeys=${Object.keys(segments).join(',')}, _needsReset=${_needsReset}`);
 
           let merged_derivedImages = [];
           let z_range = [];
           if(overlap){
-          const _tCreate = Date.now();
           let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
           let derivedImages = [];
           if (segImageIds.length > 0){
@@ -2886,16 +2878,13 @@ const commandsModule = ({
             merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new];
           }
         } else {
-          const _tElse = Date.now();
           if (segImageIds.length == 0){
             const _tCreate2 = Date.now();
             let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
-            console.log(`[nninter] createAndCache: ${((Date.now()-_tCreate2)/1000).toFixed(3)}s (${imageIds.length} slices)`);
 
             if(flipped){
               derivedImages_new.reverse();
             }
-            const _tWrite2 = Date.now();
             for (let i = 0; i < derivedImages_new.length; i++) {
               if (_hasCropGeom && (i < _segZ0 || i >= _segZ1)) continue;
               const voxelManager = derivedImages_new[i]
@@ -2931,12 +2920,9 @@ const commandsModule = ({
             if(flipped){
               derivedImages_new.reverse();
             }
-            console.log(`[nninter] pixel write (first): ${((Date.now()-_tWrite2)/1000).toFixed(3)}s`);
             merged_derivedImages = derivedImages_new
           } else {
-            const _tCacheGet = Date.now();
             merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
-            console.log(`[nninter] cache.getImage (refine): ${((Date.now()-_tCacheGet)/1000).toFixed(3)}s`);
             if(flipped){
               merged_derivedImages.reverse();
             }
@@ -2946,7 +2932,6 @@ const commandsModule = ({
             // Falls back to the range-based scan on first refinement or old data.
             const _prevDirtySlices = (existingSegments[segmentNumber] as any)
               ?.cachedStats?.dirtySlices as number[] | undefined;
-            const _tClear = Date.now();
 
             const _prevCachedStats = (existingSegments[segmentNumber] as any)?.cachedStats;
             const _hasPrevData = _prevDirtySlices?.length ||
@@ -2963,7 +2948,6 @@ const commandsModule = ({
                   if (sd[j] === segmentNumber) sd[j] = 0;
                 }
               }
-              console.log(`[nninter] clear (${_prevDirtySlices.length} dirty slices): ${((Date.now()-_tClear)/1000).toFixed(3)}s`);
             } else if (_hasPrevData) {
               // Fallback: bounding-box range scan (dirtySlices not yet stored, e.g. first run after migration)
               const _prevZ0: number = (_hasCropGeom && _prevCachedStats?.segZ0 != null)
@@ -2978,14 +2962,11 @@ const commandsModule = ({
                   if (sd[j] === segmentNumber) sd[j] = 0;
                 }
               }
-              console.log(`[nninter] clear fallback (${scanZ1-scanZ0} slices): ${((Date.now()-_tClear)/1000).toFixed(3)}s`);
             } else {
               // Brand-new segment — nothing to clear, skip entirely
-              console.log(`[nninter] clear skipped (new segment)`);
             }
 
             // ── Pass 2: Write new pixels from crop only ───────────────────────
-            const _tWrite3 = Date.now();
             if (_hasCropGeom) {
               for (let i = _segZ0; i < _segZ1; i++) {
                 const scalarData = (merged_derivedImages[i].voxelManager as csTypes.IVoxelManager<number>).getScalarData();
@@ -3014,7 +2995,6 @@ const commandsModule = ({
                 }
               }
             }
-            console.log(`[nninter] write (${z_range.length} slices): ${((Date.now()-_tWrite3)/1000).toFixed(3)}s`);
 
             if(flipped){
               merged_derivedImages.reverse();
@@ -3059,11 +3039,6 @@ const commandsModule = ({
             z_range,
           });
           const tViz = Date.now();
-          console.log(
-            `[nninter timing]\n` +
-            `  OHIF post-processing:         ${((tViz - afterParse)/1000).toFixed(3)}s  (parse→visible)\n` +
-            `  total client time:            ${((tViz - start)/1000).toFixed(3)}s`
-          );
           return response;
         }
       } catch (error) {

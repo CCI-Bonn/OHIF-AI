@@ -93,13 +93,14 @@ const commandsModule = ({
     generateSegmentation: async ({ segmentationId, options = {} }) => {
       const segmentation = cornerstoneToolsSegmentation.state.getSegmentation(segmentationId);
 
-      const { imageIds } = segmentation.representationData.Labelmap;
+      const { imageIds, labelmaps } = segmentation.representationData.Labelmap;
 
+      // Primary block images — used for CT slice ordering and referencedImageIds
       const segImages = imageIds.map(imageId => cache.getImage(imageId));
-      
+
       // Collect all referenced image IDs (maintaining array structure to match segImages)
       const referencedImageIds = segImages.map(image => image?.referencedImageId);
-      
+
       // Load all referenced images that exist but may not be in cache yet
       // This is necessary because lazy loading may not have loaded all slices yet
       await Promise.all(
@@ -119,7 +120,7 @@ const commandsModule = ({
           });
         })
       );
-      
+
       // Now get all referenced images from cache, maintaining the same order as segImages
       const referencedImages = segImages.map(image => {
         if (!image?.referencedImageId) {
@@ -128,48 +129,54 @@ const commandsModule = ({
         return cache.getImage(image.referencedImageId);
       });
 
-      const labelmaps2D = [];
+      const N = imageIds.length;
+      const isMultiBlock = labelmaps && Object.keys(labelmaps).length > 1;
 
-      let z = 0;
-
-      for (const segImage of segImages) {
-        const segmentsOnLabelmap = new Set();
-        const pixelData = segImage.getPixelData();
-        const { rows, columns } = segImage;
-
-        // Use a single pass through the pixel data
-        for (let i = 0; i < pixelData.length; i++) {
-          const segment = pixelData[i];
-          if (segment !== 0) {
-            segmentsOnLabelmap.add(segment);
-          }
-        }
-
-        labelmaps2D[z++] = {
-          segmentsOnLabelmap: Array.from(segmentsOnLabelmap),
-          pixelData,
-          rows,
-          columns,
-        };
-      }
-
-      const allSegmentsOnLabelmap = labelmaps2D.map(labelmap => labelmap.segmentsOnLabelmap);
-
-      const labelmap3D = {
-        segmentsOnLabelmap: Array.from(new Set(allSegmentsOnLabelmap.flat())),
-        metadata: [],
-        labelmaps2D,
+      // Compute sort permutation matching the dcmjs SEGImageNormalizer (descending by scan-axis
+      // distance). The normalizer sorts CT datasets descending before building ReferencedInstanceSequence,
+      // so labelmaps2D[sortedIdx] must correspond to the CT slice at normalizer's sorted position sortedIdx.
+      const computeSortPerm = (): number[] => {
+        const firstImg = referencedImages.find(Boolean) as any;
+        if (!firstImg) return Array.from({ length: N }, (_, i) => i);
+        const pm0 = metaData.get('imagePlaneModule', firstImg.imageId);
+        if (!pm0?.imagePositionPatient || !pm0?.rowCosines) return Array.from({ length: N }, (_, i) => i);
+        const row: number[] = pm0.rowCosines;
+        const col: number[] = pm0.columnCosines;
+        const scanAxis = [
+          row[1] * col[2] - row[2] * col[1],
+          row[2] * col[0] - row[0] * col[2],
+          row[0] * col[1] - row[1] * col[0],
+        ];
+        const refPos: number[] = pm0.imagePositionPatient;
+        const distances = referencedImages.map((img: any) => {
+          if (!img) return -Infinity;
+          const pm = metaData.get('imagePlaneModule', img.imageId);
+          const pos: number[] = pm?.imagePositionPatient ?? refPos;
+          return (pos[0] - refPos[0]) * scanAxis[0] + (pos[1] - refPos[1]) * scanAxis[1] + (pos[2] - refPos[2]) * scanAxis[2];
+        });
+        // sortPerm[sortedIdx] = origIdx (descending distance = normalizer order)
+        return Array.from({ length: N }, (_, i) => i).sort((a, b) => distances[b] - distances[a]);
       };
 
+      const sortPerm = computeSortPerm();
+      const origToSorted = new Array(N);
+      sortPerm.forEach((origIdx, sortedIdx) => { origToSorted[origIdx] = sortedIdx; });
+
+      // Re-index arr[origIdx] → result[sortedIdx]
+      const applySortPerm = (arr: any[]): any[] => {
+        const result: any[] = new Array(N);
+        for (let i = 0; i < N; i++) result[origToSorted[i]] = arr[i];
+        return result;
+      };
+
+      // Build per-segment metadata upfront
       const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
       const representations = segmentationService.getRepresentationsForSegmentation(segmentationId);
+      const allSegmentMetadata: Record<number, any> = {};
 
-      Object.entries(segmentationInOHIF.segments).forEach(([segmentIndex, segment]) => {
-        // segmentation service already has a color for each segment
-        if (!segment) {
-          return;
-        }
-
+      Object.entries(segmentationInOHIF.segments).forEach(([segmentIndexStr, segment]) => {
+        if (!segment) return;
+        const segmentIndex = Number(segmentIndexStr);
         const { label } = segment;
 
         const firstRepresentation = representations[0];
@@ -183,12 +190,12 @@ const commandsModule = ({
           color.slice(0, 3).map(value => value / 255)
         ).map(value => Math.round(value));
 
-        let segmentMetadata = {};
+        let segmentMetadata: any = {};
         if (segmentation.cachedStats.data !== undefined && segmentation.cachedStats.data.length > 1) {
           segmentMetadata = segmentation.cachedStats.data
-          .filter(e => e !== undefined && e !== null)
-          .find(e => e.SegmentNumber == segmentIndex);
-          if (segmentMetadata !== undefined && Object.keys(segmentMetadata).length !== 0){ 
+            .filter(e => e !== undefined && e !== null)
+            .find(e => e.SegmentNumber == segmentIndex);
+          if (segmentMetadata !== undefined && Object.keys(segmentMetadata).length !== 0) {
             segmentMetadata.SegmentNumber = segmentIndex.toString();
             segmentMetadata.SegmentLabel = label;
             segmentMetadata.RecommendedDisplayCIELabValue = RecommendedDisplayCIELabValue;
@@ -215,28 +222,96 @@ const commandsModule = ({
             },
           };
         }
-        if (segment.cachedStats.description !== undefined){
+        if (segment.cachedStats.description !== undefined) {
           segmentMetadata.SegmentDescription = segment.cachedStats.description;
         }
-        if (segment.cachedStats.algorithmName !== undefined){
+        if (segment.cachedStats.algorithmName !== undefined) {
           segmentMetadata.SegmentAlgorithmName = segment.cachedStats.algorithmName;
         }
-        if (segment.cachedStats.algorithmType !== undefined){
+        if (segment.cachedStats.algorithmType !== undefined) {
           segmentMetadata.SegmentAlgorithmType = segment.cachedStats.algorithmType;
         }
-        if (segmentation.cachedStats.seriesInstanceUid !== undefined){
+        if (segmentation.cachedStats.seriesInstanceUid !== undefined) {
           segmentMetadata.SegmentAlgorithmType = segmentation.cachedStats.seriesInstanceUid;
         }
-        
-        labelmap3D.metadata[segmentIndex] = segmentMetadata;
+
+        allSegmentMetadata[segmentIndex] = segmentMetadata;
       });
 
-      const generatedSegmentation = generateSegmentation(
-        referencedImages,
-        labelmap3D,
-        metaData,
-        options
-      );
+      let generatedSegmentation;
+
+      if (isMultiBlock) {
+        // Multi-block: one labelmap3D per block so each segment's pixels are handled independently.
+        // dcmjs _addSegmentPixelDataFromLabelmaps checks labelmap[i] === segmentIndex, so each
+        // block's raw pixel values (0 or segmentIndex) correctly produce binary frames per segment,
+        // and overlapping pixels are preserved across blocks.
+        const labelmaps3DArray: any[] = [];
+
+        for (const [, layer] of Object.entries(labelmaps as Record<string, any>)) {
+          const layerLabelmaps2D: any[] = new Array(N);
+
+          for (let z = 0; z < N; z++) {
+            const primaryImage = segImages[z];
+            if (!primaryImage || !layer.imageIds?.[z]) continue;
+            const { rows, columns } = primaryImage;
+            const layerImage = cache.getImage(layer.imageIds[z]);
+            if (!layerImage) continue;
+            const pixelData = layerImage.getPixelData();
+            const segmentsOnLabelmap = new Set<number>();
+            for (let i = 0; i < pixelData.length; i++) {
+              if (pixelData[i] !== 0) segmentsOnLabelmap.add(pixelData[i]);
+            }
+            if (segmentsOnLabelmap.size > 0) {
+              layerLabelmaps2D[z] = { segmentsOnLabelmap: Array.from(segmentsOnLabelmap), pixelData, rows, columns };
+            }
+          }
+
+          const layerSegments = Array.from(
+            new Set(layerLabelmaps2D.filter(Boolean).flatMap((l: any) => l.segmentsOnLabelmap))
+          );
+          if (layerSegments.length === 0) continue;
+
+          const layerMetadata: any[] = [];
+          for (const segIdx of layerSegments) {
+            layerMetadata[segIdx] = allSegmentMetadata[segIdx];
+          }
+
+          labelmaps3DArray.push({
+            segmentsOnLabelmap: layerSegments,
+            metadata: layerMetadata,
+            labelmaps2D: applySortPerm(layerLabelmaps2D),
+          });
+        }
+
+        generatedSegmentation = generateSegmentation(referencedImages, labelmaps3DArray, metaData, options);
+      } else {
+        const labelmaps2D: any[] = new Array(N);
+
+        for (let z = 0; z < N; z++) {
+          const primaryImage = segImages[z];
+          if (!primaryImage) continue;
+          const { rows, columns } = primaryImage;
+          const pixelData = primaryImage.getPixelData();
+          const segmentsOnLabelmap = new Set<number>();
+          for (let i = 0; i < pixelData.length; i++) {
+            if (pixelData[i] !== 0) segmentsOnLabelmap.add(pixelData[i]);
+          }
+          labelmaps2D[z] = { segmentsOnLabelmap: Array.from(segmentsOnLabelmap), pixelData, rows, columns };
+        }
+
+        const allSegments = Array.from(
+          new Set(labelmaps2D.filter(Boolean).flatMap((l: any) => l.segmentsOnLabelmap))
+        );
+        const metadata: any[] = [];
+        for (const segIdx of allSegments) metadata[segIdx] = allSegmentMetadata[segIdx];
+
+        generatedSegmentation = generateSegmentation(
+          referencedImages,
+          { segmentsOnLabelmap: allSegments, metadata, labelmaps2D: applySortPerm(labelmaps2D) },
+          metaData,
+          options
+        );
+      }
 
       return generatedSegmentation;
     },

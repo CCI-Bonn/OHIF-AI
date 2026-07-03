@@ -72,12 +72,10 @@ async function render(viewport, representation) {
         return;
     }
     clearUnsupportedImageMapperError(viewport.id, segmentationId);
-    const beforeCount = labelmapActorEntries?.length ?? 0;
     labelmapActorEntries = await renderPlan.reconcile({
         actorEntries: labelmapActorEntries,
         labelMapData: labelmapData,
     });
-    console.log(`[labelmapRender] ${segmentationId} actors: ${beforeCount}→${labelmapActorEntries?.length ?? 0}`);
     if (!labelmapActorEntries?.length) {
         return;
     }

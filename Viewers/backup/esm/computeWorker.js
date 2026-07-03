@@ -83,7 +83,6 @@ const computeWorker = {
             const contours = findContoursFromReducedSet(reducedSet.lines);
             return {
                 contours,
-                sliceIndex,
                 polyData: reducedSet,
             };
         }
@@ -158,6 +157,9 @@ const computeWorker = {
         for (let i = 0; i < segmentationInfo.length; i++) {
             const segInfo = segmentationInfo[i];
             const imgInfo = imageInfo[i];
+            if (!segInfo?.scalarData || !imgInfo?.scalarData) {
+                continue;
+            }
             const segDimensions = [
                 segInfo.dimensions[0],
                 segInfo.dimensions[1],
@@ -213,7 +215,6 @@ const computeWorker = {
             maxBidirectional = bidirectional;
         }
         if (maxBidirectional) {
-            //Should add sliceIndex below, otherwise, it is missing in the bidirectional data
             return {
                 segmentIndex,
                 majorAxis: maxBidirectional.majorAxis,
@@ -240,7 +241,7 @@ const computeWorker = {
                 if (!segment) {
                     continue;
                 }
-                const segmentIndex = segment.segmentIndex;
+                const segmentIndex = Number(segment.segmentIndex);
                 if (computeWorker.isSliceEmptyForSegmentVolume(0, segScalarData, pixelsPerSlice, segmentIndex)) {
                     continue;
                 }
@@ -259,10 +260,11 @@ const computeWorker = {
                 try {
                     const msOutput = computeWorker.performMarchingSquares(imageData, null, 2);
                     const contourData = computeWorker.createContoursFromPolyData(msOutput);
-                    //contourData.points are ijk, we need to convert to world points
-                    contourData.polyData.points = contourData.polyData.points.map(p =>
-                        imageData.indexToWorld(p)
-                    );
+                    if (contourData?.polyData?.points) {
+                        contourData.polyData.points = contourData.polyData.points.map(p =>
+                            imageData.indexToWorld(p)
+                        );
+                    }
                     if (contourData) {
                         sliceContours.push(contourData);
                     }
@@ -278,7 +280,10 @@ const computeWorker = {
                 });
                 const bidirectionalResult = computeWorker.findLargestBidirectionalFromContours(sliceContours, isInSegment, segmentIndex);
                 if (bidirectionalResult) {
-                    bidirectionalResults.push(bidirectionalResult);
+                    bidirectionalResults.push({
+                        ...bidirectionalResult,
+                        sliceIndex: i,
+                    });
                 }
             }
         }
@@ -335,7 +340,7 @@ const computeWorker = {
             if (!segment) {
                 continue;
             }
-            const segmentIndex = Number(segment.segmentIndex);
+            const segmentIndex = segment.segmentIndex;
             const sliceContours = [];
             const scalars = vtkDataArray.newInstance({
                 name: 'Scalars',
@@ -363,10 +368,11 @@ const computeWorker = {
                     imageDataCopy.getPointData().setScalars(scalars);
                     const msOutput = computeWorker.performMarchingSquares(imageDataCopy, sliceIndex);
                     const contourData = computeWorker.createContoursFromPolyData(msOutput, sliceIndex);
-                    //contourData.points are ijk, we need to convert to world points
-                    contourData.polyData.points = contourData.polyData.points.map(p =>
-                        imageData.indexToWorld(p)
-                    );
+                    if (contourData?.polyData?.points) {
+                        contourData.polyData.points = contourData.polyData.points.map(p =>
+                            imageData.indexToWorld(p)
+                        );
+                    }
                     if (contourData) {
                         sliceContours.push(contourData);
                     }

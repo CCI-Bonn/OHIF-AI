@@ -44,8 +44,13 @@ const SegmentBidirectional = {
         SOPInstanceUID,
         SeriesInstanceUID
       );
-    } else {
+    } else if (SeriesInstanceUID) {
       displaySet = displaySetService.getDisplaySetsForSeries(SeriesInstanceUID)[0];
+    }
+
+    if (!displaySet) {
+      console.debug('SegmentBidirectional tool: Could not resolve display set');
+      return null;
     }
 
     const { points, textBox } = data.handles;
@@ -101,6 +106,10 @@ function getMappedAnnotations(annotation, displaySetService) {
     );
 
     const displaySet = displaySetService.getDisplaySetsForSeries(SeriesInstanceUID)[0];
+
+    if (!displaySet) {
+      return;
+    }
 
     const { SeriesNumber } = displaySet;
     const { length, width, unit } = targetStats;

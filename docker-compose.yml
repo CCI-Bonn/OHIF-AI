@@ -54,9 +54,11 @@ services:
     volumes:
        # Persist data
       - ./monai-label/predictions:/code/predictions
+      # Numpy image cache — skips sitk.GetArrayFromImage on subsequent container starts
+      - ./monai-label/img_cache:/code/img_cache
       # Model weights (populated once via scripts/download_weights.sh)
       - ./monai-label/checkpoints:/code/checkpoints
-      # Radiology app (downloaded on first container start by entrypoint.sh)
+      # Radiology app — seeded from sample-apps/radiology on first container start
       - ./monai-label/apps:/code/apps
       # MONAI Label DICOM cache — survives image rebuilds so downloaded studies are not re-fetched
       - ./monai-label/volumes/root-cache:/root/.cache

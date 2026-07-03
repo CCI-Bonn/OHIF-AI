@@ -4,11 +4,16 @@ import { roundNumber } from '../../utils';
 
 // Default statistics component
 const DefaultStatsList = () => {
-  const { namedStats } = useSegmentStatistics('DefaultStatsList');
+  const { namedStats, segment } = useSegmentStatistics('DefaultStatsList');
+  const statsPending = !!segment?.cachedStats?.statsPending;
 
-  if (!namedStats) {
+  // Nothing to show and nothing running.
+  if (!namedStats && !statsPending) {
     return null;
   }
+
+  const isFiniteNumber = (value: unknown): boolean =>
+    Array.isArray(value) ? value.every(v => Number.isFinite(v)) : Number.isFinite(value as number);
 
   const handleNumber = (value: number) => {
     if (value === null) {
@@ -22,9 +27,13 @@ const DefaultStatsList = () => {
     return roundNumber(value);
   };
 
-  // Sort namedStats entries by order property
-  const sortedStats = Object.entries(namedStats)
-    .filter(([_, stat]) => stat && stat.value !== null && stat.name !== 'bidirectional')
+  // Sort namedStats entries by order property. Skip non-finite (NaN/Inf) values —
+  // these appear transiently while stats are still being computed.
+  const sortedStats = Object.entries(namedStats ?? {})
+    .filter(
+      ([_, stat]) =>
+        stat && stat.value !== null && stat.name !== 'bidirectional' && isFiniteNumber(stat.value)
+    )
     .sort((a, b) => {
       const orderA = a[1]?.order ?? Number.MAX_SAFE_INTEGER;
       const orderB = b[1]?.order ?? Number.MAX_SAFE_INTEGER;
@@ -33,6 +42,11 @@ const DefaultStatsList = () => {
 
   return (
     <div className="space-y-1">
+      {statsPending && (
+        <div className="text-muted-foreground flex items-center gap-1 italic">
+          <span>Calculating…</span>
+        </div>
+      )}
       {sortedStats.map(([key, stat]) => {
         const { label, value, unit } = stat;
 

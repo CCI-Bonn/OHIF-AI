@@ -2,7 +2,8 @@ import classnames from 'classnames';
 import PropTypes from 'prop-types';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import SwiperCore, { A11y, Controller, Navigation, Pagination, Scrollbar } from 'swiper';
+import type { Swiper as SwiperInstance } from 'swiper';
+import { A11y, Controller, Navigation, Pagination, Scrollbar } from 'swiper/modules';
 import { Swiper, SwiperSlide } from 'swiper/react';
 
 import { Types } from '@ohif/core';
@@ -319,7 +320,7 @@ function _getMoreThanOneTabLayout(
     >
       <div className="w-full">
         <Swiper
-          onInit={(core: SwiperCore) => {
+          onInit={(core: SwiperInstance) => {
             swiperRef.current = core.el;
           }}
           simulateTouch={false}

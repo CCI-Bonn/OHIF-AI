@@ -1179,14 +1179,19 @@ class BasicInferTask(InferTask):
         # Level-1: full cache hit — skip GetGDCMSeriesFileNames, dcmread x2,
         # reader.Execute, and sitk.GetArrayFromImage entirely.
         # Key: exact dicom_dir path (stable when MONAI serves the same cached path).
+        # Also covers repeated init for the same series: img_np is already warm,
+        # and neither the "UID changed" nor "img_np is None" branch in the init
+        # block will fire, so computing it fresh would be pure wasted work.
         _img_np_hit = (
-            _is_nninter_interaction
+            (_is_nninter_interaction or nnInter == "init")
             and dicom_dir == self._session_image["dicom_dir"]
             and self._session_image["img_np"] is not None
             and self._session_image["instanceNumber"] is not None
         )
 
-        _pixel_hit = False  # may be set True inside the else branch below
+        _pixel_hit = False    # may be set True inside the else branch below
+        _disk_hit = False     # may be set True if disk cache found
+        _disk_cache_path = None
         if _img_np_hit:
             seriesInstanceUID = self._session_image["seriesInstanceUID"]
             instanceNumber    = self._session_image["instanceNumber"]
@@ -1258,8 +1263,18 @@ class BasicInferTask(InferTask):
                         logger.info(f"img_np cache MISS — UID mismatch: cached={cached_uid!r} incoming={seriesInstanceUID!r}")
                     elif self._session_image["img_np"] is None:
                         logger.info("img_np cache MISS — not yet initialised")
-                reader.SetFileNames(dicom_filenames)
-                img = reader.Execute()
+                # Level-3: disk cache — skip reader.Execute + sitk.GetArrayFromImage on hit.
+                # Key: md5(dicom_dir) — stable across container restarts for the same DICOM series.
+                _disk_cache_key = hashlib.md5(dicom_dir.encode()).hexdigest()
+                _disk_cache_path = os.path.join("/code/img_cache", f"{_disk_cache_key}.npy")
+                if os.path.exists(_disk_cache_path):
+                    _t_disk = time.time()
+                    img_np = np.load(_disk_cache_path)
+                    _disk_hit = True
+                    logger.info(f"[timing] img_np disk cache hit: {time.time()-_t_disk:.3f}s  shape={img_np.shape}")
+                else:
+                    reader.SetFileNames(dicom_filenames)
+                    img = reader.Execute()
         
 
         before_nnInter = time.time()
@@ -1273,14 +1288,24 @@ class BasicInferTask(InferTask):
             if _img_np_hit or _pixel_hit:
                 img_np = self._session_image["img_np"]
                 img_convert_elapsed = 0.0
+            elif _disk_hit:
+                img_convert_elapsed = 0.0
             else:
                 _t_conv = time.time()
                 img_np = sitk.GetArrayFromImage(img)[None]
                 img_convert_elapsed = time.time() - _t_conv
+                logger.info(f"[timing] sitk.GetArrayFromImage: {img_convert_elapsed:.3f}s  shape={img_np.shape}")
+                if _disk_cache_path:
+                    try:
+                        os.makedirs("/code/img_cache", exist_ok=True)
+                        np.save(_disk_cache_path, img_np)
+                        logger.info(f"[timing] img_np saved to disk cache  shape={img_np.shape}")
+                    except Exception as e:
+                        logger.warning(f"Failed to save img_np to disk cache: {e}")
             # Validate input dimensions
             if img_np.ndim != 4:
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
-            
+
             if nnInter == "init":
                 if seriesInstanceUID is not None and self._session_image["seriesInstanceUID"] != seriesInstanceUID:
                     self._session_image["dicom_dir"]       = dicom_dir
@@ -1303,7 +1328,9 @@ class BasicInferTask(InferTask):
                     self._session_image["instanceNumber2"] = instanceNumber2
                 for key, lst in self._session_used_interactions.items():
                     lst.clear()
+                _t_reset = time.time()
                 session.reset_interactions()
+                logger.info(f"[timing] session.reset_interactions: {time.time()-_t_reset:.3f}s")
                 return f'/code/predictions/init.nii.gz', final_result_json
 
             logger.info(f"interactions in _session_used_interactions: {self._session_used_interactions}")

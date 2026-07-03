@@ -1357,7 +1357,7 @@
   dependencies:
     core-js-pure "^3.48.0"
 
-"@babel/runtime@7.22.11", "@babel/runtime@^7.0.0", "@babel/runtime@^7.11.2", "@babel/runtime@^7.12.0", "@babel/runtime@^7.12.5", "@babel/runtime@^7.13.10", "@babel/runtime@^7.17.8", "@babel/runtime@^7.18.3", "@babel/runtime@^7.20.13", "@babel/runtime@^7.20.6", "@babel/runtime@^7.23.2", "@babel/runtime@^7.24.4", "@babel/runtime@^7.26.10", "@babel/runtime@^7.3.1", "@babel/runtime@^7.4.5", "@babel/runtime@^7.5.5", "@babel/runtime@^7.7.4", "@babel/runtime@^7.7.6", "@babel/runtime@^7.8.4", "@babel/runtime@^7.8.7", "@babel/runtime@^7.9.2":
+"@babel/runtime@^7.0.0", "@babel/runtime@^7.11.2", "@babel/runtime@^7.12.0", "@babel/runtime@^7.12.5", "@babel/runtime@^7.13.10", "@babel/runtime@^7.17.8", "@babel/runtime@^7.18.3", "@babel/runtime@^7.20.13", "@babel/runtime@^7.20.6", "@babel/runtime@^7.23.2", "@babel/runtime@^7.24.4", "@babel/runtime@^7.26.10", "@babel/runtime@^7.3.1", "@babel/runtime@^7.4.5", "@babel/runtime@^7.5.5", "@babel/runtime@^7.7.4", "@babel/runtime@^7.7.6", "@babel/runtime@^7.8.4", "@babel/runtime@^7.8.7", "@babel/runtime@^7.9.2":
   version "7.29.7"
   resolved "https://registry.yarnpkg.com/@babel/runtime/-/runtime-7.29.7.tgz#12022450c45a4da6d8d8287b18a4ff2ddb23f768"
   integrity sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==
@@ -1497,6 +1497,11 @@
     onnxruntime-common "1.17.1"
     onnxruntime-web "1.17.1"
 
+"@cornerstonejs/calculate-suv@1.0.3":
+  version "1.0.3"
+  resolved "https://registry.yarnpkg.com/@cornerstonejs/calculate-suv/-/calculate-suv-1.0.3.tgz#6d99a72032c0f90cebf44dc6f0b12a5f1102e884"
+  integrity sha512-2SwVJKzC1DzyxdxJtCht9dhTND2GFjLwhhkDyyC7vJq5tIgbhxgPk1CSwovO1pxmoybAXzjOxnaubllxLgoT+w==
+
 "@cornerstonejs/calculate-suv@^1.1.0":
   version "1.1.0"
   resolved "https://registry.yarnpkg.com/@cornerstonejs/calculate-suv/-/calculate-suv-1.1.0.tgz#35c8049d3eea03611225a8398d398cd81bf0031a"
@@ -1565,6 +1570,16 @@
   dependencies:
     "@itk-wasm/morphological-contour-interpolation" "1.1.0"
     itk-wasm "1.0.0-b.165"
+
+"@cornerstonejs/metadata@^5.0.13":
+  version "5.0.13"
+  resolved "https://registry.yarnpkg.com/@cornerstonejs/metadata/-/metadata-5.0.13.tgz#5996800d85df07bdb8cc53d9f752faaad43d0af6"
+  integrity sha512-22skeyey4OkhzIdjKC3eeQ0w3R6x+UsLSlzrB0gVN/U2rFvdcalJbzELHbgPZIWc4j7KFzG5WxRSbMrGk8gZ/g==
+  dependencies:
+    "@cornerstonejs/calculate-suv" "1.0.3"
+    "@cornerstonejs/utils" "5.0.13"
+    dcmjs "0.50.1"
+    gl-matrix "3.4.3"
 
 "@cornerstonejs/polymorphic-segmentation@^5.0.13":
   version "5.0.13"
@@ -2559,29 +2574,6 @@
   version "3.4.0"
   resolved "https://registry.yarnpkg.com/@juggle/resize-observer/-/resize-observer-3.4.0.tgz#08d6c5e20cf7e4cc02fd181c4b0c225cd31dbb60"
   integrity sha512-dfLbk+PwWvFzSxwk3n5ySL0hfBog779o8h68wK/7/APo/7cgyWp5jcXockbxdk5kFRkbeXWm4Fbi9FrdN381sA==
-
-"@kitware/vtk.js@32.12.0":
-  version "32.12.0"
-  resolved "https://registry.yarnpkg.com/@kitware/vtk.js/-/vtk.js-32.12.0.tgz#11fb13a53332c1370568099690c898941c4a1036"
-  integrity sha512-QKO2BCAtNsl0p62RoA7vJbQ2NAJPyf0upPddOoNC+Qpfa1gPTGDatdyPm2/hLF9mYov6Lom7dEpfSVv8/bekzA==
-  dependencies:
-    "@babel/runtime" "7.22.11"
-    "@types/webxr" "^0.5.5"
-    commander "9.2.0"
-    d3-scale "4.0.2"
-    fast-deep-equal "^3.1.3"
-    fflate "0.7.3"
-    gl-matrix "3.4.3"
-    globalthis "1.0.3"
-    seedrandom "3.0.5"
-    shader-loader "1.3.1"
-    shelljs "0.8.5"
-    spark-md5 "3.0.2"
-    stream-browserify "3.0.0"
-    utif "3.1.0"
-    webworker-promise "0.5.0"
-    worker-loader "3.0.8"
-    xmlbuilder2 "3.0.2"
 
 "@kitware/vtk.js@35.5.3":
   version "35.5.3"
@@ -19759,7 +19751,7 @@ sha.js@^2.4.0, sha.js@^2.4.12, sha.js@^2.4.8:
     safe-buffer "^5.2.1"
     to-buffer "^1.2.0"
 
-shader-loader@1.3.1, shader-loader@^1.3.1:
+shader-loader@^1.3.1:
   version "1.3.1"
   resolved "https://registry.yarnpkg.com/shader-loader/-/shader-loader-1.3.1.tgz#2d87808c088bdd172ce577490b41db4e6f01535f"
   integrity sha512-dt8F9K0x4rjmaFyHh7rNDfpt4LUiR64zhNIEwp2WbE99B3z4ALuvvmhftkElg93dUD6sTmv/aXa/z9SJiEddcA==
@@ -20284,7 +20276,7 @@ storybook@^7.6.10:
   dependencies:
     "@storybook/cli" "7.6.21"
 
-stream-browserify@3.0.0, stream-browserify@^3.0.0:
+stream-browserify@^3.0.0:
   version "3.0.0"
   resolved "https://registry.yarnpkg.com/stream-browserify/-/stream-browserify-3.0.0.tgz#22b0a2850cdf6503e73085da1fc7b7d0c2122f2f"
   integrity sha512-H73RAHsVBapbim0tU2JwwOiXUj+fikfiaoYAKHF3VJfA0pe2BCzkhAHBlLG6REzE+2WNZcxOXjK7lkso+9euLA==
@@ -22438,7 +22430,7 @@ workbox-window@6.6.1:
     "@types/trusted-types" "^2.0.2"
     workbox-core "6.6.1"
 
-worker-loader@3.0.8, worker-loader@^3.0.8:
+worker-loader@^3.0.8:
   version "3.0.8"
   resolved "https://registry.yarnpkg.com/worker-loader/-/worker-loader-3.0.8.tgz#5fc5cda4a3d3163d9c274a4e3a811ce8b60dbb37"
   integrity sha512-XQyQkIFeRVC7f7uRhFdNMe/iJOdO6zxAaR3EWbDp45v3mDhrTi+++oswKNxShUNjPC/1xUp5DB29YKLhFo129g==

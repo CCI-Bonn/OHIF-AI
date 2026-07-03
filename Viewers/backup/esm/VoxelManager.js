@@ -1,8 +1,13 @@
 import cache from '../cache/cache';
+import { InterpolationType } from '../enums';
+import { mat3, vec3 } from 'gl-matrix';
 import RLEVoxelMap from './RLEVoxelMap';
 import isEqual from './isEqual';
 import { iterateOverPointsInShapeVoxelManager } from './pointInShapeCallback';
 const DEFAULT_RLE_SIZE = 5 * 1024;
+const worldToIndexDeltaScratch = [0, 0, 0];
+const worldToIndexResultScratch = [0, 0, 0];
+const worldToIndexTransformCache = new WeakMap();
 export default class VoxelManager {
     get id() {
         return this._id;
@@ -17,11 +22,10 @@ export default class VoxelManager {
         this.scalarData = null;
         this._sliceDataCache = null;
         this.getAtIJK = (i, j, k) => {
-            const index = this.toIndex([i, j, k]);
-            return this._get(index);
+            return this._get(i + j * this.width + k * this.frameSize);
         };
         this.setAtIJK = (i, j, k, v) => {
-            const index = this.toIndex([i, j, k]);
+            const index = i + j * this.width + k * this.frameSize;
             const changed = this._set(index, v);
             if (changed !== false) {
                 this.modifiedSlices.add(k);
@@ -178,7 +182,7 @@ export default class VoxelManager {
         this._set = options._set;
         this._id = options._id || '';
         this._getConstructor = options._getConstructor;
-        this.numberOfComponents = this.numberOfComponents || 1;
+        this.numberOfComponents = options.numberOfComponents || 1;
         this.scalarData = options.scalarData;
         this._getScalarData = options._getScalarData;
         this._updateScalarData = options._updateScalarData;
@@ -339,6 +343,94 @@ export default class VoxelManager {
         bounds[2][0] = Math.min(point[2], bounds[2][0]);
         bounds[2][1] = Math.max(point[2], bounds[2][1]);
     }
+    static getWorldToIndexTransform(volumeGeometry) {
+        const cachedTransform = worldToIndexTransformCache.get(volumeGeometry);
+        if (cachedTransform) {
+            return cachedTransform;
+        }
+        const direction = volumeGeometry.direction;
+        const spacing = volumeGeometry.spacing;
+        const transform = mat3.fromValues(direction[0] / spacing[0], direction[3] / spacing[1], direction[6] / spacing[2], direction[1] / spacing[0], direction[4] / spacing[1], direction[7] / spacing[2], direction[2] / spacing[0], direction[5] / spacing[1], direction[8] / spacing[2]);
+        worldToIndexTransformCache.set(volumeGeometry, transform);
+        return transform;
+    }
+    static worldToIndexContinuous(volumeGeometry, worldPos) {
+        const origin = volumeGeometry.origin;
+        worldToIndexDeltaScratch[0] = worldPos[0] - origin[0];
+        worldToIndexDeltaScratch[1] = worldPos[1] - origin[1];
+        worldToIndexDeltaScratch[2] = worldPos[2] - origin[2];
+        const continuousIndex = vec3.transformMat3(worldToIndexResultScratch, worldToIndexDeltaScratch, VoxelManager.getWorldToIndexTransform(volumeGeometry));
+        return [continuousIndex[0], continuousIndex[1], continuousIndex[2]];
+    }
+    static sampleAtWorldCoordinates(volume, worldX, worldY, worldZ, interpolationType = InterpolationType.LINEAR) {
+        if (!volume.voxelManager) {
+            return NaN;
+        }
+        const origin = volume.origin;
+        worldToIndexDeltaScratch[0] = worldX - origin[0];
+        worldToIndexDeltaScratch[1] = worldY - origin[1];
+        worldToIndexDeltaScratch[2] = worldZ - origin[2];
+        const continuousIndex = vec3.transformMat3(worldToIndexResultScratch, worldToIndexDeltaScratch, VoxelManager.getWorldToIndexTransform(volume));
+        return VoxelManager.sampleAtContinuousCoordinates(volume.voxelManager, volume.dimensions, continuousIndex[0], continuousIndex[1], continuousIndex[2], interpolationType);
+    }
+    static sampleAtWorld(volume, worldPos, interpolationType = InterpolationType.LINEAR) {
+        return VoxelManager.sampleAtWorldCoordinates(volume, worldPos[0], worldPos[1], worldPos[2], interpolationType);
+    }
+    static sampleAtContinuousIndex(voxelManager, dimensions, continuousIndex, interpolationType = InterpolationType.LINEAR) {
+        return VoxelManager.sampleAtContinuousCoordinates(voxelManager, dimensions, continuousIndex[0], continuousIndex[1], continuousIndex[2], interpolationType);
+    }
+    static sampleAtContinuousCoordinates(voxelManager, dimensions, iC, jC, kC, interpolationType) {
+        return interpolationType === InterpolationType.NEAREST
+            ? VoxelManager.sampleNearestAtContinuousCoordinates(voxelManager, dimensions, iC, jC, kC)
+            : VoxelManager.sampleLinearAtContinuousCoordinates(voxelManager, dimensions, iC, jC, kC);
+    }
+    static sampleNearestAtContinuousCoordinates(voxelManager, dimensions, iC, jC, kC) {
+        const i = Math.floor(iC + 0.5 - 1e-6);
+        const j = Math.floor(jC + 0.5 - 1e-6);
+        const k = Math.floor(kC + 0.5 - 1e-6);
+        const dx = dimensions[0];
+        const dy = dimensions[1];
+        const dz = dimensions[2];
+        if (i < 0 || i >= dx || j < 0 || j >= dy || k < 0 || k >= dz) {
+            return NaN;
+        }
+        return Number(voxelManager.getAtIJK(i, j, k));
+    }
+    static sampleLinearAtContinuousCoordinates(voxelManager, dimensions, i, j, k) {
+        const dx = dimensions[0];
+        const dy = dimensions[1];
+        const dz = dimensions[2];
+        if (i < 0 || i > dx - 1 || j < 0 || j > dy - 1 || k < 0 || k > dz - 1) {
+            return NaN;
+        }
+        const i0 = Math.floor(i);
+        const j0 = Math.floor(j);
+        const k0 = Math.floor(k);
+        const i1 = Math.min(i0 + 1, dx - 1);
+        const j1 = Math.min(j0 + 1, dy - 1);
+        const k1 = Math.min(k0 + 1, dz - 1);
+        const di = i - i0;
+        const dj = j - j0;
+        const dk = k - k0;
+        const oneMinusDi = 1 - di;
+        const oneMinusDj = 1 - dj;
+        const oneMinusDk = 1 - dk;
+        const c000 = Number(voxelManager.getAtIJK(i0, j0, k0));
+        const c100 = Number(voxelManager.getAtIJK(i1, j0, k0));
+        const c010 = Number(voxelManager.getAtIJK(i0, j1, k0));
+        const c110 = Number(voxelManager.getAtIJK(i1, j1, k0));
+        const c001 = Number(voxelManager.getAtIJK(i0, j0, k1));
+        const c101 = Number(voxelManager.getAtIJK(i1, j0, k1));
+        const c011 = Number(voxelManager.getAtIJK(i0, j1, k1));
+        const c111 = Number(voxelManager.getAtIJK(i1, j1, k1));
+        const c00 = c000 * oneMinusDi + c100 * di;
+        const c10 = c010 * oneMinusDi + c110 * di;
+        const c01 = c001 * oneMinusDi + c101 * di;
+        const c11 = c011 * oneMinusDi + c111 * di;
+        const c0 = c00 * oneMinusDj + c10 * dj;
+        const c1 = c01 * oneMinusDj + c11 * dj;
+        return c0 * oneMinusDk + c1 * dk;
+    }
     addPoint(point) {
         const index = Array.isArray(point)
             ? point[0] + this.width * point[1] + this.frameSize * point[2]
@@ -401,37 +493,75 @@ export default class VoxelManager {
     }
     static createImageVolumeVoxelManager({ dimensions, imageIds, numberOfComponents = 1, id, }) {
         const pixelsPerSlice = dimensions[0] * dimensions[1];
-        function getPixelInfo(index) {
-            const sliceIndex = Math.floor(index / pixelsPerSlice);
-            if (sliceIndex < 0 || sliceIndex >= dimensions[2]) {
-                return {};
+        const depth = dimensions[2];
+        const sliceVoxelManagers = new Array(depth);
+        let lastSliceIndex = -1;
+        let lastSliceVoxelManager = null;
+        const warnedMissingImageIds = new Set();
+        const warnedMissingImages = new Set();
+        const resolveSliceVoxelManager = (sliceIndex) => {
+            if (sliceIndex < 0 || sliceIndex >= depth) {
+                return null;
+            }
+            const cachedVoxelManager = sliceVoxelManagers[sliceIndex];
+            if (cachedVoxelManager !== undefined) {
+                return cachedVoxelManager;
             }
             const imageId = imageIds[sliceIndex];
             if (!imageId) {
-                console.warn(`ImageId not found for sliceIndex: ${sliceIndex}`);
-                return { pixelData: null, pixelIndex: null };
-            }
-            const image = cache.getImage(imageId);
-            if (!image) {
-                console.warn(`Image not found for imageId: ${imageId}`);
-                return { pixelData: null, pixelIndex: null };
-            }
-            const voxelManager = image.voxelManager;
-            const pixelIndex = index % pixelsPerSlice;
-            return { voxelManager, pixelIndex };
-        }
-        function getVoxelValue(index) {
-            const { voxelManager: imageVoxelManager, pixelIndex } = getPixelInfo(index);
-            if (!imageVoxelManager || pixelIndex === null) {
+                if (!warnedMissingImageIds.has(sliceIndex)) {
+                    warnedMissingImageIds.add(sliceIndex);
+                    console.warn(`ImageId not found for sliceIndex: ${sliceIndex}`);
+                }
+                sliceVoxelManagers[sliceIndex] = null;
                 return null;
             }
+            const image = cache.getImage(imageId);
+            if (!image?.voxelManager) {
+                if (!warnedMissingImages.has(imageId)) {
+                    warnedMissingImages.add(imageId);
+                    console.warn(`Image not found for imageId: ${imageId}`);
+                }
+                return null;
+            }
+            const imageVoxelManager = image.voxelManager;
+            sliceVoxelManagers[sliceIndex] = imageVoxelManager;
+            return imageVoxelManager;
+        };
+        function getVoxelValue(index) {
+            const sliceIndex = Math.floor(index / pixelsPerSlice);
+            if (sliceIndex < 0 || sliceIndex >= depth) {
+                return null;
+            }
+            const imageVoxelManager = sliceIndex === lastSliceIndex
+                ? lastSliceVoxelManager
+                : resolveSliceVoxelManager(sliceIndex);
+            if (!imageVoxelManager) {
+                return null;
+            }
+            if (sliceIndex !== lastSliceIndex) {
+                lastSliceIndex = sliceIndex;
+                lastSliceVoxelManager = imageVoxelManager;
+            }
+            const pixelIndex = index - sliceIndex * pixelsPerSlice;
             return imageVoxelManager.getAtIndex(pixelIndex);
         }
         function setVoxelValue(index, v) {
-            const { voxelManager: imageVoxelManager, pixelIndex } = getPixelInfo(index);
-            if (!imageVoxelManager || pixelIndex === null) {
+            const sliceIndex = Math.floor(index / pixelsPerSlice);
+            if (sliceIndex < 0 || sliceIndex >= depth) {
                 return false;
             }
+            const imageVoxelManager = sliceIndex === lastSliceIndex
+                ? lastSliceVoxelManager
+                : resolveSliceVoxelManager(sliceIndex);
+            if (!imageVoxelManager) {
+                return false;
+            }
+            if (sliceIndex !== lastSliceIndex) {
+                lastSliceIndex = sliceIndex;
+                lastSliceVoxelManager = imageVoxelManager;
+            }
+            const pixelIndex = index - sliceIndex * pixelsPerSlice;
             const currentValue = imageVoxelManager.getAtIndex(pixelIndex);
             const isChanged = !isEqual(v, currentValue);
             if (!isChanged) {
@@ -440,36 +570,12 @@ export default class VoxelManager {
             imageVoxelManager.setAtIndex(pixelIndex, v);
             return true;
         }
-
-        // Helper function to find the first cached image's voxelManager
-        // Cached for reuse across multiple calls
-        let cachedFirstImageVoxelManager = null;
-        const getFirstCachedImageVoxelManager = () => {
-        if (cachedFirstImageVoxelManager !== null) {
-            return cachedFirstImageVoxelManager;
-        }
-        // Find the first cached image to get its voxelManager
-        // Don't rely on index 0 which may not be cached yet
-        for (let i = 0; i < imageIds.length; i++) {
-            const imageId = imageIds[i];
-            if (!imageId) {
-            continue;
-            }
-            const image = cache.getImage(imageId);
-            if (image && image.voxelManager) {
-            cachedFirstImageVoxelManager = image.voxelManager;
-            return cachedFirstImageVoxelManager;
-            }
-        }
-        return null;
-        };
-
         const _getConstructor = () => {
-            const firstVoxelManager = getFirstCachedImageVoxelManager();
-            if (!firstVoxelManager) {
+            const imageVoxelManager = resolveSliceVoxelManager(0);
+            if (!imageVoxelManager) {
                 return null;
             }
-            return firstVoxelManager.getConstructor();
+            return imageVoxelManager.getConstructor();
         };
         const voxelManager = new VoxelManager(dimensions, {
             _get: getVoxelValue,
@@ -478,15 +584,17 @@ export default class VoxelManager {
             _getConstructor,
             _id: id || 'createImageVolumeVoxelManager',
         });
-        // Should return imageIds which is used to create this voxel manager
+        voxelManager.invalidateCache = () => {
+            sliceVoxelManagers.fill(undefined);
+            lastSliceIndex = -1;
+            lastSliceVoxelManager = null;
+        };
         voxelManager.getImageIds = () => {
             if (imageIds.length > 0 && imageIds[0].startsWith('derived:')) {
-            //segmentation imageIds, find referenced imageIds
-            const referencedImageIds = imageIds.map(imageId => {
-                const image = cache.getImage(imageId);
-                return image.referencedImageId;
-            });
-            return referencedImageIds;
+                return imageIds.map(imageId => {
+                    const image = cache.getImage(imageId);
+                    return image.referencedImageId;
+                });
             }
             return imageIds;
         };
@@ -524,11 +632,11 @@ export default class VoxelManager {
             return [minValue, maxValue];
         };
         voxelManager._getScalarDataLength = () => {
-            const firstVoxelManager = getFirstCachedImageVoxelManager();
-            if (!firstVoxelManager) {
+            const imageVoxelManager = resolveSliceVoxelManager(0);
+            if (!imageVoxelManager) {
                 return 0;
             }
-            return firstVoxelManager.getScalarDataLength() * dimensions[2];
+            return imageVoxelManager.getScalarDataLength() * dimensions[2];
         };
         voxelManager.getCompleteScalarDataArray = () => {
             const ScalarDataConstructor = voxelManager._getConstructor();
@@ -539,8 +647,8 @@ export default class VoxelManager {
             const scalarData = new ScalarDataConstructor(dataLength);
             const sliceSize = dimensions[0] * dimensions[1] * numberOfComponents;
             for (let sliceIndex = 0; sliceIndex < dimensions[2]; sliceIndex++) {
-                const { voxelManager: imageVoxelManager, pixelIndex } = getPixelInfo((sliceIndex * sliceSize) / numberOfComponents);
-                if (imageVoxelManager && pixelIndex !== null) {
+                const imageVoxelManager = resolveSliceVoxelManager(sliceIndex);
+                if (imageVoxelManager) {
                     const sliceStart = sliceIndex * sliceSize;
                     const pixelData = imageVoxelManager.getScalarData();
                     if (numberOfComponents === 1) {
@@ -563,7 +671,7 @@ export default class VoxelManager {
             let minValue = Infinity;
             let maxValue = -Infinity;
             for (let sliceIndex = 0; sliceIndex < dimensions[2]; sliceIndex++) {
-                const { voxelManager: imageVoxelManager } = getPixelInfo((sliceIndex * sliceSize) / numberOfComponents);
+                const imageVoxelManager = resolveSliceVoxelManager(sliceIndex);
                 if (imageVoxelManager && SliceDataConstructor) {
                     const sliceStart = sliceIndex * sliceSize;
                     const sliceEnd = sliceStart + sliceSize;

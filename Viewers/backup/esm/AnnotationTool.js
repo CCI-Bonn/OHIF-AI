@@ -5,43 +5,15 @@ import { isAnnotationLocked } from '../../stateManagement/annotation/annotationL
 import { isAnnotationVisible } from '../../stateManagement/annotation/annotationVisibility';
 import { addAnnotation, removeAnnotation, getAnnotation, } from '../../stateManagement/annotation/annotationState';
 import { triggerAnnotationModified } from '../../stateManagement/annotation/helpers/state';
+import { drawLinkedTextBox } from '../../drawingSvg';
+import { getTextBoxCoordsCanvas } from '../../utilities/drawing';
 import ChangeTypes from '../../enums/ChangeTypes';
 import { setAnnotationSelected } from '../../stateManagement/annotation/annotationSelection';
 import { addContourSegmentationAnnotation } from '../../utilities/contourSegmentation';
+import { safeStructuredClone } from '../../utilities/safeStructuredClone';
+import getViewportICamera from '../../utilities/getViewportICamera';
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
-const { PointsManager } = csUtils;
 class AnnotationTool extends AnnotationDisplayTool {
-    static createAnnotation(...annotationBaseData) {
-        let annotation = {
-            annotationUID: null,
-            highlighted: true,
-            invalidated: true,
-            metadata: {
-                toolName: this.toolName,
-            },
-            data: {
-                text: '',
-                handles: {
-                    points: new Array(),
-                    textBox: {
-                        hasMoved: false,
-                        worldPosition: [0, 0, 0],
-                        worldBoundingBox: {
-                            topLeft: [0, 0, 0],
-                            topRight: [0, 0, 0],
-                            bottomLeft: [0, 0, 0],
-                            bottomRight: [0, 0, 0],
-                        },
-                    },
-                },
-                label: '',
-            },
-        };
-        for (const baseData of annotationBaseData) {
-            annotation = csUtils.deepMerge(annotation, baseData);
-        }
-        return annotation;
-    }
     static createAnnotationForViewport(viewport, ...annotationBaseData) {
         return this.createAnnotation({ metadata: viewport.getViewReference() }, ...annotationBaseData);
     }
@@ -138,7 +110,58 @@ class AnnotationTool extends AnnotationDisplayTool {
             background: this.getStyle('textBoxBackground', specifications, annotation),
             lineWidth: this.getStyle('textBoxLinkLineWidth', specifications, annotation),
             lineDash: this.getStyle('textBoxLinkLineDash', specifications, annotation),
+            textBoxBorderRadius: this.getStyle('textBoxBorderRadius', specifications, annotation),
+            textBoxMargin: this.getStyle('textBoxMargin', specifications, annotation),
+            textBoxLinkLineColor: this.getStyle('textBoxLinkLineColor', specifications, annotation),
         };
+    }
+    renderLinkedTextBoxAnnotation(options) {
+        const { enabledElement, svgDrawingHelper, annotation, styleSpecifier, textLines, canvasCoordinates, textBoxUID = '1', placementPoints, } = options;
+        const { viewport } = enabledElement;
+        const { element } = viewport;
+        const { annotationUID, data } = annotation;
+        const styleOptions = this.getLinkedTextBoxStyle(styleSpecifier, annotation);
+        if (!styleOptions.visibility) {
+            data.handles.textBox = {
+                hasMoved: false,
+                worldPosition: [0, 0, 0],
+                worldBoundingBox: {
+                    topLeft: [0, 0, 0],
+                    topRight: [0, 0, 0],
+                    bottomLeft: [0, 0, 0],
+                    bottomRight: [0, 0, 0],
+                },
+            };
+            return false;
+        }
+        if (!data.handles.textBox) {
+            data.handles.textBox = {
+                hasMoved: false,
+                worldPosition: [0, 0, 0],
+                worldBoundingBox: {
+                    topLeft: [0, 0, 0],
+                    topRight: [0, 0, 0],
+                    bottomLeft: [0, 0, 0],
+                    bottomRight: [0, 0, 0],
+                },
+            };
+        }
+        const pointsForPlacement = placementPoints ?? canvasCoordinates;
+        if (!data.handles.textBox.hasMoved) {
+            const canvasTextBoxCoords = getTextBoxCoordsCanvas(pointsForPlacement, element, textLines);
+            data.handles.textBox.worldPosition =
+                viewport.canvasToWorld(canvasTextBoxCoords);
+        }
+        const textBoxPosition = viewport.worldToCanvas(data.handles.textBox.worldPosition);
+        const boundingBox = drawLinkedTextBox(svgDrawingHelper, annotationUID, textBoxUID, textLines, textBoxPosition, canvasCoordinates, {}, styleOptions);
+        const { x: left, y: top, width, height } = boundingBox;
+        data.handles.textBox.worldBoundingBox = {
+            topLeft: viewport.canvasToWorld([left, top]),
+            topRight: viewport.canvasToWorld([left + width, top]),
+            bottomLeft: viewport.canvasToWorld([left, top + height]),
+            bottomRight: viewport.canvasToWorld([left + width, top + height]),
+        };
+        return true;
     }
     static isSuvScaled(viewport, targetId, imageId) {
         if (viewport instanceof BaseVolumeViewport) {
@@ -192,26 +215,11 @@ class AnnotationTool extends AnnotationDisplayTool {
     }
     static createAnnotationState(annotation, deleting) {
         const { data, annotationUID } = annotation;
-        const cloneData = {
-            ...data,
-            cachedStats: {},
-        };
-        delete cloneData.contour;
-        delete cloneData.spline;
-        const state = {
+        return {
             annotationUID,
-            data: structuredClone(cloneData),
+            data: safeStructuredClone(data),
             deleting,
         };
-        const contour = data.contour;
-        if (contour) {
-            state.data.contour = {
-                ...contour,
-                polyline: null,
-                pointsManager: PointsManager.create3(contour.polyline.length, contour.polyline),
-            };
-        }
-        return state;
     }
     static createAnnotationMemo(element, annotation, options) {
         if (!annotation) {
@@ -262,7 +270,9 @@ class AnnotationTool extends AnnotationDisplayTool {
                 }
                 state.data = newState.data;
                 currentAnnotation.invalidated = true;
-                triggerAnnotationModified(currentAnnotation, element, ChangeTypes.History);
+                if (element) {
+                    triggerAnnotationModified(currentAnnotation, element, ChangeTypes.History);
+                }
             },
             id: annotationUID,
             operationType: 'annotation',
@@ -273,13 +283,19 @@ class AnnotationTool extends AnnotationDisplayTool {
     createMemo(element, annotation, options) {
         this.memo ||= AnnotationTool.createAnnotationMemo(element, annotation, options);
     }
+    startGroupRecording() {
+        DefaultHistoryMemo.startGroupRecording();
+    }
+    endGroupRecording() {
+        DefaultHistoryMemo.endGroupRecording();
+    }
     static hydrateBase(ToolClass, enabledElement, points, options = {}) {
         if (!enabledElement) {
             return null;
         }
         const { viewport } = enabledElement;
         const FrameOfReferenceUID = viewport.getFrameOfReferenceUID();
-        const camera = viewport.getCamera();
+        const camera = getViewportICamera(viewport);
         const viewPlaneNormal = options.viewplaneNormal ?? camera.viewPlaneNormal;
         const viewUp = options.viewUp ?? camera.viewUp;
         const instance = options.toolInstance || new ToolClass();
