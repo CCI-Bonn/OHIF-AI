@@ -248,8 +248,6 @@ Select any existing segment from the list to continue refining it with additiona
 
 **Overlapping segments:** Multiple segments can overlap in the same region — each segment is stored independently.
 
-💡 The **nnInteractive v2** backend delivers a significant speed boost, making live inference feel more responsive during interactive refinement.
-
 #### Text-prompt segmentation
 
 **VoxTell** is part of the segmentation workflow: it produces segmentations from **free-form text** instead of visual prompts. Describe the structure or region you want to segment in natural language.
