@@ -142,9 +142,17 @@ export default function initCornerstoneTools(configuration = {}) {
 
   const defaultStyles = annotation.config.style.getDefaultToolStyles();
   annotation.config.style.setDefaultToolStyles({
+    ...defaultStyles,
     global: {
       ...defaultStyles.global,
       ...annotationStyle,
+    },
+    // Thicker line for the nnInteractive scribble prompt so it's easier to see/draw.
+    // Tool-specific style wins over `global` (see ToolStyle._getToolStyle), so only the
+    // scribble is affected — other annotations keep the global 1.5 lineWidth.
+    PlanarFreehandROI2: {
+      ...(defaultStyles.PlanarFreehandROI2 || {}),
+      lineWidth: '4',
     },
   });
 }
