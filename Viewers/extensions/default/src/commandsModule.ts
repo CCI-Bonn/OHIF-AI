@@ -188,6 +188,17 @@ const commandsModule = ({
     const labelmaps: Record<string, object> = {};
     const segmentBindings: Record<number, object> = {};
 
+    // Cornerstone's labelmap resolver maps labelmap image k -> referencedImageIds[k]
+    // strictly by INDEX. For a flipped series the block's imageIds are stored in reversed
+    // z-order, so using the display-order `imageIds` here would pair each labelmap slice
+    // with the wrong source slice and render the overlay z-mirrored. Derive referencedImageIds
+    // from each labelmap image's own referencedImageId so the mapping is order-safe
+    // (identity for a non-flipped series where blockImageIds are already in display order).
+    const refIdsFor = (ids: string[]): string[] => {
+      const refs = ids.map(id => (cache.getImage(id) as any)?.referencedImageId);
+      return refs.length === N && refs.every(Boolean) ? (refs as string[]) : imageIds;
+    };
+
     for (let b = 0; b < blockCount; b++) {
       const segIdx = b + 1;
       const blockImageIds = derivedImageIds.slice(b * N, (b + 1) * N);
@@ -197,7 +208,7 @@ const commandsModule = ({
         type: 'stack',
         imageIds: blockImageIds,
         referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-        referencedImageIds: imageIds,
+        referencedImageIds: refIdsFor(blockImageIds),
         labelToSegmentIndex: {},
       };
       segmentBindings[segIdx] = { labelmapId, labelValue: segIdx };
@@ -220,7 +231,7 @@ const commandsModule = ({
         imageIds: derivedImageIds,
         allImageIds: derivedImageIds,
         referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-        referencedImageIds: imageIds,
+        referencedImageIds: refIdsFor(derivedImageIds.slice(0, N)),
         labelmaps,
         segmentBindings,
         primaryLabelmapId,
