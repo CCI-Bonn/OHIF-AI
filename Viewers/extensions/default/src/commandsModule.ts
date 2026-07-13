@@ -411,17 +411,17 @@ const commandsModule = ({
     currentImageIdIndex?: number;
     representations: any[];
   }) {
+    // Capture the current per-segment visibility BEFORE any remove/re-add. Removing and
+    // re-adding a representation resets every segment to visible, so we restore this map
+    // AFTER all re-adds below — otherwise each inference clobbers the user's hidden segments.
+    const visibilityBySegment: Record<number, boolean> = {};
     for (let i = 0; i < representations.length; i++) {
-      const representation = representations[i];
-      const segs = Object.values(representation.segments);
+      const segs = Object.values(representations[i].segments);
       for (let j = 0; j < segs.length; j++) {
-        const seg = segs[j];
-        servicesManager.services.segmentationService.setSegmentVisibility(
-          activeViewportId,
-          representation.segmentationId,
-          (seg as any).segmentIndex,
-          (seg as any).visible
-        );
+        const seg = segs[j] as any;
+        if (seg.segmentIndex != null) {
+          visibilityBySegment[seg.segmentIndex] = seg.visible;
+        }
       }
     }
 
@@ -508,6 +508,20 @@ const commandsModule = ({
       });
       await new Promise(resolve => setTimeout(resolve, 100));
       requestAnimationFrame(() => vp?.render());
+    }
+
+    // Restore per-segment visibility on every viewport (the remove/re-adds above reset it
+    // to visible). Newly-added segments aren't in the map, so they stay visible by default.
+    const _restoreViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
+    for (const viewportId of _restoreViewportIds) {
+      for (const [segIdxStr, visible] of Object.entries(visibilityBySegment)) {
+        servicesManager.services.segmentationService.setSegmentVisibility(
+          viewportId,
+          segmentationId,
+          Number(segIdxStr),
+          visible
+        );
+      }
     }
 
     const activeVp = activeViewportId.startsWith('default')

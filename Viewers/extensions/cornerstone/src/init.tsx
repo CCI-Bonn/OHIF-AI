@@ -290,17 +290,9 @@ export default async function init({
   eventTarget.addEventListenerDebounced(
     EVENTS.ERROR_EVENT,
     ({ detail }) => {
-      // Create a stable ID for deduplication based on error type and message
-      const errorId = `cornerstone-error-${detail.type}-${detail.message.substring(0, 50)}`;
-
-      uiNotificationService.show({
-        title: detail.type,
-        message: detail.message,
-        type: 'error',
-        id: errorId,
-        allowDuplicates: false, // Prevent duplicate error notifications
-        deduplicationInterval: 30000, // 30 seconds deduplication window
-      });
+      // These cornerstone errors are technical/dev-oriented and not informative for end
+      // users, so log them to the console instead of showing a user-facing error toast.
+      console.error(`[cornerstone:${detail.type}] ${detail.message}`);
     },
     100
   );

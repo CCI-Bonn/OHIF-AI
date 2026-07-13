@@ -1316,12 +1316,14 @@ function commandsModule({
      */
     setActiveSegmentAndCenterCommand: ({ segmentationId, segmentIndex }) => {
       const { segmentationService, viewportGridService } = servicesManager.services;
+      const viewportId = viewportGridService.getActiveViewportId();
       // set both active segmentation and active segment
-      segmentationService.setActiveSegmentation(
-        viewportGridService.getActiveViewportId(),
-        segmentationId
-      );
+      segmentationService.setActiveSegmentation(viewportId, segmentationId);
       segmentationService.setActiveSegment(segmentationId, segmentIndex);
+      // Selecting a segment turns its visibility ON as a starting point — you can't work on a
+      // hidden segment. Selection and visibility are otherwise independent: the user can hide
+      // it again afterward, and that hidden state is now preserved across inferences.
+      segmentationService.setSegmentVisibility(viewportId, segmentationId, segmentIndex, true);
       segmentationService.jumpToSegmentCenter(segmentationId, segmentIndex);
     },
 
