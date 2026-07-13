@@ -1757,8 +1757,12 @@ const commandsModule = ({
           _hasCropGeom = true;
         }
 
-        let merged = segImageIds.map(imageId => cache.getImage(imageId));
-        if (flipped) merged.reverse();
+        // segImageIds is the stored block order. The running (overlap) inference path already
+        // leaves it in reversed z-order for a flipped series — the same order the crop is
+        // written by index. Do NOT reverse here: doing so double-flips and lands the restored
+        // crop on the mirrored slice. The `flipped ? merged.length-1-x : x` formulas below map
+        // array index <-> display-slice index within this stored order.
+        const merged = segImageIds.map(imageId => cache.getImage(imageId));
 
         // Pass 1: clear all voxels of the active segment (use dirtySlices when available).
         const prevStats = (activeSegmentation.segments?.[segmentNumber] as any)?.cachedStats;
@@ -1800,7 +1804,6 @@ const commandsModule = ({
             if (wrote) z_range.push(flipped ? merged.length - i - 1 : i);
           }
         }
-        if (flipped) merged.reverse();
 
         // Keep cachedStats.dirtySlices in sync so the next interaction clears correctly.
         if ((activeSegmentation.segments?.[segmentNumber] as any)?.cachedStats) {
