@@ -49,7 +49,20 @@ import ImageOverlayViewerTool from './tools/ImageOverlayViewerTool';
 class Probe2Tool extends ProbeTool {}
 Probe2Tool.toolName = 'Probe2';
 
-class RectangleROI2Tool extends RectangleROITool {}
+class RectangleROI2Tool extends RectangleROITool {
+  constructor(toolProps = {}) {
+    // nnInteractive bounding-box prompt: hide the stat/description text box. An empty
+    // getTextLines result makes the tool skip text rendering. calculateStats stays true
+    // (inherited default) so the prompt's pointsInShape is still computed.
+    super({
+      ...toolProps,
+      configuration: {
+        ...(toolProps.configuration || {}),
+        getTextLines: () => [],
+      },
+    });
+  }
+}
 RectangleROI2Tool.toolName = 'RectangleROI2';
 
 class PlanarFreehandROI2Tool extends PlanarFreehandROITool {}
