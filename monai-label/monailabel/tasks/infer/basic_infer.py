@@ -1307,14 +1307,27 @@ class BasicInferTask(InferTask):
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
 
             if nnInter == "init":
-                if seriesInstanceUID is not None and self._session_image["seriesInstanceUID"] != seriesInstanceUID:
+                # Re-run set_image not only when the series changed, but also whenever the
+                # nnInteractive session itself has no valid image (e.g. a prior interaction shut
+                # down the executor / cleared preprocessed_image). Relying only on the img_np
+                # cache / UID meant an "img_np cache hit" could skip set_image and leave the
+                # session uninitialized, so the next interaction timed out on preprocessed_image.
+                _uid_changed = (
+                    seriesInstanceUID is not None
+                    and self._session_image["seriesInstanceUID"] != seriesInstanceUID
+                )
+                _session_needs_image = (
+                    getattr(session, "original_image_shape", None) is None
+                    or getattr(session, "preprocessed_image", None) is None
+                )
+                if _uid_changed or _session_needs_image:
                     self._session_image["dicom_dir"]       = dicom_dir
                     self._session_image["seriesInstanceUID"] = seriesInstanceUID
                     self._session_image["img_np"]          = img_np
                     self._session_image["instanceNumber"]  = instanceNumber
                     self._session_image["instanceNumber2"] = instanceNumber2
                     try:
-                        logger.info("Only first time, no image at nnInter or image changed")
+                        logger.info(f"init set_image (uid_changed={_uid_changed}, session_needs_image={_session_needs_image})")
                         session.set_image(img_np)
                         session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
                     except Exception as init_error:
@@ -1789,7 +1802,11 @@ class BasicInferTask(InferTask):
                         if seriesInstanceUID is not None and self._session_image["seriesInstanceUID"] != seriesInstanceUID:
                             logger.info("Series Instance UID changed -> update")
                             self._session_image["seriesInstanceUID"] = seriesInstanceUID
-                        if session.executor._work_queue.qsize() == 0 and session.preprocess_future is None:
+                        # Do NOT gate on preprocess_future being None: a stale future left over
+                        # from a shut-down executor would otherwise skip set_image, and we'd wait
+                        # the full 5s for a preprocess that never runs (then loop on shutdown).
+                        # set_image submits a fresh preprocess future.
+                        if session.executor._work_queue.qsize() == 0:
                             session.set_image(img_np)
                             session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
 
