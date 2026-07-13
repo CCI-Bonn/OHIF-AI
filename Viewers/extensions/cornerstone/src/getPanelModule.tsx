@@ -52,7 +52,7 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
         />
         <Toolbox
           buttonSectionId="segmentationToolbox"
-          title="Non-Interactive Segmentation (Legacy)"
+          title="Manual Segmentation"
           defaultOpen={false}
         />
         <PanelSegmentation
