@@ -121,7 +121,33 @@ export default function PanelSegmentation({ children }: withAppTypes) {
       });
     },
     onToggleSegmentVisibility: (segmentationId, segmentIndex, type) => {
+      // Keep the segment's prompts in sync with the segment:
+      //  - hiding the segment hides its prompts together.
+      //  - showing the segment brings its prompts back only if the global "show prompts"
+      //    toggle (hotkey O / toolboxState.promptsVisible) is on, so transient prompts don't
+      //    reappear when the user has prompts turned off.
+      const { segmentationService, viewportGridService } = servicesManager.services;
+      const viewportId = viewportGridService.getActiveViewportId();
+      const reps = segmentationService.getSegmentationRepresentations(viewportId, { segmentationId });
+      const segWasVisible = reps?.[0]?.segments?.[segmentIndex]?.visible;
       commandsManager.run('toggleSegmentVisibility', { segmentationId, segmentIndex, type });
+      const segPrompts = measurementService
+        .getMeasurements()
+        .filter(
+          m =>
+            AI_PROMPT_TOOLS.includes(m.toolName) &&
+            m.metadata?.segmentationId === segmentationId &&
+            m.metadata?.SegmentNumber === segmentIndex
+        );
+      if (segPrompts.length === 0) {
+        return;
+      }
+      const uids = segPrompts.map(m => m.uid);
+      if (segWasVisible) {
+        measurementService.toggleVisibilityMeasurementMany(uids, false);
+      } else if (toolboxState.getPromptsVisible()) {
+        measurementService.toggleVisibilityMeasurementMany(uids, true);
+      }
     },
     onToggleSegmentMeasurement: (segmentationId, segmentIndex) => {
       commandsManager.run('toggleSegmentMeasurement', { segmentationId, segmentIndex });
