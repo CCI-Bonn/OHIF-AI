@@ -479,8 +479,16 @@ const commandsModule = ({
       servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, { segmentationId })
     ));
 
-    // Explicitly trigger MPR reconcile (idempotent: if representation exists, this just fires
-    // REPRESENTATION_MODIFIED → triggerSegmentationRender → reconcile with new volume/actors).
+    // Force MPR actors to rebuild. The legacy-volume reconcile REUSES the existing actor
+    // (actors 1->1) when the layer set is unchanged (single-segment refine) and does NOT
+    // rebuild the actor's volume from the new block imageIds. Since remount purged the old
+    // volume, the reused actor then references a dead volume and renders blank (disappears).
+    // Explicitly removing the representation drops the stale actor (1->0) so the re-add
+    // rebuilds it (0->1) from the current imageIds. (Adding a 2nd segment worked only because
+    // the new layer changed the actor set and forced this rebuild.)
+    for (const viewportId of mprViewportIds) {
+      servicesManager.services.segmentationService.removeSegmentationRepresentations(viewportId, { segmentationId });
+    }
     for (const viewportId of mprViewportIds) {
       updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
       await servicesManager.services.segmentationService.addSegmentationRepresentation(viewportId, {
