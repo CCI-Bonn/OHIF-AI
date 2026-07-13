@@ -26,6 +26,8 @@ By combining these foundation models with the familiar OHIF interface, researche
   - [Segmentation](#segmentation)
     - [Visual prompts](#visual-prompts)
     - [Model selection & inference](#model-selection)
+    - [Undo](#undo)
+    - [Segment management](#segment-management)
     - [Text-prompt segmentation](#text-prompt-segmentation)
   - [Report generation](#report-generation)
 - [Keyboard Shortcuts](#%EF%B8%8F-keyboard-shortcuts)
@@ -43,6 +45,9 @@ By combining these foundation models with the familiar OHIF interface, researche
 - 📝 **Text prompts** — Free-form text to obtain segmentation (see [Text-prompt segmentation](#text-prompt-segmentation) for usage and important notices)  
 - 🚀 **Live mode** — Automatic inference on every prompt  
 - 📦 **3D propagation** — Single prompt segments the entire volume  
+- ↩️ **Undo** — Step back one interaction (nnInteractive)  
+- 🎨 **Manual Segmentation** — Brush and eraser tools for refinement between AI interactions  
+- 🔀 **Overlapping segments** — Multiple segments can occupy the same region  
 - 🤖 **Multiple models** — nnInteractive, SAM2, MedSAM2, SAM3, and VoxTell  
 
 **Report generation**  
@@ -189,7 +194,7 @@ Choose which segmentation model to use:
 - **nnInteractive**: Supports all prompt types (point, scribble, lasso, bounding box)  
 - **SAM2/MedSAM2/SAM3**: Currently supports positive/negative points and positive bounding boxes only
 
-💡 Based on preliminary internal testing, nnInteractive provides faster inference and generally feels more real-time and accurate in typical clinical image segmentation tasks.
+💡 Based on preliminary internal testing, nnInteractive provides faster inference and generally feels more real-time and accurate in typical clinical image segmentation tasks. The **nnInteractive v2** backend further boosts inference speed for a smoother live-mode experience.
 
 #### Running inference
 
@@ -217,14 +222,33 @@ You can exclude certain structures from your segmentation by toggling on the **n
   <img src="docs/images/point_pos_neg.png" alt="Neg Point Example" width="700">
 </a>
 
-#### Refine vs. new segment
+#### Undo
 
-Use the **Refine/New** toggle to control segmentation behavior:
+If you need to step back after a prompt or inference, use **Undo** to go back one step. This is supported only with **nnInteractive** — click the undo button in the toolbar or press **Ctrl+Z**.
 
-- **Refine**: Keep refining the current segment with additional prompts  
-- **New**: Create a new, separate segment  
+<a href="docs/images/undo.png" target="_blank">
+  <img src="docs/images/undo.png" alt="Undo" width="700">
+</a>
 
-💡 You can revisit any existing segment at any time by selecting it from the segmentation list — once selected, new prompts will continue refining that specific segmentation interactively.
+#### Segment management
+
+Use the segmentation panel controls to manage segments:
+
+<a href="docs/images/add_reset_show_prompt.png" target="_blank">
+  <img src="docs/images/add_reset_show_prompt.png" alt="Add, Reset, and Show Prompts" width="700">
+</a>
+
+- **Add Segment** (`m`): Create a new, separate segment  
+- **Reset Segment** (`r`): Clear the current segment's prompts and mask  
+- **Show/Hide Prompts** (`o`): Toggle visibility of all visual prompts  
+
+Select any existing segment from the list to continue refining it with additional prompts.
+
+**Manual Segmentation:** Between AI interactions, use the **Brush** and **Eraser** tools in the **Manual Segmentation** panel to refine segmentations manually.
+
+**Overlapping segments:** Multiple segments can overlap in the same region — each segment is stored independently.
+
+💡 The **nnInteractive v2** backend delivers a significant speed boost, making live inference feel more responsive during interactive refinement.
 
 #### Text-prompt segmentation
 
@@ -303,6 +327,8 @@ For faster workflow, you can use the following keyboard shortcuts:
 **Segment Management:**
 - `m` - Add Segment
 - `r` - Reset active Segment (clears prompts and mask)
+- `o` - Show/Hide all prompts
+- `Ctrl+Z` - Undo last step (nnInteractive only)
 
 **Mode Controls:**
 - `q` - Toggle Live Mode
