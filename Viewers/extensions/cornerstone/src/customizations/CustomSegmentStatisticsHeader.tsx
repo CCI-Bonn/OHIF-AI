@@ -25,25 +25,28 @@ export const CustomSegmentStatisticsHeader = ({
   const [bidirectionalComputed, setBidirectionalComputed] = useState(false);
 
   const segmentation = segmentationService.getSegmentation(segmentationId);
-  const segment = segmentation.segments[segmentIndex];
-  const cachedStats = segment.cachedStats;
-  const namedStats = cachedStats.namedStats;
+  const segment = segmentation?.segments?.[segmentIndex];
+  const cachedStats = segment?.cachedStats;
+  const namedStats = cachedStats?.namedStats;
 
-  if (!namedStats) {
-    return null;
-  }
-  
-
-  // Use useEffect to run bidirectional computation only once
+  // Run bidirectional computation once. This hook MUST run on every render — hooks cannot be
+  // conditional. namedStats appears/disappears while stats compute (statsPending/"Calculating"),
+  // so keeping the effect BEFORE the early returns preserves a stable hook order; otherwise the
+  // hook count changes between renders and React throws "Rendered fewer hooks than expected"
+  // (surfaced by the ErrorBoundary as "Something went wrong").
   useEffect(() => {
-    if (!namedStats.bidirectional && !bidirectionalComputed) {
+    if (namedStats && !namedStats.bidirectional && !bidirectionalComputed) {
       setBidirectionalComputed(true);
       commandsManager.run('runSegmentBidirectional', {
         segmentationId,
         segmentIndex,
       });
     }
-  }, [namedStats.bidirectional, bidirectionalComputed, segmentationId, segmentIndex, commandsManager]);
+  }, [namedStats?.bidirectional, bidirectionalComputed, segmentationId, segmentIndex, commandsManager, namedStats]);
+
+  if (!namedStats) {
+    return null;
+  }
 
   if (!namedStats.bidirectional) {
     return (

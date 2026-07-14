@@ -126,12 +126,20 @@ async function calculateStackBidirectional({ segImageIds, indices, mode }) {
     if (!segmentationInfo.length) {
         return [];
     }
-    const bidirectionalData = await getWebWorkerManager().executeTask('compute', 'getSegmentLargestBidirectionalInternal', {
-        segmentationInfo,
-        indices,
-        mode,
-        isStack: true,
-    });
+    let bidirectionalData;
+    try {
+        bidirectionalData = await getWebWorkerManager().executeTask('compute', 'getSegmentLargestBidirectionalInternal', {
+            segmentationInfo,
+            indices,
+            mode,
+            isStack: true,
+        });
+    } catch (e) {
+        // DataCloneError / OOM when the payload is too large to clone — degrade gracefully
+        // instead of throwing (which surfaces as the "Something went wrong" ErrorBoundary).
+        console.warn('getSegmentLargestBidirectionalInternal worker failed; skipping bidirectional:', e);
+        return [];
+    }
     // Tag each result with the correctly-aligned imageIds so resolveReferencedImageId
     // maps sliceIndex → the right segImageId even when some slices were skipped.
     const effectiveIds = includedSegImageIds ?? segImageIds;

@@ -175,6 +175,18 @@ export const prepareStackDataForWorker = (segImageIds) => {
             skipped++;
             continue;
         }
+        // Skip slices with no segmentation foreground. A labelmap block is mostly empty (the
+        // segment occupies a small z-range), and posting every slice's scalar data to the
+        // compute worker clones hundreds of MB → DataCloneError / out-of-memory. Aggregate
+        // stats are unaffected (empty slices contribute nothing) and bidirectional maps its
+        // results via includedSegImageIds, so dropping empty slices here is safe.
+        let _hasForeground = false;
+        for (let k = 0; k < segPixelData.length; k++) {
+            if (segPixelData[k] !== 0) { _hasForeground = true; break; }
+        }
+        if (!_hasForeground) {
+            continue;
+        }
         const { origin, direction, spacing, dimensions } = utilities.getImageDataMetadata(segImage);
         const refVoxelManager = refImage.voxelManager;
         segmentationInfo.push({
