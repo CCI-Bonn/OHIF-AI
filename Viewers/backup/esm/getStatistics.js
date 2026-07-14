@@ -191,12 +191,22 @@ async function calculateStackStatistics({ segImageIds, indices, unit, mode }) {
         triggerWorkerProgress(WorkerTypes.COMPUTE_STATISTICS, 100);
         return mode === 'individual' ? {} : undefined;
     }
-    const stats = await getWebWorkerManager().executeTask('compute', 'calculateSegmentsStatisticsStack', {
-        segmentationInfo,
-        imageInfo,
-        indices,
-        mode,
-    });
+    let stats;
+    try {
+        stats = await getWebWorkerManager().executeTask('compute', 'calculateSegmentsStatisticsStack', {
+            segmentationInfo,
+            imageInfo,
+            indices,
+            mode,
+        });
+    } catch (e) {
+        // e.g. DataCloneError / out-of-memory when the payload is still too large to clone.
+        // Stats are display-only — degrade gracefully instead of throwing (which otherwise
+        // surfaces as the "Something went wrong" ErrorBoundary toast).
+        console.warn('calculateSegmentsStatisticsStack worker failed; skipping stats:', e);
+        triggerWorkerProgress(WorkerTypes.COMPUTE_STATISTICS, 100);
+        return mode === 'individual' ? {} : undefined;
+    }
     triggerWorkerProgress(WorkerTypes.COMPUTE_STATISTICS, 100);
     const spacing = segmentationInfo[0].spacing;
     const segmentationImageData = segmentationInfo[0];
