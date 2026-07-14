@@ -1667,22 +1667,49 @@ const commandsModule = ({
           title: 'NNInit',
           message: 'Initializing nninter...',
           type: 'info',
-          promise: initPromise,
-          promiseMessages: {
-            loading: 'Initializing nninter...',
-            success: () => 'Init nninter - Successful',
-            error: (error) => `Init nninter - Failed: ${error.message || 'Unknown error'}`,
-          },
+          duration: 3000,
         });
       }
 
       try {
         const response = await initPromise;
         if (response.status === 200) {
+          if (_showNotification) {
+            uiNotificationService.show({
+              title: 'NNInit',
+              message: 'Init nninter - Successful',
+              type: 'success',
+              duration: 3000,
+            });
+          }
           return response;
         }
       } catch (error) {
+        // The MONAI server returns 502/503/504 while it is still starting up — that's expected,
+        // not a real failure. Surface it as a warning (and don't rethrow as an error) so the user
+        // isn't alarmed by a red error while the server warms up; it re-inits on next use.
+        const status = error?.response?.status;
+        if (status === 502 || status === 503 || status === 504) {
+          console.warn(`Init nninter: MONAI server not ready yet (HTTP ${status}); will retry when used.`);
+          if (_showNotification) {
+            uiNotificationService.show({
+              title: 'NNInit',
+              message: 'MONAI server is still starting up — nnInteractive will be ready shortly.',
+              type: 'warning',
+              duration: 5000,
+            });
+          }
+          return;
+        }
         console.error('Init nninter error:', error);
+        if (_showNotification) {
+          uiNotificationService.show({
+            title: 'NNInit',
+            message: `Init nninter - Failed: ${error.message || 'Unknown error'}`,
+            type: 'error',
+            duration: 5000,
+          });
+        }
         throw error;
       }
 
