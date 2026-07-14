@@ -132,6 +132,31 @@ const commandsModule = ({
     return true;
   }
 
+  // Refuse to refine a hidden segment: if the active segment is hidden in the viewport the
+  // user almost certainly means a visible one, and refining a segment they can't see is
+  // confusing. Returns true (and notifies) when the target segment is explicitly hidden.
+  function blockIfActiveSegmentHidden(
+    activeViewportId: string,
+    segmentationId: string,
+    segmentIndex: number
+  ): boolean {
+    const reps = servicesManager.services.segmentationService.getSegmentationRepresentations(
+      activeViewportId,
+      { segmentationId }
+    );
+    const seg = reps?.[0]?.segments?.[segmentIndex];
+    if (seg && seg.visible === false) {
+      servicesManager.services.uiNotificationService.show({
+        title: 'Segment hidden',
+        message: 'This segment is hidden. Make it visible (or select a visible segment) to refine it.',
+        type: 'warning',
+        duration: 4000,
+      });
+      return true;
+    }
+    return false;
+  }
+
   // Segmentation stats (volume/mean/etc.) are display-only but expensive for the
   // multi-block labelmap scheme — computing one segment's stats scans its full block
   // (~5s). Running it inside the inference lock queued every subsequent live-mode
@@ -1225,6 +1250,10 @@ const commandsModule = ({
             e.metadata.segmentationId = activeSegmentation.segmentationId;
           }
           segmentNumber = activeSegment.segmentIndex;
+          if (blockIfActiveSegmentHidden(activeViewportId, activeSegmentation.segmentationId, segmentNumber)) {
+            finishInferenceRun();
+            return;
+          }
           if (toolboxState.getCurrentActiveSegment() !== segmentNumber){
             await commandsManager.run('resetNninter');
             toolboxState.setCurrentActiveSegment(segmentNumber);
@@ -2606,6 +2635,10 @@ const commandsModule = ({
               e.metadata.segmentationId = activeSegmentation.segmentationId;
             }
             segmentNumber = activeSegment.segmentIndex;
+            if (blockIfActiveSegmentHidden(activeViewportId, activeSegmentation.segmentationId, segmentNumber)) {
+              finishInferenceRun();
+              return;
+            }
             _needsReset = toolboxState.getCurrentActiveSegment() !== segmentNumber;
             if (_needsReset) {
               toolboxState.setCurrentActiveSegment(segmentNumber);
