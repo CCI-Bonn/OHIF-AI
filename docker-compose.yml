@@ -77,6 +77,9 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # vLLM on host:8000 — override if vLLM is elsewhere (same Docker network service name, etc.)
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
+      # nnInteractive session pool (multi-user concurrency)
+      - NNINTER_MAX_SESSIONS=${NNINTER_MAX_SESSIONS:-10}
+      - NNINTER_SESSION_IDLE_TIMEOUT=${NNINTER_SESSION_IDLE_TIMEOUT:-600}
     #  - NVIDIA_DRIVER_CAPABILITIES=compute,utility  # Required driver capabilities for GPU use
     deploy:
       resources:

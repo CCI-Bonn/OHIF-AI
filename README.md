@@ -22,6 +22,7 @@ By combining these foundation models with the familiar OHIF interface, researche
 - [Getting Started](#-getting-started)
 - [Local MedGemma GPUs](#local-medgemma-gpus)
 - [Environment variables and API keys](#environment-variables-and-api-keys)
+- [nnInteractive multi-user concurrency](#nninteractive-multi-user-concurrency)
 - [Usage Guide](#-usage-guide)
   - [Segmentation](#segmentation)
     - [Visual prompts](#visual-prompts)
@@ -49,6 +50,7 @@ By combining these foundation models with the familiar OHIF interface, researche
 - 🎨 **Manual Segmentation** — Brush and eraser tools for refinement between AI interactions  
 - 🔀 **Overlapping segments** — Multiple segments can occupy the same region  
 - 🤖 **Multiple models** — nnInteractive, SAM2, MedSAM2, SAM3, and VoxTell  
+- 👥 **Multi-user nnInteractive** — Concurrent browsers share one GPU model via lease tokens and a GPU lock (see [below](#nninteractive-multi-user-concurrency))  
 
 **Report generation**  
 - 📄 **Flexible VLMs** — Local **MedGemma** (e.g. 1.5–4B and **27B IT** on GPU), or cloud / router models (**Gemini**, **GPT**, **Claude**, **Kimi**, **Qwen**, **Gemma 4**), or **vLLM** on your own machine for open-weight multimodal models such as **InternVL**  
@@ -166,6 +168,44 @@ For **self-hosted vLLM** (open-weight multimodal models such as InternVL, Qwen, 
 
 ---
 
+## nnInteractive multi-user concurrency
+
+Multiple users (or browser tabs) can run **nnInteractive** at the same time without corrupting each other’s prompts or masks. The design follows the concurrency model documented in [nnInteractive’s Server / Client guide](https://github.com/MIC-DKFZ/nnInteractive/blob/master/SERVER_CLIENT.md), adapted in-process inside MONAI Label (no separate `nninteractive-server` process).
+
+```
+[OHIF tab A]  ─┐
+               │  lease token + infer params
+[OHIF tab B]  ─┼────►  MONAI Label  ──►  shared nnInteractive model on GPU
+               │       (per-client sessions:           (loaded once at startup)
+[OHIF tab C]  ─┘        image, target buffer,
+                        interactions per session)
+```
+
+| Mechanism | Behavior |
+|-----------|----------|
+| **Lease token** | Each tab claims a session (`POST /monai/nninter/session/`) and sends `nninter_token` with every nnInteractive request. Each session owns its own image cache, target buffer, and interaction history. |
+| **Shared model** | Network weights are loaded once and shared by reference across sessions — one copy on the GPU regardless of how many sessions are active. |
+| **GPU lock** | Predictions are serialized: only one `add_*_interaction` / undo runs on the GPU at a time. Image prep and response packaging run outside the lock so one user’s preprocessing does not block another’s inference. |
+| **Capacity** | Up to `NNINTER_MAX_SESSIONS` concurrent sessions. When full, the least-recently-used session is evicted so new claims still succeed. |
+| **Idle / close** | Idle sessions are reaped after `NNINTER_SESSION_IDLE_TIMEOUT`. Tabs release their lease on close (`sendBeacon`). If a session expires mid-workflow, the client reclaims a token and automatically replays prompts. |
+
+**Configure via environment** (passed through `docker-compose.yml` → `monai_server`):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `NNINTER_MAX_SESSIONS` | `10` | Max concurrent nnInteractive sessions (CPU RAM + interaction tensors scale with this; model weights stay shared). |
+| `NNINTER_SESSION_IDLE_TIMEOUT` | `600` | Seconds of inactivity before a session is reaped. |
+
+Example:
+
+```bash
+NNINTER_MAX_SESSIONS=4 NNINTER_SESSION_IDLE_TIMEOUT=600 bash start.sh
+```
+
+> **Note:** Multi-user isolation applies to **nnInteractive** only. SAM2 / MedSAM2 / SAM3 / VoxTell still use a single shared backend instance.
+
+---
+
 ## 📖 Usage Guide
 
 ### Segmentation
@@ -194,7 +234,7 @@ Choose which segmentation model to use:
 - **nnInteractive**: Supports all prompt types (point, scribble, lasso, bounding box)  
 - **SAM2/MedSAM2/SAM3**: Currently supports positive/negative points and positive bounding boxes only
 
-💡 Based on preliminary internal testing, nnInteractive provides faster inference and generally feels more real-time and accurate in typical clinical image segmentation tasks. The **nnInteractive v2** backend further boosts inference speed for a smoother live-mode experience.
+💡 Based on preliminary internal testing, nnInteractive provides faster inference and generally feels more real-time and accurate in typical clinical image segmentation tasks. The **nnInteractive v2** backend further boosts inference speed for a smoother live-mode experience. nnInteractive also supports **multi-user / concurrent requests** via lease tokens and a GPU lock — see [nnInteractive multi-user concurrency](#nninteractive-multi-user-concurrency).
 
 #### Running inference
 
@@ -362,6 +402,18 @@ no-cgroups = false
 [Reference](https://forums.developer.nvidia.com/t/nvida-container-toolkit-failed-to-initialize-nvml-unknown-error/286219/2)
 </details>
 
+<details>
+<summary><b>nnInteractive feels slower with several users at once</b></summary>
+
+Expected: predictions share one GPU and run under a **GPU lock**, so concurrent `add_*` calls wait for each other briefly. Non-prediction work can still overlap. Raise throughput by giving MONAI more GPUs / separate processes if needed; raising `NNINTER_MAX_SESSIONS` only adds session slots, not parallel predictions. See [nnInteractive multi-user concurrency](#nninteractive-multi-user-concurrency) and the upstream [Server / Client](https://github.com/MIC-DKFZ/nnInteractive/blob/master/SERVER_CLIENT.md) notes.
+</details>
+
+<details>
+<summary><b>My nnInteractive segmentation reset after I left a tab idle</b></summary>
+
+Idle sessions are reaped after `NNINTER_SESSION_IDLE_TIMEOUT` (default 10 minutes), or when the pool is full and your slot is LRU-evicted. The viewer should auto-reclaim a lease and replay prompts on the next interaction; if that fails, start the prompts again. Increase `NNINTER_SESSION_IDLE_TIMEOUT` or `NNINTER_MAX_SESSIONS` if users often leave tabs open.
+</details>
+
 ---
 
 ## 📚 How to Cite
@@ -466,7 +518,7 @@ Contributions are welcome! Please feel free to submit a Pull Request. For major 
 This project builds upon:
 - [OHIF Viewer](https://ohif.org/) - Open Health Imaging Foundation Viewer
 - [SAM2](https://github.com/facebookresearch/sam2) - Segment Anything Model 2 by Meta
-- [nnInteractive](https://github.com/MIC-DKFZ/nnInteractive) - Interactive 3D Segmentation Framework
+- [nnInteractive](https://github.com/MIC-DKFZ/nnInteractive) - Interactive 3D Segmentation Framework ([multi-user server/client model](https://github.com/MIC-DKFZ/nnInteractive/blob/master/SERVER_CLIENT.md))
 - [MedSAM2](https://github.com/bowang-lab/MedSAM2) - MedSAM2 by Bowang lab
 - [SAM3](https://github.com/facebookresearch/sam3) - Segment Anything Model 3 by Meta
 - [VoxTell](https://github.com/MIC-DKFZ/VoxTell) - Free-Text Promptable Universal 3D Medical Image Segmentation
