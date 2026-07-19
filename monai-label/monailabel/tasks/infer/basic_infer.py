@@ -1132,7 +1132,8 @@ class BasicInferTask(InferTask):
 
             _t_undo = time.time()
             try:
-                undone = bool(session.undo())
+                with get_pool().gpu_lock:
+                    undone = bool(session.undo())
             except Exception as e:
                 logger.error(f"nninter undo() raised: {e}")
                 undone = False
@@ -1895,7 +1896,13 @@ class BasicInferTask(InferTask):
                     if nninter_first_interaction_ts is None:
                         nninter_first_interaction_ts = t_before
                     with timeout_context(seconds=100):
-                        perform_callable()
+                        # Global GPU lock: one prediction at a time across all
+                        # sessions. set_image preprocessing and result packaging
+                        # stay outside so they never block another user's
+                        # prediction. Lock order: entry.lock (held by __call__)
+                        # -> gpu_lock.
+                        with get_pool().gpu_lock:
+                            perform_callable()
                     nninter_core_elapsed += time.time() - t_before
                     return True
                 except Exception as e:
@@ -1911,15 +1918,33 @@ class BasicInferTask(InferTask):
                         logger.error(f"Failed to reset session: {reset_error}")
                     return False
             
+            # Replay optimization: a normal request carries exactly one
+            # not-yet-applied prompt. After a session-expired replay the request
+            # carries the full history — encode all but the last without running
+            # a prediction, then predict once at the end.
+            _pending_total = 0
+            for _key in _USED_INTERACTION_KEYS:
+                for _p in (data.get(_key) or []):
+                    if not self.is_prompt_used(used_interactions, _p, _key):
+                        _pending_total += 1
+
+            _applied_count = 0
+
+            def _run_prediction_flag():
+                nonlocal _applied_count
+                _applied_count += 1
+                return _applied_count >= _pending_total
+
             if len(data['pos_points'])!=0:
                 result_json["pos_points"]=copy.deepcopy(data["pos_points"])
                 
                 for point in data['pos_points']:
                     if not self.is_prompt_used(used_interactions, point, "pos_points"):
                         self.add_prompt(used_interactions, point, "pos_points")
+                        _rp = _run_prediction_flag()
                         if instanceNumber > instanceNumber2:
                             point[2]=img_np.shape[1]-1-point[2]
-                        if not _safe_interaction(lambda: session.add_point_interaction(tuple(point[::-1]), include_interaction=True)):
+                        if not _safe_interaction(lambda rp=_rp: session.add_point_interaction(tuple(point[::-1]), include_interaction=True, run_prediction=rp)):
                             return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add pos points")
                                 
@@ -1929,9 +1954,10 @@ class BasicInferTask(InferTask):
                 for point in data['neg_points']:
                     if not self.is_prompt_used(used_interactions, point, "neg_points"):
                         self.add_prompt(used_interactions, point, "neg_points")
+                        _rp = _run_prediction_flag()
                         if instanceNumber > instanceNumber2:
                             point[2]=img_np.shape[1]-1-point[2]
-                        if not _safe_interaction(lambda: session.add_point_interaction(tuple(point[::-1]), include_interaction=False)):
+                        if not _safe_interaction(lambda rp=_rp: session.add_point_interaction(tuple(point[::-1]), include_interaction=False, run_prediction=rp)):
                             return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add neg points")
 
@@ -1941,6 +1967,7 @@ class BasicInferTask(InferTask):
                 for box in data['pos_boxes']:
                     if not self.is_prompt_used(used_interactions, box, "pos_boxes"):
                         self.add_prompt(used_interactions, box, "pos_boxes")
+                        _rp = _run_prediction_flag()
                         if instanceNumber > instanceNumber2:
                             box[0][2]=img_np.shape[1]-1-box[0][2]
                             box[1][2]=img_np.shape[1]-1-box[1][2]
@@ -1950,12 +1977,13 @@ class BasicInferTask(InferTask):
                             [min(box[0][i], box[1][i]), max(box[0][i], box[1][i]) + 1]
                             for i in range(3)
                         ]
-                        if not _safe_interaction(lambda b=bbox: session.add_bbox_interaction(
+                        if not _safe_interaction(lambda b=bbox, rp=_rp: session.add_bbox_interaction(
                             b,
-                            include_interaction=True
+                            include_interaction=True,
+                            run_prediction=rp
                         )):
                             return f'/code/predictions/reset.nii.gz', final_result_json
-                        logger.info("Add a box")            
+                        logger.info("Add a box")
 
             if len(data['neg_boxes'])!=0:
                 result_json["neg_boxes"]=copy.deepcopy(data["neg_boxes"])
@@ -1963,6 +1991,7 @@ class BasicInferTask(InferTask):
                 for box in data['neg_boxes']:
                     if not self.is_prompt_used(used_interactions, box, "neg_boxes"):
                         self.add_prompt(used_interactions, box, "neg_boxes")
+                        _rp = _run_prediction_flag()
                         if instanceNumber > instanceNumber2:
                             box[0][2]=img_np.shape[1]-1-box[0][2]
                             box[1][2]=img_np.shape[1]-1-box[1][2]
@@ -1972,12 +2001,13 @@ class BasicInferTask(InferTask):
                             [min(box[0][i], box[1][i]), max(box[0][i], box[1][i]) + 1]
                             for i in range(3)
                         ]
-                        if not _safe_interaction(lambda b=bbox: session.add_bbox_interaction(
+                        if not _safe_interaction(lambda b=bbox, rp=_rp: session.add_bbox_interaction(
                             b,
-                            include_interaction=False
+                            include_interaction=False,
+                            run_prediction=rp
                         )):
                             return f'/code/predictions/reset.nii.gz', final_result_json
-                        logger.info("Add a box")            
+                        logger.info("Add a box")
 
 
             if len(data['pos_lassos'])!=0:
@@ -1986,6 +2016,7 @@ class BasicInferTask(InferTask):
                 for lasso_raw in data['pos_lassos']:
                     if not self.is_prompt_used(used_interactions, lasso_raw, "pos_lassos"):
                         self.add_prompt(used_interactions, lasso_raw, "pos_lassos")
+                        _rp = _run_prediction_flag()
                         _t_prep = time.time()
                         perim = clean_and_densify_polyline(lasso_raw)
                         perim_arr = np.round(np.asarray(perim)).astype(int)
@@ -1996,8 +2027,8 @@ class BasicInferTask(InferTask):
                         if lasso_image is None:
                             continue
                         if not _safe_interaction(
-                            lambda img=lasso_image, bbox=interaction_bbox: session.add_lasso_interaction(
-                                img, include_interaction=True, interaction_bbox=bbox
+                            lambda img=lasso_image, bbox=interaction_bbox, rp=_rp: session.add_lasso_interaction(
+                                img, include_interaction=True, interaction_bbox=bbox, run_prediction=rp
                             )
                         ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
@@ -2009,6 +2040,7 @@ class BasicInferTask(InferTask):
                 for lasso_raw in data['neg_lassos']:
                     if not self.is_prompt_used(used_interactions, lasso_raw, "neg_lassos"):
                         self.add_prompt(used_interactions, lasso_raw, "neg_lassos")
+                        _rp = _run_prediction_flag()
                         _t_prep = time.time()
                         perim = clean_and_densify_polyline(lasso_raw)
                         perim_arr = np.round(np.asarray(perim)).astype(int)
@@ -2019,8 +2051,8 @@ class BasicInferTask(InferTask):
                         if lasso_image is None:
                             continue
                         if not _safe_interaction(
-                            lambda img=lasso_image, bbox=interaction_bbox: session.add_lasso_interaction(
-                                img, include_interaction=False, interaction_bbox=bbox
+                            lambda img=lasso_image, bbox=interaction_bbox, rp=_rp: session.add_lasso_interaction(
+                                img, include_interaction=False, interaction_bbox=bbox, run_prediction=rp
                             )
                         ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
@@ -2032,6 +2064,7 @@ class BasicInferTask(InferTask):
                 for scribble in data['pos_scribbles']:
                     if not self.is_prompt_used(used_interactions, scribble, "pos_scribbles"):
                         self.add_prompt(used_interactions, scribble, "pos_scribbles")
+                        _rp = _run_prediction_flag()
                         _t_prep = time.time()
                         scribble = clean_and_densify_polyline(scribble)
                         filled_indices = np.round(np.asarray(scribble)).astype(int)
@@ -2049,14 +2082,14 @@ class BasicInferTask(InferTask):
                         scribble_start = time.time()
                         if interaction_bbox is not None:
                             if not _safe_interaction(
-                                lambda img=scribble_image, bbox=interaction_bbox: session.add_scribble_interaction(
-                                    scribble_image=img, include_interaction=True, interaction_bbox=bbox
+                                lambda img=scribble_image, bbox=interaction_bbox, rp=_rp: session.add_scribble_interaction(
+                                    scribble_image=img, include_interaction=True, interaction_bbox=bbox, run_prediction=rp
                                 )
                             ):
                                 return f'/code/predictions/reset.nii.gz', final_result_json
                         elif not _safe_interaction(
-                            lambda img=scribble_image: session.add_scribble_interaction(
-                                scribble_image=img, include_interaction=True
+                            lambda img=scribble_image, rp=_rp: session.add_scribble_interaction(
+                                scribble_image=img, include_interaction=True, run_prediction=rp
                             )
                         ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
@@ -2070,6 +2103,7 @@ class BasicInferTask(InferTask):
                 for scribble in data['neg_scribbles']:
                     if not self.is_prompt_used(used_interactions, scribble, "neg_scribbles"):
                         self.add_prompt(used_interactions, scribble, "neg_scribbles")
+                        _rp = _run_prediction_flag()
                         _t_prep = time.time()
                         scribble = clean_and_densify_polyline(scribble)
                         filled_indices = np.round(np.asarray(scribble)).astype(int)
@@ -2086,14 +2120,14 @@ class BasicInferTask(InferTask):
                         prompt_prep_elapsed += time.time() - _t_prep
                         if interaction_bbox is not None:
                             if not _safe_interaction(
-                                lambda img=scribble_image, bbox=interaction_bbox: session.add_scribble_interaction(
-                                    scribble_image=img, include_interaction=False, interaction_bbox=bbox
+                                lambda img=scribble_image, bbox=interaction_bbox, rp=_rp: session.add_scribble_interaction(
+                                    scribble_image=img, include_interaction=False, interaction_bbox=bbox, run_prediction=rp
                                 )
                             ):
                                 return f'/code/predictions/reset.nii.gz', final_result_json
                         elif not _safe_interaction(
-                            lambda img=scribble_image: session.add_scribble_interaction(
-                                scribble_image=img, include_interaction=False
+                            lambda img=scribble_image, rp=_rp: session.add_scribble_interaction(
+                                scribble_image=img, include_interaction=False, run_prediction=rp
                             )
                         ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
