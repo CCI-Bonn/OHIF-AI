@@ -167,11 +167,14 @@ try:
         import logging
 
         _wlog = logging.getLogger(__name__)
-        _wlog.info("nnInteractive warmup: starting...")
-        _artifact_loader.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
-        ran = _artifact_loader.warmup()
-        _NNINTER_ARTIFACTS["network"] = _artifact_loader.network
-        _wlog.info(f"nnInteractive warmup: {'done' if ran else 'skipped (torch.compile not enabled)'}.")
+        try:
+            _wlog.info("nnInteractive warmup: starting...")
+            _artifact_loader.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
+            ran = _artifact_loader.warmup()
+            _NNINTER_ARTIFACTS["network"] = _artifact_loader.network
+            _wlog.info(f"nnInteractive warmup: {'done' if ran else 'skipped (torch.compile not enabled)'}.")
+        except Exception:
+            _wlog.exception("nnInteractive warmup failed (non-fatal)")
 
     threading.Thread(target=_warmup_session, daemon=True).start()
 except Exception as _warmup_err:
@@ -1227,9 +1230,7 @@ class BasicInferTask(InferTask):
 
         dicom_dir = data['image'].split('.nii.gz')[0].rstrip("/")
 
-        _NNI_EXCLUDE = ("init", "reset",
-                        "medGemma", "gemini", "openai", "claude",
-                        "kimi", "qwen", "gemma", "vllm")
+        _NNI_EXCLUDE = ("init", "reset") + _NNI_VLM_OPS
         _is_nninter_interaction = nnInter and nnInter not in _NNI_EXCLUDE
 
         logger.info(
@@ -1409,16 +1410,7 @@ class BasicInferTask(InferTask):
 
             logger.info(f"interactions in _session_used_interactions: {used_interactions}")
 
-            if nnInter in (
-                "medGemma",
-                "gemini",
-                "openai",
-                "claude",
-                "kimi",
-                "qwen",
-                "gemma",
-                "vllm",
-            ):
+            if nnInter in _NNI_VLM_OPS:
                 if len(data['texts'])==1 and data['texts'][0]!='' and data['texts'][0]!={}:
                     hf_token = (
                         _resolve_hf_token(data)
@@ -1895,13 +1887,15 @@ class BasicInferTask(InferTask):
                     t_before = time.time()
                     if nninter_first_interaction_ts is None:
                         nninter_first_interaction_ts = t_before
-                    with timeout_context(seconds=100):
-                        # Global GPU lock: one prediction at a time across all
-                        # sessions. set_image preprocessing and result packaging
-                        # stay outside so they never block another user's
-                        # prediction. Lock order: entry.lock (held by __call__)
-                        # -> gpu_lock.
-                        with get_pool().gpu_lock:
+                    # Global GPU lock: one prediction at a time across all
+                    # sessions. set_image preprocessing and result packaging
+                    # stay outside so they never block another user's
+                    # prediction. Lock order: entry.lock (held by __call__)
+                    # -> gpu_lock. Acquired OUTSIDE timeout_context so waiting
+                    # for another user's prediction cannot burn this user's
+                    # alarm and trigger a session-destroying reset.
+                    with get_pool().gpu_lock:
+                        with timeout_context(seconds=100):
                             perform_callable()
                     nninter_core_elapsed += time.time() - t_before
                     return True

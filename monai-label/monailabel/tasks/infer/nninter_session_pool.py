@@ -63,9 +63,9 @@ class SessionPool:
         start_reaper: bool = True,
     ):
         self._factory = factory
-        self.max_sessions = int(
+        self.max_sessions = max(1, int(
             max_sessions if max_sessions is not None else os.environ.get("NNINTER_MAX_SESSIONS", 3)
-        )
+        ))
         self.idle_timeout = float(
             idle_timeout if idle_timeout is not None else os.environ.get("NNINTER_SESSION_IDLE_TIMEOUT", 600)
         )

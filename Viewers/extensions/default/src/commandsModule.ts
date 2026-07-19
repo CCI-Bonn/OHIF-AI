@@ -2884,7 +2884,7 @@ const commandsModule = ({
             const afterPost = Date.now();
             const networkRoundTripMs = afterPost - beforePost;
             const ct = response.headers["content-type"] as string;
-            const { meta, seg } = await parseMultipart(response.data, ct);
+            const { meta, seg } = await parseMultipart(response.data, ct, { allowEmptySeg: true });
             // Server-side session was evicted/timed out. Reclaim, re-init, and
             // re-run: measurements still hold the full prompt history, and the
             // server replays any prompts it hasn't seen (one GPU prediction).
@@ -2911,6 +2911,9 @@ const commandsModule = ({
               await getNninterToken();
               await actions.initNninter();
               return actions.nninter(textPrompts);
+            }
+            if (!seg.length) {
+              throw new Error('seg part not found');
             }
             const afterParse = Date.now();
 
