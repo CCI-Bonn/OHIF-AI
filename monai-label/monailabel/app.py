@@ -30,6 +30,7 @@ from monailabel.endpoints import (
     login,
     logs,
     model,
+    nninter_session,
     ohif,
     proxy,
     scoring,
@@ -96,6 +97,7 @@ app.include_router(logs.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(ohif.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(proxy.router, prefix=settings.MONAI_LABEL_API_STR)
 app.include_router(session.router, prefix=settings.MONAI_LABEL_API_STR)
+app.include_router(nninter_session.router, prefix=settings.MONAI_LABEL_API_STR)
 
 
 @app.get("/", include_in_schema=False)
