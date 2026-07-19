@@ -114,27 +114,62 @@ vox_predictor = VoxTellPredictor(model_dir=vox_model_path, device=torch.device("
 
 from nnInteractive.inference.inference_session import nnInteractiveInferenceSession
 
-session = nnInteractiveInferenceSession(
+from monailabel.tasks.infer.nninter_session_pool import (
+    _USED_INTERACTION_KEYS,
+    SessionPool,
+    get_pool,
+    set_pool,
+)
+
+model_path = os.path.join(DOWNLOAD_DIR, MODEL_NAME)
+
+# Load model artifacts (weights, plans, capability metadata) from disk ONCE.
+# Every pooled session receives them by reference via
+# initialize_from_loaded_artifacts(), so N sessions share one GPU copy of the
+# network; only per-study state (image tensors, buffers) is per-session.
+_artifact_loader = nnInteractiveInferenceSession(
     device=torch.device("cuda:0"),
     use_torch_compile=True,
     verbose=True,
     torch_n_threads=os.cpu_count(),
     do_autozoom=True,
 )
+_NNINTER_ARTIFACTS = _artifact_loader._load_model_artifacts_from_disk(model_path)
 
-model_path = os.path.join(DOWNLOAD_DIR, MODEL_NAME)
-session.initialize_from_trained_model_folder(model_path)
 
-# Warmup: trigger torch.compile JIT at startup so the first real inference is fast.
-# session.warmup() uses the correct patch_size from the model plan — no set_image needed.
+def _new_nninter_session() -> nnInteractiveInferenceSession:
+    s = nnInteractiveInferenceSession(
+        device=torch.device("cuda:0"),
+        use_torch_compile=True,
+        verbose=True,
+        torch_n_threads=os.cpu_count(),
+        do_autozoom=True,
+    )
+    s.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
+    return s
+
+
+set_pool(SessionPool(factory=_new_nninter_session))
+
+# Warmup: trigger torch.compile JIT at startup so the first real inference is
+# fast. warmup() uses the correct patch_size from the model plan — no set_image
+# needed. Afterwards the compiled network is published back into the shared
+# artifacts so pooled sessions reuse it instead of recompiling. Sessions
+# claimed before warmup finishes just compile-on-first-use (same as the old
+# single-global behavior).
 try:
     import threading
+
     def _warmup_session():
         import logging
+
         _wlog = logging.getLogger(__name__)
         _wlog.info("nnInteractive warmup: starting...")
-        ran = session.warmup()
+        _artifact_loader.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
+        ran = _artifact_loader.warmup()
+        _NNINTER_ARTIFACTS["network"] = _artifact_loader.network
         _wlog.info(f"nnInteractive warmup: {'done' if ran else 'skipped (torch.compile not enabled)'}.")
+
     threading.Thread(target=_warmup_session, daemon=True).start()
 except Exception as _warmup_err:
     print(f"nnInteractive warmup failed (non-fatal): {_warmup_err}")
