@@ -36,6 +36,7 @@ import {
 } from './stores/toolboxState';
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
+import { getNninterToken, clearNninterToken } from './utils/nninterSession';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
@@ -1635,6 +1636,14 @@ const commandsModule = ({
         toolboxState.setPosNeg(false);
       }
 
+      let nninterToken = '';
+      try {
+        nninterToken = await getNninterToken();
+      } catch (e) {
+        // Server down or old server image without the endpoint — proceed
+        // tokenless; the infer call surfaces its own error/expired handling.
+        console.warn('nninter session claim failed; proceeding without token', e);
+      }
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -1644,6 +1653,7 @@ const commandsModule = ({
         studyInstanceUID: currentDisplaySets.StudyInstanceUID,
         restore_label_idx: false,
         nninter: "init",
+        nninter_token: nninterToken,
       };
 
       // Show notification only on the first initNninter for a new series.
@@ -1754,6 +1764,14 @@ const commandsModule = ({
         return;
       }
 
+      let nninterToken = '';
+      try {
+        nninterToken = await getNninterToken();
+      } catch (e) {
+        // Server down or old server image without the endpoint — proceed
+        // tokenless; the infer call surfaces its own error/expired handling.
+        console.warn('nninter session claim failed; proceeding without token', e);
+      }
       const url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       const params = {
         largest_cc: false,
@@ -1763,6 +1781,7 @@ const commandsModule = ({
         studyInstanceUID: currentDisplaySets.StudyInstanceUID,
         restore_label_idx: false,
         nninter: 'undo',
+        nninter_token: nninterToken,
       };
       const data = MonaiLabelClient.constructFormData(params, null);
 
@@ -1937,6 +1956,14 @@ const commandsModule = ({
       const currentDisplaySets = displaySets.filter(e => {
         return e.displaySetInstanceUID == displaySetInstanceUID;
       })[0];
+      let nninterToken = '';
+      try {
+        nninterToken = await getNninterToken();
+      } catch (e) {
+        // Server down or old server image without the endpoint — proceed
+        // tokenless; the infer call surfaces its own error/expired handling.
+        console.warn('nninter session claim failed; proceeding without token', e);
+      }
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -1946,6 +1973,7 @@ const commandsModule = ({
         studyInstanceUID: currentDisplaySets.StudyInstanceUID,
         restore_label_idx: false,
         nninter: "reset",
+        nninter_token: nninterToken,
       };
 
       let data = MonaiLabelClient.constructFormData(params, null);
@@ -2759,6 +2787,14 @@ const commandsModule = ({
         document.dispatchEvent(new Event('measurement-state-changed'));
       }
 
+      let nninterToken = '';
+      try {
+        nninterToken = await getNninterToken();
+      } catch (e) {
+        // Server down or old server image without the endpoint — proceed
+        // tokenless; the infer call surfaces its own error/expired handling.
+        console.warn('nninter session claim failed; proceeding without token', e);
+      }
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -2779,6 +2815,7 @@ const commandsModule = ({
         texts: text_prompts,
         nninter: true,
         nninter_reset_first: _needsReset,
+        nninter_token: nninterToken,
       };
 
       let data = MonaiLabelClient.constructFormData(params, null);
