@@ -121,6 +121,11 @@ const commandsModule = ({
     }
   }
 
+  // Loop guard for session-expired auto-recovery: if a second recovery is
+  // needed within 5s the pool is thrashing (capacity pressure) — stop and
+  // tell the user instead of ping-ponging claims.
+  let _lastNninterRecoveryTs = 0;
+
   function beginInferenceRunOrQueue(): boolean {
     if (toolboxState.getLocked()) {
       return false;
@@ -1605,7 +1610,7 @@ const commandsModule = ({
         finishInferenceRun();
       }
     },
-    async initNninter( options: {viewportId: string} = {viewportId: undefined} ){
+    async initNninter( options: {viewportId: string} = {viewportId: undefined}, _sessionRetry = false ){
 
       let { activeViewportId, viewports } = viewportGridService.getState();
       if(options.viewportId !== undefined){
@@ -1684,6 +1689,16 @@ const commandsModule = ({
       try {
         const response = await initPromise;
         if (response.status === 200) {
+          const _initBody = new TextDecoder('utf-8').decode(response.data);
+          if (_initBody.includes('session_expired')) {
+            if (_sessionRetry) {
+              console.warn('Init nninter: session expired again after reclaim; giving up');
+              return response;
+            }
+            clearNninterToken();
+            await getNninterToken();
+            return actions.initNninter(options, true);
+          }
           if (_showNotification) {
             uiNotificationService.show({
               title: 'NNInit',
@@ -1812,6 +1827,22 @@ const commandsModule = ({
         // allowEmptySeg: undoing the only interaction restores an empty segment,
         // which arrives as a zero-length seg part.
         const { meta, seg } = await parseMultipart(response.data, ct, { allowEmptySeg: true });
+        let _undoOp: unknown = (meta as any).nninter_op;
+        try {
+          _undoOp = JSON.parse(((meta as any).nninter_op ?? 'null') as string);
+        } catch {
+          /* keep raw value */
+        }
+        if (_undoOp === 'session_expired') {
+          clearNninterToken();
+          uiNotificationService.show({
+            title: 'Undo',
+            message: 'nnInteractive session expired — nothing to undo.',
+            type: 'warning',
+            duration: 3000,
+          });
+          return;
+        }
         const afterParse = Date.now();
 
         // --- round-trip timing breakdown (mirrors the normal nninter path) ---
@@ -2854,6 +2885,33 @@ const commandsModule = ({
             const networkRoundTripMs = afterPost - beforePost;
             const ct = response.headers["content-type"] as string;
             const { meta, seg } = await parseMultipart(response.data, ct);
+            // Server-side session was evicted/timed out. Reclaim, re-init, and
+            // re-run: measurements still hold the full prompt history, and the
+            // server replays any prompts it hasn't seen (one GPU prediction).
+            let _nninterOp: unknown = (meta as any).nninter_op;
+            try {
+              _nninterOp = JSON.parse(((meta as any).nninter_op ?? 'null') as string);
+            } catch {
+              /* keep raw value */
+            }
+            if (_nninterOp === 'session_expired') {
+              const _now = Date.now();
+              if (_now - _lastNninterRecoveryTs < 5000) {
+                uiNotificationService.show({
+                  title: 'MONAI Label',
+                  message: 'nnInteractive session expired — please segment again.',
+                  type: 'warning',
+                  duration: 4000,
+                });
+                return;
+              }
+              _lastNninterRecoveryTs = _now;
+              console.warn('nninter session expired — reclaiming and replaying prompts');
+              clearNninterToken();
+              await getNninterToken();
+              await actions.initNninter();
+              return actions.nninter(textPrompts);
+            }
             const afterParse = Date.now();
 
             // --- server-side timing breakdown ---
