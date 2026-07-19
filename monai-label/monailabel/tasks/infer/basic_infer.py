@@ -114,27 +114,68 @@ vox_predictor = VoxTellPredictor(model_dir=vox_model_path, device=torch.device("
 
 from nnInteractive.inference.inference_session import nnInteractiveInferenceSession
 
-session = nnInteractiveInferenceSession(
+from monailabel.tasks.infer.nninter_session_pool import (
+    _USED_INTERACTION_KEYS,
+    SessionPool,
+    get_pool,
+    set_pool,
+)
+
+# VLM ops ride the nninter param but never touch the nnInteractive session.
+_NNI_VLM_OPS = ("medGemma", "gemini", "openai", "claude", "kimi", "qwen", "gemma", "vllm")
+
+model_path = os.path.join(DOWNLOAD_DIR, MODEL_NAME)
+
+# Load model artifacts (weights, plans, capability metadata) from disk ONCE.
+# Every pooled session receives them by reference via
+# initialize_from_loaded_artifacts(), so N sessions share one GPU copy of the
+# network; only per-study state (image tensors, buffers) is per-session.
+_artifact_loader = nnInteractiveInferenceSession(
     device=torch.device("cuda:0"),
     use_torch_compile=True,
     verbose=True,
     torch_n_threads=os.cpu_count(),
     do_autozoom=True,
 )
+_NNINTER_ARTIFACTS = _artifact_loader._load_model_artifacts_from_disk(model_path)
 
-model_path = os.path.join(DOWNLOAD_DIR, MODEL_NAME)
-session.initialize_from_trained_model_folder(model_path)
 
-# Warmup: trigger torch.compile JIT at startup so the first real inference is fast.
-# session.warmup() uses the correct patch_size from the model plan — no set_image needed.
+def _new_nninter_session() -> nnInteractiveInferenceSession:
+    s = nnInteractiveInferenceSession(
+        device=torch.device("cuda:0"),
+        use_torch_compile=True,
+        verbose=True,
+        torch_n_threads=os.cpu_count(),
+        do_autozoom=True,
+    )
+    s.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
+    return s
+
+
+set_pool(SessionPool(factory=_new_nninter_session))
+
+# Warmup: trigger torch.compile JIT at startup so the first real inference is
+# fast. warmup() uses the correct patch_size from the model plan — no set_image
+# needed. Afterwards the compiled network is published back into the shared
+# artifacts so pooled sessions reuse it instead of recompiling. Sessions
+# claimed before warmup finishes just compile-on-first-use (same as the old
+# single-global behavior).
 try:
     import threading
+
     def _warmup_session():
         import logging
+
         _wlog = logging.getLogger(__name__)
-        _wlog.info("nnInteractive warmup: starting...")
-        ran = session.warmup()
-        _wlog.info(f"nnInteractive warmup: {'done' if ran else 'skipped (torch.compile not enabled)'}.")
+        try:
+            _wlog.info("nnInteractive warmup: starting...")
+            _artifact_loader.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
+            ran = _artifact_loader.warmup()
+            _NNINTER_ARTIFACTS["network"] = _artifact_loader.network
+            _wlog.info(f"nnInteractive warmup: {'done' if ran else 'skipped (torch.compile not enabled)'}.")
+        except Exception:
+            _wlog.exception("nnInteractive warmup failed (non-fatal)")
+
     threading.Thread(target=_warmup_session, daemon=True).start()
 except Exception as _warmup_err:
     print(f"nnInteractive warmup failed (non-fatal): {_warmup_err}")
@@ -845,26 +886,6 @@ class BasicInferTask(InferTask):
         self.train_mode = train_mode
         self.skip_writer = skip_writer
 
-        self._session_image: Dict[str, Any] = {
-            "dicom_dir": None,        # normalised path MONAI served (level-1 key: exact path match)
-            "seriesInstanceUID": None, # DICOM tag (0020,000E) UID (level-2 key: works if path changes)
-            "img_np": None,           # cached [1,z,y,x] array; populated on init, reused for interactions
-            "instanceNumber": None,   # first DICOM file's InstanceNumber (used for flip detection)
-            "instanceNumber2": None,  # second DICOM file's InstanceNumber
-        }
-
-
-        self._session_used_interactions = {
-            "pos_points": set(),
-            "neg_points": set(),
-            "pos_boxes": set(),
-            "neg_boxes": set(),
-            "pos_lassos": set(),
-            "neg_lassos": set(),
-            "pos_scribbles": set(),
-            "neg_scribbles": set(),
-        }
-
         self._networks: Dict = {}
 
         self._config.update(
@@ -1021,17 +1042,46 @@ class BasicInferTask(InferTask):
         return None
 
     # When adding any type of prompt:
-    def add_prompt(self, prompt, prompt_type):
+    def add_prompt(self, used_interactions, prompt, prompt_type):
         prompt_hash = hashlib.md5(np.array(prompt).tobytes()).hexdigest()
-        self._session_used_interactions[prompt_type].add(prompt_hash)
+        used_interactions[prompt_type].add(prompt_hash)
 
     # When checking any type of prompt:
-    def is_prompt_used(self, prompt, prompt_type):
+    def is_prompt_used(self, used_interactions, prompt, prompt_type):
         prompt_hash = hashlib.md5(np.array(prompt).tobytes()).hexdigest()
-        return prompt_hash in self._session_used_interactions[prompt_type]
+        return prompt_hash in used_interactions[prompt_type]
 
     def __call__(
         self, request, callbacks: Union[Dict[CallBackTypes, Any], None] = None
+    ) -> Union[Dict, Tuple[str, Dict[str, Any]]]:
+        op = request.get("nninter")
+        needs_session = bool(request.get("nninter_reset_first")) or (
+            bool(op) and op not in _NNI_VLM_OPS
+        )
+        if not needs_session:
+            return self._call_core(request, callbacks, entry=None)
+
+        entry = get_pool().get(request.get("nninter_token"))
+        if entry is None:
+            # Expired / evicted / missing token. HTTP 200 in the normal
+            # response shapes; the client re-claims and replays on seeing
+            # nninter_op == "session_expired".
+            logger.warning(f"nninter session expired/missing for op={op!r}")
+            if op == "reset":
+                return "/code/predictions/reset.nii.gz", {}
+            expired_json = {
+                "nninter_op": "session_expired",
+                "label_name": "session_expired",
+                "server_end_ts": time.time(),
+            }
+            if op == "init":
+                return "/code/predictions/session_expired.nii.gz", expired_json
+            return np.zeros((0, 0, 0), dtype=np.uint8), expired_json
+        with entry.lock:
+            return self._call_core(request, callbacks, entry=entry)
+
+    def _call_core(
+        self, request, callbacks: Union[Dict[CallBackTypes, Any], None] = None, entry=None
     ) -> Union[Dict, Tuple[str, Dict[str, Any]]]:
         """
         It provides basic implementation to run the following in order
@@ -1049,9 +1099,19 @@ class BasicInferTask(InferTask):
         begin = time.time()
         server_begin_ts = begin  # Unix timestamp; client uses this to estimate network-to-server latency
 
+        # Per-entry state (None for SAM/VLM requests, which never touch these).
+        if entry is not None:
+            session = entry.session
+            image_cache = entry.image_cache
+            used_interactions = entry.used_interactions
+        else:
+            session = None
+            image_cache = None
+            used_interactions = None
+
         # Fast path: reset does not need config merge, image loading, or deep copy
         if request.get('nninter') == "reset":
-            for key, lst in self._session_used_interactions.items():
+            for key, lst in used_interactions.items():
                 lst.clear()
             session.reset_interactions()
             # Image cache (_session_image) is intentionally kept: session.reset_interactions()
@@ -1075,7 +1135,8 @@ class BasicInferTask(InferTask):
 
             _t_undo = time.time()
             try:
-                undone = bool(session.undo())
+                with get_pool().gpu_lock:
+                    undone = bool(session.undo())
             except Exception as e:
                 logger.error(f"nninter undo() raised: {e}")
                 undone = False
@@ -1108,8 +1169,8 @@ class BasicInferTask(InferTask):
             undo_json["pred_full_shape"] = pred_full_shape
             undo_json["pred_crop_shape"] = list(pred.shape)
 
-            _inst = self._session_image.get("instanceNumber")
-            _inst2 = self._session_image.get("instanceNumber2")
+            _inst = image_cache.get("instanceNumber")
+            _inst2 = image_cache.get("instanceNumber2")
             undo_json["flipped"] = bool(_inst is not None and _inst2 is not None and _inst > _inst2)
 
             undo_json["label_name"] = f"nninter_pred_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -1131,7 +1192,7 @@ class BasicInferTask(InferTask):
         # Resetting here (before image loading) keeps the same semantics as a
         # separate reset call, but saves ~1.4 s of network overhead on slow links.
         if request.get('nninter_reset_first'):
-            for key, lst in self._session_used_interactions.items():
+            for key, lst in used_interactions.items():
                 lst.clear()
             session.reset_interactions()
             logger.info("Folded reset before inference")
@@ -1169,12 +1230,13 @@ class BasicInferTask(InferTask):
 
         dicom_dir = data['image'].split('.nii.gz')[0].rstrip("/")
 
-        _NNI_EXCLUDE = ("init", "reset",
-                        "medGemma", "gemini", "openai", "claude",
-                        "kimi", "qwen", "gemma", "vllm")
+        _NNI_EXCLUDE = ("init", "reset") + _NNI_VLM_OPS
         _is_nninter_interaction = nnInter and nnInter not in _NNI_EXCLUDE
 
-        logger.info(f"dicom_dir={dicom_dir!r}  cached_dicom_dir={self._session_image['dicom_dir']!r}  cached_uid={self._session_image['seriesInstanceUID']!r}")
+        logger.info(
+            f"dicom_dir={dicom_dir!r}  cached_dicom_dir={(image_cache or {}).get('dicom_dir')!r}"
+            f"  cached_uid={(image_cache or {}).get('seriesInstanceUID')!r}"
+        )
 
         # Level-1: full cache hit — skip GetGDCMSeriesFileNames, dcmread x2,
         # reader.Execute, and sitk.GetArrayFromImage entirely.
@@ -1184,18 +1246,18 @@ class BasicInferTask(InferTask):
         # block will fire, so computing it fresh would be pure wasted work.
         _img_np_hit = (
             (_is_nninter_interaction or nnInter == "init")
-            and dicom_dir == self._session_image["dicom_dir"]
-            and self._session_image["img_np"] is not None
-            and self._session_image["instanceNumber"] is not None
+            and dicom_dir == image_cache["dicom_dir"]
+            and image_cache["img_np"] is not None
+            and image_cache["instanceNumber"] is not None
         )
 
         _pixel_hit = False    # may be set True inside the else branch below
         _disk_hit = False     # may be set True if disk cache found
         _disk_cache_path = None
         if _img_np_hit:
-            seriesInstanceUID = self._session_image["seriesInstanceUID"]
-            instanceNumber    = self._session_image["instanceNumber"]
-            instanceNumber2   = self._session_image["instanceNumber2"]
+            seriesInstanceUID = image_cache["seriesInstanceUID"]
+            instanceNumber    = image_cache["instanceNumber"]
+            instanceNumber2   = image_cache["instanceNumber2"]
             img_convert_elapsed = 0.0
             logger.info("img_np cache hit — skipping all DICOM I/O")
         else:
@@ -1250,18 +1312,18 @@ class BasicInferTask(InferTask):
             # → skip reader.Execute + sitk.GetArrayFromImage, keep header metadata.
             _pixel_hit = (
                 _is_nninter_interaction
-                and seriesInstanceUID == self._session_image["seriesInstanceUID"]
-                and self._session_image["img_np"] is not None
+                and seriesInstanceUID == image_cache["seriesInstanceUID"]
+                and image_cache["img_np"] is not None
             )
 
             if _pixel_hit:
                 logger.info("img_np pixel-cache hit (path UID changed) — skipping reader.Execute")
             else:
                 if _is_nninter_interaction:
-                    cached_uid = self._session_image["seriesInstanceUID"]
+                    cached_uid = image_cache["seriesInstanceUID"]
                     if cached_uid != seriesInstanceUID:
                         logger.info(f"img_np cache MISS — UID mismatch: cached={cached_uid!r} incoming={seriesInstanceUID!r}")
-                    elif self._session_image["img_np"] is None:
+                    elif image_cache["img_np"] is None:
                         logger.info("img_np cache MISS — not yet initialised")
                 # Level-3: disk cache — skip reader.Execute + sitk.GetArrayFromImage on hit.
                 # Key: md5(dicom_dir) — stable across container restarts for the same DICOM series.
@@ -1286,7 +1348,7 @@ class BasicInferTask(InferTask):
             prompt_prep_elapsed = 0.0           # lasso/scribble mask building (CPU, excludes model calls)
 
             if _img_np_hit or _pixel_hit:
-                img_np = self._session_image["img_np"]
+                img_np = image_cache["img_np"]
                 img_convert_elapsed = 0.0
             elif _disk_hit:
                 img_convert_elapsed = 0.0
@@ -1314,18 +1376,18 @@ class BasicInferTask(InferTask):
                 # session uninitialized, so the next interaction timed out on preprocessed_image.
                 _uid_changed = (
                     seriesInstanceUID is not None
-                    and self._session_image["seriesInstanceUID"] != seriesInstanceUID
+                    and image_cache["seriesInstanceUID"] != seriesInstanceUID
                 )
                 _session_needs_image = (
                     getattr(session, "original_image_shape", None) is None
                     or getattr(session, "preprocessed_image", None) is None
                 )
                 if _uid_changed or _session_needs_image:
-                    self._session_image["dicom_dir"]       = dicom_dir
-                    self._session_image["seriesInstanceUID"] = seriesInstanceUID
-                    self._session_image["img_np"]          = img_np
-                    self._session_image["instanceNumber"]  = instanceNumber
-                    self._session_image["instanceNumber2"] = instanceNumber2
+                    image_cache["dicom_dir"]       = dicom_dir
+                    image_cache["seriesInstanceUID"] = seriesInstanceUID
+                    image_cache["img_np"]          = img_np
+                    image_cache["instanceNumber"]  = instanceNumber
+                    image_cache["instanceNumber2"] = instanceNumber2
                     try:
                         logger.info(f"init set_image (uid_changed={_uid_changed}, session_needs_image={_session_needs_image})")
                         session.set_image(img_np)
@@ -1333,31 +1395,22 @@ class BasicInferTask(InferTask):
                     except Exception as init_error:
                         logger.error(f"Failed to initialize session: {init_error}")
                         logger.info("Prefer fail!!")
-                elif self._session_image["img_np"] is None:
+                elif image_cache["img_np"] is None:
                     # Same series but cache was cleared; repopulate
-                    self._session_image["dicom_dir"]       = dicom_dir
-                    self._session_image["img_np"]          = img_np
-                    self._session_image["instanceNumber"]  = instanceNumber
-                    self._session_image["instanceNumber2"] = instanceNumber2
-                for key, lst in self._session_used_interactions.items():
+                    image_cache["dicom_dir"]       = dicom_dir
+                    image_cache["img_np"]          = img_np
+                    image_cache["instanceNumber"]  = instanceNumber
+                    image_cache["instanceNumber2"] = instanceNumber2
+                for key, lst in used_interactions.items():
                     lst.clear()
                 _t_reset = time.time()
                 session.reset_interactions()
                 logger.info(f"[timing] session.reset_interactions: {time.time()-_t_reset:.3f}s")
                 return f'/code/predictions/init.nii.gz', final_result_json
 
-            logger.info(f"interactions in _session_used_interactions: {self._session_used_interactions}")
+            logger.info(f"interactions in _session_used_interactions: {used_interactions}")
 
-            if nnInter in (
-                "medGemma",
-                "gemini",
-                "openai",
-                "claude",
-                "kimi",
-                "qwen",
-                "gemma",
-                "vllm",
-            ):
+            if nnInter in _NNI_VLM_OPS:
                 if len(data['texts'])==1 and data['texts'][0]!='' and data['texts'][0]!={}:
                     hf_token = (
                         _resolve_hf_token(data)
@@ -1799,9 +1852,9 @@ class BasicInferTask(InferTask):
                         # If that's not possible, shutdown the executor and assign new one.
                         logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
                         logger.info("Set image and target buffer before interaction")
-                        if seriesInstanceUID is not None and self._session_image["seriesInstanceUID"] != seriesInstanceUID:
+                        if seriesInstanceUID is not None and image_cache["seriesInstanceUID"] != seriesInstanceUID:
                             logger.info("Series Instance UID changed -> update")
-                            self._session_image["seriesInstanceUID"] = seriesInstanceUID
+                            image_cache["seriesInstanceUID"] = seriesInstanceUID
                         # Do NOT gate on preprocess_future being None: a stale future left over
                         # from a shut-down executor would otherwise skip set_image, and we'd wait
                         # the full 5s for a preprocess that never runs (then loop on shutdown).
@@ -1834,8 +1887,16 @@ class BasicInferTask(InferTask):
                     t_before = time.time()
                     if nninter_first_interaction_ts is None:
                         nninter_first_interaction_ts = t_before
-                    with timeout_context(seconds=100):
-                        perform_callable()
+                    # Global GPU lock: one prediction at a time across all
+                    # sessions. set_image preprocessing and result packaging
+                    # stay outside so they never block another user's
+                    # prediction. Lock order: entry.lock (held by __call__)
+                    # -> gpu_lock. Acquired OUTSIDE timeout_context so waiting
+                    # for another user's prediction cannot burn this user's
+                    # alarm and trigger a session-destroying reset.
+                    with get_pool().gpu_lock:
+                        with timeout_context(seconds=100):
+                            perform_callable()
                     nninter_core_elapsed += time.time() - t_before
                     return True
                 except Exception as e:
@@ -1851,15 +1912,33 @@ class BasicInferTask(InferTask):
                         logger.error(f"Failed to reset session: {reset_error}")
                     return False
             
+            # Replay optimization: a normal request carries exactly one
+            # not-yet-applied prompt. After a session-expired replay the request
+            # carries the full history — encode all but the last without running
+            # a prediction, then predict once at the end.
+            _pending_total = 0
+            for _key in _USED_INTERACTION_KEYS:
+                for _p in (data.get(_key) or []):
+                    if not self.is_prompt_used(used_interactions, _p, _key):
+                        _pending_total += 1
+
+            _applied_count = 0
+
+            def _run_prediction_flag():
+                nonlocal _applied_count
+                _applied_count += 1
+                return _applied_count >= _pending_total
+
             if len(data['pos_points'])!=0:
                 result_json["pos_points"]=copy.deepcopy(data["pos_points"])
                 
                 for point in data['pos_points']:
-                    if not self.is_prompt_used(point, "pos_points"):
-                        self.add_prompt(point, "pos_points")
+                    if not self.is_prompt_used(used_interactions, point, "pos_points"):
+                        self.add_prompt(used_interactions, point, "pos_points")
+                        _rp = _run_prediction_flag()
                         if instanceNumber > instanceNumber2:
                             point[2]=img_np.shape[1]-1-point[2]
-                        if not _safe_interaction(lambda: session.add_point_interaction(tuple(point[::-1]), include_interaction=True)):
+                        if not _safe_interaction(lambda rp=_rp: session.add_point_interaction(tuple(point[::-1]), include_interaction=True, run_prediction=rp)):
                             return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add pos points")
                                 
@@ -1867,11 +1946,12 @@ class BasicInferTask(InferTask):
                 result_json["neg_points"]=copy.deepcopy(data["neg_points"])
                 
                 for point in data['neg_points']:
-                    if not self.is_prompt_used(point, "neg_points"):
-                        self.add_prompt(point, "neg_points")
+                    if not self.is_prompt_used(used_interactions, point, "neg_points"):
+                        self.add_prompt(used_interactions, point, "neg_points")
+                        _rp = _run_prediction_flag()
                         if instanceNumber > instanceNumber2:
                             point[2]=img_np.shape[1]-1-point[2]
-                        if not _safe_interaction(lambda: session.add_point_interaction(tuple(point[::-1]), include_interaction=False)):
+                        if not _safe_interaction(lambda rp=_rp: session.add_point_interaction(tuple(point[::-1]), include_interaction=False, run_prediction=rp)):
                             return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add neg points")
 
@@ -1879,8 +1959,9 @@ class BasicInferTask(InferTask):
                 result_json["pos_boxes"]=copy.deepcopy(data["pos_boxes"])
                 
                 for box in data['pos_boxes']:
-                    if not self.is_prompt_used(box, "pos_boxes"):
-                        self.add_prompt(box, "pos_boxes")
+                    if not self.is_prompt_used(used_interactions, box, "pos_boxes"):
+                        self.add_prompt(used_interactions, box, "pos_boxes")
+                        _rp = _run_prediction_flag()
                         if instanceNumber > instanceNumber2:
                             box[0][2]=img_np.shape[1]-1-box[0][2]
                             box[1][2]=img_np.shape[1]-1-box[1][2]
@@ -1890,19 +1971,21 @@ class BasicInferTask(InferTask):
                             [min(box[0][i], box[1][i]), max(box[0][i], box[1][i]) + 1]
                             for i in range(3)
                         ]
-                        if not _safe_interaction(lambda b=bbox: session.add_bbox_interaction(
+                        if not _safe_interaction(lambda b=bbox, rp=_rp: session.add_bbox_interaction(
                             b,
-                            include_interaction=True
+                            include_interaction=True,
+                            run_prediction=rp
                         )):
                             return f'/code/predictions/reset.nii.gz', final_result_json
-                        logger.info("Add a box")            
+                        logger.info("Add a box")
 
             if len(data['neg_boxes'])!=0:
                 result_json["neg_boxes"]=copy.deepcopy(data["neg_boxes"])
                 
                 for box in data['neg_boxes']:
-                    if not self.is_prompt_used(box, "neg_boxes"):
-                        self.add_prompt(box, "neg_boxes")
+                    if not self.is_prompt_used(used_interactions, box, "neg_boxes"):
+                        self.add_prompt(used_interactions, box, "neg_boxes")
+                        _rp = _run_prediction_flag()
                         if instanceNumber > instanceNumber2:
                             box[0][2]=img_np.shape[1]-1-box[0][2]
                             box[1][2]=img_np.shape[1]-1-box[1][2]
@@ -1912,20 +1995,21 @@ class BasicInferTask(InferTask):
                             [min(box[0][i], box[1][i]), max(box[0][i], box[1][i]) + 1]
                             for i in range(3)
                         ]
-                        if not _safe_interaction(lambda b=bbox: session.add_bbox_interaction(
+                        if not _safe_interaction(lambda b=bbox, rp=_rp: session.add_bbox_interaction(
                             b,
-                            include_interaction=False
+                            include_interaction=False,
+                            run_prediction=rp
                         )):
                             return f'/code/predictions/reset.nii.gz', final_result_json
-                        logger.info("Add a box")            
+                        logger.info("Add a box")
 
 
             if len(data['pos_lassos'])!=0:
                 result_json["pos_lassos"]=copy.deepcopy(data["pos_lassos"])
 
                 for lasso_raw in data['pos_lassos']:
-                    if not self.is_prompt_used(lasso_raw, "pos_lassos"):
-                        self.add_prompt(lasso_raw, "pos_lassos")
+                    if not self.is_prompt_used(used_interactions, lasso_raw, "pos_lassos"):
+                        self.add_prompt(used_interactions, lasso_raw, "pos_lassos")
                         _t_prep = time.time()
                         perim = clean_and_densify_polyline(lasso_raw)
                         perim_arr = np.round(np.asarray(perim)).astype(int)
@@ -1935,9 +2019,10 @@ class BasicInferTask(InferTask):
                         prompt_prep_elapsed += time.time() - _t_prep
                         if lasso_image is None:
                             continue
+                        _rp = _run_prediction_flag()
                         if not _safe_interaction(
-                            lambda img=lasso_image, bbox=interaction_bbox: session.add_lasso_interaction(
-                                img, include_interaction=True, interaction_bbox=bbox
+                            lambda img=lasso_image, bbox=interaction_bbox, rp=_rp: session.add_lasso_interaction(
+                                img, include_interaction=True, interaction_bbox=bbox, run_prediction=rp
                             )
                         ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
@@ -1947,8 +2032,8 @@ class BasicInferTask(InferTask):
                 result_json["neg_lassos"]=copy.deepcopy(data["neg_lassos"])
 
                 for lasso_raw in data['neg_lassos']:
-                    if not self.is_prompt_used(lasso_raw, "neg_lassos"):
-                        self.add_prompt(lasso_raw, "neg_lassos")
+                    if not self.is_prompt_used(used_interactions, lasso_raw, "neg_lassos"):
+                        self.add_prompt(used_interactions, lasso_raw, "neg_lassos")
                         _t_prep = time.time()
                         perim = clean_and_densify_polyline(lasso_raw)
                         perim_arr = np.round(np.asarray(perim)).astype(int)
@@ -1958,9 +2043,10 @@ class BasicInferTask(InferTask):
                         prompt_prep_elapsed += time.time() - _t_prep
                         if lasso_image is None:
                             continue
+                        _rp = _run_prediction_flag()
                         if not _safe_interaction(
-                            lambda img=lasso_image, bbox=interaction_bbox: session.add_lasso_interaction(
-                                img, include_interaction=False, interaction_bbox=bbox
+                            lambda img=lasso_image, bbox=interaction_bbox, rp=_rp: session.add_lasso_interaction(
+                                img, include_interaction=False, interaction_bbox=bbox, run_prediction=rp
                             )
                         ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
@@ -1970,8 +2056,8 @@ class BasicInferTask(InferTask):
                 result_json["pos_scribbles"]=copy.deepcopy(data["pos_scribbles"])
 
                 for scribble in data['pos_scribbles']:
-                    if not self.is_prompt_used(scribble, "pos_scribbles"):
-                        self.add_prompt(scribble, "pos_scribbles")
+                    if not self.is_prompt_used(used_interactions, scribble, "pos_scribbles"):
+                        self.add_prompt(used_interactions, scribble, "pos_scribbles")
                         _t_prep = time.time()
                         scribble = clean_and_densify_polyline(scribble)
                         filled_indices = np.round(np.asarray(scribble)).astype(int)
@@ -1987,16 +2073,17 @@ class BasicInferTask(InferTask):
                         )
                         prompt_prep_elapsed += time.time() - _t_prep
                         scribble_start = time.time()
+                        _rp = _run_prediction_flag()
                         if interaction_bbox is not None:
                             if not _safe_interaction(
-                                lambda img=scribble_image, bbox=interaction_bbox: session.add_scribble_interaction(
-                                    scribble_image=img, include_interaction=True, interaction_bbox=bbox
+                                lambda img=scribble_image, bbox=interaction_bbox, rp=_rp: session.add_scribble_interaction(
+                                    scribble_image=img, include_interaction=True, interaction_bbox=bbox, run_prediction=rp
                                 )
                             ):
                                 return f'/code/predictions/reset.nii.gz', final_result_json
                         elif not _safe_interaction(
-                            lambda img=scribble_image: session.add_scribble_interaction(
-                                scribble_image=img, include_interaction=True
+                            lambda img=scribble_image, rp=_rp: session.add_scribble_interaction(
+                                scribble_image=img, include_interaction=True, run_prediction=rp
                             )
                         ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
@@ -2008,8 +2095,8 @@ class BasicInferTask(InferTask):
                 result_json["neg_scribbles"]=copy.deepcopy(data["neg_scribbles"])
 
                 for scribble in data['neg_scribbles']:
-                    if not self.is_prompt_used(scribble, "neg_scribbles"):
-                        self.add_prompt(scribble, "neg_scribbles")
+                    if not self.is_prompt_used(used_interactions, scribble, "neg_scribbles"):
+                        self.add_prompt(used_interactions, scribble, "neg_scribbles")
                         _t_prep = time.time()
                         scribble = clean_and_densify_polyline(scribble)
                         filled_indices = np.round(np.asarray(scribble)).astype(int)
@@ -2024,20 +2111,33 @@ class BasicInferTask(InferTask):
                             img_np.shape[1:], filled_indices, flat_axis
                         )
                         prompt_prep_elapsed += time.time() - _t_prep
+                        _rp = _run_prediction_flag()
                         if interaction_bbox is not None:
                             if not _safe_interaction(
-                                lambda img=scribble_image, bbox=interaction_bbox: session.add_scribble_interaction(
-                                    scribble_image=img, include_interaction=False, interaction_bbox=bbox
+                                lambda img=scribble_image, bbox=interaction_bbox, rp=_rp: session.add_scribble_interaction(
+                                    scribble_image=img, include_interaction=False, interaction_bbox=bbox, run_prediction=rp
                                 )
                             ):
                                 return f'/code/predictions/reset.nii.gz', final_result_json
                         elif not _safe_interaction(
-                            lambda img=scribble_image: session.add_scribble_interaction(
-                                scribble_image=img, include_interaction=False
+                            lambda img=scribble_image, rp=_rp: session.add_scribble_interaction(
+                                scribble_image=img, include_interaction=False, run_prediction=rp
                             )
                         ):
                             return f'/code/predictions/reset.nii.gz', final_result_json
                         logger.info("Add a scribble")
+
+            # Safety net for the replay optimization: degenerate prompts (empty
+            # polylines/scribbles) are counted in _pending_total but skip their
+            # session call, so the flag may never fire and the last real
+            # interaction may have run with run_prediction=False. If anything
+            # was applied but the flag never reached the last pending prompt,
+            # force one prediction now. _predict() is the same internal the
+            # session runs when run_prediction=True (this file already relies
+            # on session internals, e.g. _reset_session()).
+            if 0 < _applied_count < _pending_total:
+                if not _safe_interaction(lambda: session._predict()):
+                    return f'/code/predictions/reset.nii.gz', final_result_json
 
             # --- Retrieve Results ---
             _t_result = time.time()

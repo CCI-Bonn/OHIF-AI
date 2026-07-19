@@ -36,6 +36,7 @@ import {
 } from './stores/toolboxState';
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
+import { getNninterToken, clearNninterToken } from './utils/nninterSession';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
@@ -119,6 +120,11 @@ const commandsModule = ({
       setTimeout(() => runAiSegmentationCommand(), 0);
     }
   }
+
+  // Loop guard for session-expired auto-recovery: if a second recovery is
+  // needed within 5s the pool is thrashing (capacity pressure) — stop and
+  // tell the user instead of ping-ponging claims.
+  let _lastNninterRecoveryTs = 0;
 
   function beginInferenceRunOrQueue(): boolean {
     if (toolboxState.getLocked()) {
@@ -1604,7 +1610,7 @@ const commandsModule = ({
         finishInferenceRun();
       }
     },
-    async initNninter( options: {viewportId: string} = {viewportId: undefined} ){
+    async initNninter( options: {viewportId: string} = {viewportId: undefined}, _sessionRetry = false ){
 
       let { activeViewportId, viewports } = viewportGridService.getState();
       if(options.viewportId !== undefined){
@@ -1635,6 +1641,14 @@ const commandsModule = ({
         toolboxState.setPosNeg(false);
       }
 
+      let nninterToken = '';
+      try {
+        nninterToken = await getNninterToken();
+      } catch (e) {
+        // Server down or old server image without the endpoint — proceed
+        // tokenless; the infer call surfaces its own error/expired handling.
+        console.warn('nninter session claim failed; proceeding without token', e);
+      }
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -1644,6 +1658,7 @@ const commandsModule = ({
         studyInstanceUID: currentDisplaySets.StudyInstanceUID,
         restore_label_idx: false,
         nninter: "init",
+        nninter_token: nninterToken,
       };
 
       // Show notification only on the first initNninter for a new series.
@@ -1674,6 +1689,16 @@ const commandsModule = ({
       try {
         const response = await initPromise;
         if (response.status === 200) {
+          const _initBody = new TextDecoder('utf-8').decode(response.data);
+          if (_initBody.includes('session_expired')) {
+            if (_sessionRetry) {
+              console.warn('Init nninter: session expired again after reclaim; giving up');
+              return response;
+            }
+            clearNninterToken();
+            await getNninterToken();
+            return actions.initNninter(options, true);
+          }
           if (_showNotification) {
             uiNotificationService.show({
               title: 'NNInit',
@@ -1754,6 +1779,14 @@ const commandsModule = ({
         return;
       }
 
+      let nninterToken = '';
+      try {
+        nninterToken = await getNninterToken();
+      } catch (e) {
+        // Server down or old server image without the endpoint — proceed
+        // tokenless; the infer call surfaces its own error/expired handling.
+        console.warn('nninter session claim failed; proceeding without token', e);
+      }
       const url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       const params = {
         largest_cc: false,
@@ -1763,6 +1796,7 @@ const commandsModule = ({
         studyInstanceUID: currentDisplaySets.StudyInstanceUID,
         restore_label_idx: false,
         nninter: 'undo',
+        nninter_token: nninterToken,
       };
       const data = MonaiLabelClient.constructFormData(params, null);
 
@@ -1793,6 +1827,22 @@ const commandsModule = ({
         // allowEmptySeg: undoing the only interaction restores an empty segment,
         // which arrives as a zero-length seg part.
         const { meta, seg } = await parseMultipart(response.data, ct, { allowEmptySeg: true });
+        let _undoOp: unknown = (meta as any).nninter_op;
+        try {
+          _undoOp = JSON.parse(((meta as any).nninter_op ?? 'null') as string);
+        } catch {
+          /* keep raw value */
+        }
+        if (_undoOp === 'session_expired') {
+          clearNninterToken();
+          uiNotificationService.show({
+            title: 'Undo',
+            message: 'nnInteractive session expired — nothing to undo.',
+            type: 'warning',
+            duration: 3000,
+          });
+          return;
+        }
         const afterParse = Date.now();
 
         // --- round-trip timing breakdown (mirrors the normal nninter path) ---
@@ -1937,6 +1987,14 @@ const commandsModule = ({
       const currentDisplaySets = displaySets.filter(e => {
         return e.displaySetInstanceUID == displaySetInstanceUID;
       })[0];
+      let nninterToken = '';
+      try {
+        nninterToken = await getNninterToken();
+      } catch (e) {
+        // Server down or old server image without the endpoint — proceed
+        // tokenless; the infer call surfaces its own error/expired handling.
+        console.warn('nninter session claim failed; proceeding without token', e);
+      }
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -1946,6 +2004,7 @@ const commandsModule = ({
         studyInstanceUID: currentDisplaySets.StudyInstanceUID,
         restore_label_idx: false,
         nninter: "reset",
+        nninter_token: nninterToken,
       };
 
       let data = MonaiLabelClient.constructFormData(params, null);
@@ -2759,6 +2818,14 @@ const commandsModule = ({
         document.dispatchEvent(new Event('measurement-state-changed'));
       }
 
+      let nninterToken = '';
+      try {
+        nninterToken = await getNninterToken();
+      } catch (e) {
+        // Server down or old server image without the endpoint — proceed
+        // tokenless; the infer call surfaces its own error/expired handling.
+        console.warn('nninter session claim failed; proceeding without token', e);
+      }
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -2779,6 +2846,7 @@ const commandsModule = ({
         texts: text_prompts,
         nninter: true,
         nninter_reset_first: _needsReset,
+        nninter_token: nninterToken,
       };
 
       let data = MonaiLabelClient.constructFormData(params, null);
@@ -2816,7 +2884,37 @@ const commandsModule = ({
             const afterPost = Date.now();
             const networkRoundTripMs = afterPost - beforePost;
             const ct = response.headers["content-type"] as string;
-            const { meta, seg } = await parseMultipart(response.data, ct);
+            const { meta, seg } = await parseMultipart(response.data, ct, { allowEmptySeg: true });
+            // Server-side session was evicted/timed out. Reclaim, re-init, and
+            // re-run: measurements still hold the full prompt history, and the
+            // server replays any prompts it hasn't seen (one GPU prediction).
+            let _nninterOp: unknown = (meta as any).nninter_op;
+            try {
+              _nninterOp = JSON.parse(((meta as any).nninter_op ?? 'null') as string);
+            } catch {
+              /* keep raw value */
+            }
+            if (_nninterOp === 'session_expired') {
+              const _now = Date.now();
+              if (_now - _lastNninterRecoveryTs < 5000) {
+                uiNotificationService.show({
+                  title: 'MONAI Label',
+                  message: 'nnInteractive session expired — please segment again.',
+                  type: 'warning',
+                  duration: 4000,
+                });
+                return;
+              }
+              _lastNninterRecoveryTs = _now;
+              console.warn('nninter session expired — reclaiming and replaying prompts');
+              clearNninterToken();
+              await getNninterToken();
+              await actions.initNninter();
+              return actions.nninter(textPrompts);
+            }
+            if (!seg.length) {
+              throw new Error('seg part not found');
+            }
             const afterParse = Date.now();
 
             // --- server-side timing breakdown ---
