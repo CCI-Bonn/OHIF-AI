@@ -17,6 +17,7 @@ import {
 import { PubSubService, Types as OHIFTypes } from '@ohif/core';
 import i18n from '@ohif/i18n';
 import { easeInOutBell, easeInOutBellRelative } from '../../utils/transitions';
+import { buildOverlappingSegLayers } from '../../utils/buildOverlappingSegLayers';
 import { mapROIContoursToRTStructData } from './RTSTRUCT/mapROIContoursToRTStructData';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 import { addColorLUT } from '@cornerstonejs/tools/segmentation/addColorLUT';
@@ -439,15 +440,26 @@ class SegmentationService extends PubSubService {
     // We should parse the segmentation as separate slices to support overlapping segments.
     // This parsing should occur in the CornerstoneJS library adapters.
     // For now, we use the volume returned from the library and chop it here.
-    let firstSegmentedSliceImageId = null;
-    for (let i = 0; i < derivedImages.length; i++) {
-      const voxelManager = derivedImages[i].voxelManager as csTypes.IVoxelManager<number>;
-      const scalarData = voxelManager.getScalarData();
-      voxelManager.setScalarData(scalarData);
+    // When the adapter split overlapping segments into multiple layers, register each
+    // layer as its own labelmap block (multi-block scheme) so MPR mounts one volume per
+    // layer instead of merging everything into a single value-per-voxel volume.
+    const overlappingLayers = buildOverlappingSegLayers({
+      segmentationId,
+      labelMapImages,
+      sourceImageIds: imageIds as string[],
+    });
 
-      // Check if this slice has any non-zero voxels and we haven't found one yet
-      if (!firstSegmentedSliceImageId && scalarData.some(value => value !== 0)) {
-        firstSegmentedSliceImageId = derivedImages[i].referencedImageId;
+    let firstSegmentedSliceImageId = overlappingLayers?.firstSegmentedSliceImageId ?? null;
+    if (!overlappingLayers) {
+      for (let i = 0; i < derivedImages.length; i++) {
+        const voxelManager = derivedImages[i].voxelManager as csTypes.IVoxelManager<number>;
+        const scalarData = voxelManager.getScalarData();
+        voxelManager.setScalarData(scalarData);
+
+        // Check if this slice has any non-zero voxels and we haven't found one yet
+        if (!firstSegmentedSliceImageId && scalarData.some(value => value !== 0)) {
+          firstSegmentedSliceImageId = derivedImages[i].referencedImageId;
+        }
       }
     }
 
@@ -522,11 +534,23 @@ class SegmentationService extends PubSubService {
       segmentationId,
       representation: {
         type: LABELMAP,
-        data: {
-          imageIds: derivedImageIds,
-          // referencedVolumeId: this._getVolumeIdForDisplaySet(referencedDisplaySet),
-          referencedImageIds: imageIds as string[],
-        },
+        data: overlappingLayers
+          ? ({
+              // Primary block only — allImageIds keeps every layer (same invariant as the
+              // AI multi-block scheme, where allImageIds.length > imageIds.length).
+              imageIds: overlappingLayers.primaryImageIds,
+              allImageIds: overlappingLayers.allImageIds,
+              referencedImageIds: imageIds as string[],
+              labelmaps: overlappingLayers.labelmaps,
+              segmentBindings: overlappingLayers.segmentBindings,
+              primaryLabelmapId: overlappingLayers.primaryLabelmapId,
+              sourceRepresentationName: 'binaryLabelmap',
+            } as unknown as cstTypes.LabelmapSegmentationData)
+          : {
+              imageIds: derivedImageIds,
+              // referencedVolumeId: this._getVolumeIdForDisplaySet(referencedDisplaySet),
+              referencedImageIds: imageIds as string[],
+            },
       },
       config: {
         label: segDisplaySet.SeriesDescription,
