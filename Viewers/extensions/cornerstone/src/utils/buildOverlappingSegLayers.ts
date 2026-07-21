@@ -68,9 +68,14 @@ export async function buildOverlappingSegLayers({
   // in adapter (layer-major) order — parity with the legacy hydration loop.
   const layerSegmentSets: Set<number>[] = [];
   let firstSegmentedSliceImageId: string | null = null;
+  // Per layer, per slice: whether the slice holds any segment voxels. Lets the
+  // split pass below skip all-zero slices instead of re-reading them.
+  const layerSliceHasSegment: boolean[][] = [];
   for (const layerImages of labelMapImages) {
     const layerSegments = new Set<number>();
-    for (const image of layerImages) {
+    const sliceHasSegmentFlags: boolean[] = new Array(layerImages.length).fill(false);
+    for (let z = 0; z < layerImages.length; z++) {
+      const image = layerImages[z];
       const voxelManager = image.voxelManager;
       if (!voxelManager) {
         continue;
@@ -86,11 +91,13 @@ export async function buildOverlappingSegLayers({
           sliceHasSegment = true;
         }
       }
+      sliceHasSegmentFlags[z] = sliceHasSegment;
       if (sliceHasSegment && !firstSegmentedSliceImageId) {
         firstSegmentedSliceImageId = image.referencedImageId ?? null;
       }
     }
     layerSegmentSets.push(layerSegments);
+    layerSliceHasSegment.push(sliceHasSegmentFlags);
   }
 
   const maxSegmentIndex = Math.max(
@@ -134,31 +141,33 @@ export async function buildOverlappingSegLayers({
           blocksBySegment.set(segmentIndex, blockImages);
         }
       }
+      const sliceHasSegment = layerSliceHasSegment[layerIndex];
       for (let z = 0; z < sliceCount; z++) {
+        // All-zero source slice: nothing to copy, target blocks stay zeroed.
+        if (!sliceHasSegment[z]) {
+          continue;
+        }
         const sourceData = labelMapImages[layerIndex][z].voxelManager?.getScalarData();
         if (!sourceData) {
           continue;
         }
-        const targetData = new Map<number, ArrayLike<number>>();
+        // Dense value-indexed lookup — cheaper than a Map.get per nonzero voxel.
+        const targetByValue: (ArrayLike<number> | undefined)[] = new Array(maxSegmentIndex + 1);
         for (const [segmentIndex, blockImages] of splitBlocks) {
-          const target = blockImages[z].voxelManager?.getScalarData();
-          if (target) {
-            targetData.set(segmentIndex, target);
-          }
+          targetByValue[segmentIndex] = blockImages[z].voxelManager?.getScalarData();
         }
         for (let i = 0; i < sourceData.length; i++) {
           const value = sourceData[i] as number;
           if (value !== 0) {
-            const target = targetData.get(value);
+            const target = targetByValue[value];
             if (target) {
               (target as number[])[i] = value;
             }
           }
         }
         for (const [segmentIndex, blockImages] of splitBlocks) {
-          const target = targetData.get(segmentIndex);
-          if (target) {
-            blockImages[z].voxelManager?.setScalarData?.(target);
+          if (targetByValue[segmentIndex]) {
+            blockImages[z].voxelManager?.setScalarData?.(targetByValue[segmentIndex]);
           }
         }
       }
