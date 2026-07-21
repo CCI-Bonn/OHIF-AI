@@ -440,13 +440,19 @@ class SegmentationService extends PubSubService {
     // We should parse the segmentation as separate slices to support overlapping segments.
     // This parsing should occur in the CornerstoneJS library adapters.
     // For now, we use the volume returned from the library and chop it here.
-    // When the adapter split overlapping segments into multiple layers, register each
-    // layer as its own labelmap block (multi-block scheme) so MPR mounts one volume per
-    // layer instead of merging everything into a single value-per-voxel volume.
-    const overlappingLayers = buildOverlappingSegLayers({
+    // When the adapter split overlapping segments into multiple layers, normalize them
+    // into per-segment blocks (block b <-> segment b+1, the AI multi-block scheme) so
+    // MPR mounts one volume per block instead of merging everything into a single
+    // value-per-voxel volume, and so the nnInteractive refine flow's block-index
+    // assumptions hold for reloaded SEGs.
+    const overlappingLayers = await buildOverlappingSegLayers({
       segmentationId,
       labelMapImages,
       sourceImageIds: imageIds as string[],
+      segmentIndices: (segDisplaySet.segMetadata?.data ?? [])
+        .map(data => Number(data?.SegmentNumber))
+        .filter(index => Number.isFinite(index) && index > 0),
+      createDerivedImages: ids => imageLoader.createAndCacheDerivedLabelmapImages(ids),
     });
 
     let firstSegmentedSliceImageId = overlappingLayers?.firstSegmentedSliceImageId ?? null;

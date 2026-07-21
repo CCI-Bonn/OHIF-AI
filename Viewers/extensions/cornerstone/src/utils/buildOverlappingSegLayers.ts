@@ -1,14 +1,22 @@
 /**
- * Builds a multi-block labelmap representation for a DICOM-SEG display set whose
- * adapter returned multiple overlap layers (labelMapImages.length > 1).
+ * Normalizes a DICOM-SEG display set with overlapping segments (adapter returned
+ * multiple overlap layers) into the canonical per-segment multi-block labelmap
+ * representation used by AI segmentations: block b holds only segment b+1's voxels
+ * (N images per block, pixel value = segment index), blocks ordered by segment.
  *
- * The SEG adapter packs overlapping segments into layers, each layer holding one
- * derived labelmap image per source slice (pixel value = segment index). Flattening
- * those layers into a single labelmap makes cornerstone's volume path merge them
- * into one value-per-voxel volume, which destroys overlaps in MPR. Registering each
- * layer as its own labelmap block (same scheme buildMultiBlockLabelmapRepresentation
- * uses for AI segmentations) lets the volume render plan mount one volume per layer,
- * preserving overlaps.
+ * The SEG adapter packs overlapping segments into layers greedily — a layer may hold
+ * several non-colliding segments, and layerCount != segmentCount. Registering those
+ * layers directly breaks two things: the MPR volume path merges a single flat layer
+ * into one value-per-voxel volume (overlaps destroyed), and the nnInteractive refine
+ * flow assumes block b <-> segment b+1 when it clears/replaces the active segment's
+ * block. Splitting packed layers into per-segment blocks fixes both: MPR mounts one
+ * volume per block, and refine/undo/export see the exact structure
+ * buildMultiBlockLabelmapRepresentation produces.
+ *
+ * Layers that already hold a single segment are reused as that segment's block;
+ * only packed layers allocate new derived images (via createDerivedImages). Segments
+ * declared in metadata but empty in pixels get an empty block so block indices stay
+ * aligned with segment indices.
  */
 
 interface SegLayerImage {
@@ -29,34 +37,37 @@ interface OverlappingSegLayerResult {
   firstSegmentedSliceImageId: string | null;
 }
 
-export function buildOverlappingSegLayers({
+export async function buildOverlappingSegLayers({
   segmentationId,
   labelMapImages,
   sourceImageIds,
+  segmentIndices = [],
+  createDerivedImages,
 }: {
   segmentationId: string;
   labelMapImages: SegLayerImage[][];
   sourceImageIds: string[];
-}): OverlappingSegLayerResult | null {
+  segmentIndices?: number[];
+  createDerivedImages: (sourceImageIds: string[]) => Promise<SegLayerImage[]> | SegLayerImage[];
+}): Promise<OverlappingSegLayerResult | null> {
   if (!labelMapImages || labelMapImages.length <= 1) {
     return null;
   }
 
-  const primaryLabelmapId = `${segmentationId}-storage-0`;
-  const labelmaps: Record<string, object> = {};
-  const segmentBindings: Record<number, { labelmapId: string; labelValue: number }> = {};
-  const allImageIds: string[] = [];
-  let primaryImageIds: string[] = [];
+  const sliceCount = sourceImageIds.length;
+  if (labelMapImages.some(layerImages => layerImages.length !== sliceCount)) {
+    // Unexpected adapter output — fall back to the legacy flat path rather than
+    // build blocks with a broken image->slice mapping.
+    return null;
+  }
+
+  // Scan each layer once: which segments it holds, and the first segmented slice
+  // in adapter (layer-major) order — parity with the legacy hydration loop.
+  const layerSegmentSets: Set<number>[] = [];
   let firstSegmentedSliceImageId: string | null = null;
-
-  labelMapImages.forEach((layerImages, layerIndex) => {
-    const labelmapId =
-      layerIndex === 0 ? primaryLabelmapId : `${segmentationId}-seg-layer-${layerIndex}`;
-    const layerImageIds: string[] = [];
+  for (const layerImages of labelMapImages) {
     const layerSegments = new Set<number>();
-
     for (const image of layerImages) {
-      layerImageIds.push(image.imageId);
       const voxelManager = image.voxelManager;
       if (!voxelManager) {
         continue;
@@ -76,36 +87,109 @@ export function buildOverlappingSegLayers({
         firstSegmentedSliceImageId = image.referencedImageId ?? null;
       }
     }
+    layerSegmentSets.push(layerSegments);
+  }
+
+  const maxSegmentIndex = Math.max(
+    0,
+    ...segmentIndices.filter(index => Number.isFinite(index) && index > 0),
+    ...layerSegmentSets.flatMap(set => Array.from(set))
+  );
+  if (maxSegmentIndex === 0) {
+    return null;
+  }
+
+  // Assemble one block per segment index. Single-segment layers are reused as-is;
+  // packed layers are split into fresh per-segment blocks; declared-but-empty
+  // segments get an empty block to preserve block index === segmentIndex - 1.
+  const blocksBySegment = new Map<number, SegLayerImage[]>();
+  for (let layerIndex = 0; layerIndex < labelMapImages.length; layerIndex++) {
+    const layerSegments = layerSegmentSets[layerIndex];
+    if (layerSegments.size === 1) {
+      const [segmentIndex] = layerSegments;
+      if (!blocksBySegment.has(segmentIndex)) {
+        blocksBySegment.set(segmentIndex, labelMapImages[layerIndex]);
+      }
+      continue;
+    }
+    if (layerSegments.size > 1) {
+      const splitBlocks = new Map<number, SegLayerImage[]>();
+      for (const segmentIndex of layerSegments) {
+        if (!blocksBySegment.has(segmentIndex)) {
+          const blockImages = await createDerivedImages(sourceImageIds);
+          splitBlocks.set(segmentIndex, blockImages);
+          blocksBySegment.set(segmentIndex, blockImages);
+        }
+      }
+      for (let z = 0; z < sliceCount; z++) {
+        const sourceData = labelMapImages[layerIndex][z].voxelManager?.getScalarData();
+        if (!sourceData) {
+          continue;
+        }
+        const targetData = new Map<number, ArrayLike<number>>();
+        for (const [segmentIndex, blockImages] of splitBlocks) {
+          const target = blockImages[z].voxelManager?.getScalarData();
+          if (target) {
+            targetData.set(segmentIndex, target);
+          }
+        }
+        for (let i = 0; i < sourceData.length; i++) {
+          const value = sourceData[i] as number;
+          if (value !== 0) {
+            const target = targetData.get(value);
+            if (target) {
+              (target as number[])[i] = value;
+            }
+          }
+        }
+        for (const [segmentIndex, blockImages] of splitBlocks) {
+          const target = targetData.get(segmentIndex);
+          if (target) {
+            blockImages[z].voxelManager?.setScalarData?.(target);
+          }
+        }
+      }
+    }
+  }
+
+  const labelmaps: Record<string, object> = {};
+  const segmentBindings: Record<number, { labelmapId: string; labelValue: number }> = {};
+  const allImageIds: string[] = [];
+  const primaryLabelmapId = `${segmentationId}-storage-0`;
+  let primaryImageIds: string[] = [];
+
+  for (let segmentIndex = 1; segmentIndex <= maxSegmentIndex; segmentIndex++) {
+    let blockImages = blocksBySegment.get(segmentIndex);
+    if (!blockImages) {
+      blockImages = await createDerivedImages(sourceImageIds);
+    }
+    const blockImageIds = blockImages.map(image => image.imageId);
 
     // Cornerstone maps labelmap image k -> referencedImageIds[k] by index, so derive
-    // the reference list from each layer image's own referencedImageId (order-safe);
+    // the reference list from each block image's own referencedImageId (order-safe);
     // fall back to the source ordering if any is missing.
-    const refIds = layerImages.map(image => image.referencedImageId);
+    const refIds = blockImages.map(image => image.referencedImageId);
     const referencedImageIds =
-      refIds.length === sourceImageIds.length && refIds.every(Boolean)
+      refIds.length === sliceCount && refIds.every(Boolean)
         ? (refIds as string[])
         : sourceImageIds;
 
+    const labelmapId =
+      segmentIndex === 1 ? primaryLabelmapId : `${segmentationId}-private-${segmentIndex}`;
     labelmaps[labelmapId] = {
       labelmapId,
       type: 'stack',
-      imageIds: layerImageIds,
+      imageIds: blockImageIds,
       referencedImageIds,
       labelToSegmentIndex: {},
     };
+    segmentBindings[segmentIndex] = { labelmapId, labelValue: segmentIndex };
 
-    if (layerIndex === 0) {
-      primaryImageIds = layerImageIds;
+    if (segmentIndex === 1) {
+      primaryImageIds = blockImageIds;
     }
-    allImageIds.push(...layerImageIds);
-
-    for (const segmentIndex of layerSegments) {
-      // A segment lives wholly in one layer; keep the first binding if ever duplicated.
-      if (!segmentBindings[segmentIndex]) {
-        segmentBindings[segmentIndex] = { labelmapId, labelValue: segmentIndex };
-      }
-    }
-  });
+    allImageIds.push(...blockImageIds);
+  }
 
   return {
     labelmaps,
