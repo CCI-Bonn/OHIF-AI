@@ -54,7 +54,7 @@ fairscale
 jsonlines
 nltk
 pycocoevalcap
-nninteractive
+nninteractive==2.5.1
 voxtell
 huggingface_hub
 
