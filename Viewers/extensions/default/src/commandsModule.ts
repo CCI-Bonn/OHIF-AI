@@ -1384,7 +1384,12 @@ const commandsModule = ({
         promiseMessages: {
           loading: 'Processing segmentation...',
           success: () => 'Run Segmentation - Successful',
-          error: (error) => `Run Segmentation - Failed: ${error.message || 'Unknown error'}`,
+          // Prod: no red seg-failure alert for end users — log it and quietly
+          // dismiss the "Processing..." toast (null suppresses the error toast).
+          error: (error) => {
+            console.error('Run Segmentation failed:', error);
+            return null;
+          },
         },
       });
 
@@ -2873,7 +2878,12 @@ const commandsModule = ({
         promiseMessages: {
           loading: 'Processing nninter segmentation...',
           success: () => 'Run Segmentation - Successful',
-          error: (error) => `Run Segmentation - Failed: ${error.message || 'Unknown error'}`,
+          // Prod: no red seg-failure alert for end users — log it and quietly
+          // dismiss the "Processing..." toast (null suppresses the error toast).
+          error: (error) => {
+            console.error('Run Segmentation failed:', error);
+            return null;
+          },
         },
       });
 
