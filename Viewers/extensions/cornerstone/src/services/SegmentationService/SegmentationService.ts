@@ -561,6 +561,16 @@ class SegmentationService extends PubSubService {
       config: {
         label: segDisplaySet.SeriesDescription,
         segments,
+        // Full referenced-series UID for the AI refine flow's "existing
+        // segmentation" detection. The exported SEG smuggles this UID through
+        // SegmentAlgorithmType, but that is a DICOM CS field (16-char limit) and
+        // arrives truncated on reload — so refining a reloaded SEG failed the
+        // series match, treated the segmentation as new, and wiped every other
+        // segment. Stamping the in-memory UID here short-circuits the truncated
+        // per-segment fallback.
+        cachedStats: {
+          seriesInstanceUid: referencedDisplaySet.SeriesInstanceUID,
+        },
       },
     };
 
