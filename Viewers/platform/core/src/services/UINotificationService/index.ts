@@ -95,7 +95,8 @@ class UINotificationService {
     promiseMessages?: {
       loading?: string;
       success?: string | ((data: any) => string);
-      error?: string | ((error: any) => string);
+      // A function may return null to suppress the error toast entirely.
+      error?: string | ((error: any) => string | null);
     };
     id?: string;
     allowDuplicates?: boolean;
@@ -144,18 +145,23 @@ class UINotificationService {
               ? promiseMessages.error(error)
               : promiseMessages.error || 'Error';
 
-          serviceImplementation._show({
-            title,
-            message: errorMessage,
-            type: 'error',
-            duration,
-            position,
-            autoClose,
-            id: id ? `${id}-error` : undefined,
-            allowDuplicates,
-            deduplicationInterval,
-            action,
-          });
+          // An error callback may return null/undefined to suppress the
+          // user-facing error toast (e.g. prod flows that log to console
+          // instead); the loading toast is still dismissed.
+          if (errorMessage != null) {
+            serviceImplementation._show({
+              title,
+              message: errorMessage,
+              type: 'error',
+              duration,
+              position,
+              autoClose,
+              id: id ? `${id}-error` : undefined,
+              allowDuplicates,
+              deduplicationInterval,
+              action,
+            });
+          }
           this.hide(loadingId);
         }
       );
