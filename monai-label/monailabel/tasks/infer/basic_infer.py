@@ -170,15 +170,40 @@ try:
         try:
             _wlog.info("nnInteractive warmup: starting...")
             _artifact_loader.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
-            ran = _artifact_loader.warmup()
+            # nnInteractive >= 2.5 warmup() returns None (it no-ops internally
+            # when there is nothing to warm), so don't branch on a return value.
+            _artifact_loader.warmup()
             _NNINTER_ARTIFACTS["network"] = _artifact_loader.network
-            _wlog.info(f"nnInteractive warmup: {'done' if ran else 'skipped (torch.compile not enabled)'}.")
+            _wlog.info("nnInteractive warmup: done.")
         except Exception:
             _wlog.exception("nnInteractive warmup failed (non-fatal)")
 
     threading.Thread(target=_warmup_session, daemon=True).start()
 except Exception as _warmup_err:
     print(f"nnInteractive warmup failed (non-fatal): {_warmup_err}")
+
+
+def _drain_nninter_preprocess(session, timeout: float = 120.0) -> None:
+    """Block until the session's background set_image preprocessing completes.
+
+    Mirrors the upstream nnInteractive server, which always follows set_image with
+    _finish_preprocessing_and_initialize_interactions(). An un-awaited preprocess
+    future must never be left behind: set_image submits _background_set_image to the
+    session's 2-worker executor, and that task itself submits _initialize_interactions
+    to the SAME pool and blocks on its result. Submitting a second set_image while one
+    is still running puts _background_set_image on both workers, each waiting on a
+    queued child task that can never start — the pool deadlocks and the work queue
+    grows forever. (Note: executor._work_queue.qsize() counts only QUEUED tasks, not
+    the one currently running, so a qsize()==0 check cannot detect this.)
+
+    The bounded result() keeps a wedged CUDA/torch op from hanging the request
+    forever; on timeout the caller's exception path rebuilds the executor.
+    """
+    future = getattr(session, "preprocess_future", None)
+    if future is None:
+        return
+    future.result(timeout=timeout)
+    session.preprocess_future = None
 
 # Config for the text prompt detector, it is disabled for now
 #config_path = '/code/dino_configs/dino.py'
@@ -1392,6 +1417,13 @@ class BasicInferTask(InferTask):
                         logger.info(f"init set_image (uid_changed={_uid_changed}, session_needs_image={_session_needs_image})")
                         session.set_image(img_np)
                         session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+                        # Await the background preprocessing before returning (upstream
+                        # server pattern). Leaving the future un-awaited allowed a second
+                        # set_image (e.g. quick re-init on layout change) to deadlock the
+                        # session executor — see _drain_nninter_preprocess.
+                        _t_pre = time.time()
+                        _drain_nninter_preprocess(session)
+                        logger.info(f"[timing] init set_image preprocess: {time.time()-_t_pre:.3f}s")
                     except Exception as init_error:
                         logger.error(f"Failed to initialize session: {init_error}")
                         logger.info("Prefer fail!!")
@@ -1847,42 +1879,25 @@ class BasicInferTask(InferTask):
                 nonlocal nninter_core_elapsed, nninter_first_interaction_ts
                 try:
                     if session.original_image_shape is None or session.preprocessed_image is None:
-                        # Edge cases: a) a lot of requests are pending, while changing layouts b) without proper image initialization
-                        # For these cases, if possible, directly update the iamge and target buffer on the fly.
-                        # If that's not possible, shutdown the executor and assign new one.
-                        logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
-                        logger.info("Set image and target buffer before interaction")
+                        # Session has no usable image (interaction raced ahead of init, or a
+                        # prior failure reset the session). Repair it inline: drain the
+                        # in-flight preprocess if one exists, else submit and await a fresh
+                        # set_image. NEVER submit while one may still be running — qsize()
+                        # counts only queued tasks (not the running one), so the old
+                        # qsize()==0 gate could double-submit and deadlock the 2-worker
+                        # executor (see _drain_nninter_preprocess). Failures/timeouts fall
+                        # through to the except below, which rebuilds the executor.
+                        logger.info(f"Recovering session image (queued tasks: {session.executor._work_queue.qsize()})")
                         if seriesInstanceUID is not None and image_cache["seriesInstanceUID"] != seriesInstanceUID:
                             logger.info("Series Instance UID changed -> update")
                             image_cache["seriesInstanceUID"] = seriesInstanceUID
-                        # Do NOT gate on preprocess_future being None: a stale future left over
-                        # from a shut-down executor would otherwise skip set_image, and we'd wait
-                        # the full 5s for a preprocess that never runs (then loop on shutdown).
-                        # set_image submits a fresh preprocess future.
-                        if session.executor._work_queue.qsize() == 0:
+                        _t_recover = time.time()
+                        _drain_nninter_preprocess(session)
+                        if session.preprocessed_image is None:
                             session.set_image(img_np)
                             session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
-
-                        # Wait until session.preprocessed_image is not None
-                        max_wait_time = 5.0  # Maximum wait time in seconds
-                        wait_interval = 0.1   # Check every 100ms
-                        waited_time = 0.0
-
-                        while session.preprocessed_image is None and waited_time < max_wait_time:
-                            time.sleep(wait_interval)
-                            waited_time += wait_interval
-
-                        if session.preprocessed_image is None:
-                            logger.warning(f"Session preprocessed_image still None after {max_wait_time}s wait")
-                            logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
-                            logger.warning("Shutdown executor and assign again")
-                            session.executor.shutdown(wait=False, cancel_futures=True)
-                            session.executor = ThreadPoolExecutor(max_workers=2)
-                            session._reset_session()
-                            logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
-                            return False
-                        else:
-                            logger.info(f"Session preprocessed_image ready after {waited_time:.2f}s")
+                            _drain_nninter_preprocess(session)
+                        logger.info(f"Session image ready after {time.time()-_t_recover:.2f}s")
                     logger.info(f"Check queue size: {session.executor._work_queue.qsize()}")
                     t_before = time.time()
                     if nninter_first_interaction_ts is None:
