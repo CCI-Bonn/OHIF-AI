@@ -1,8 +1,11 @@
 /**
- * Normalizes a DICOM-SEG display set with overlapping segments (adapter returned
- * multiple overlap layers) into the canonical per-segment multi-block labelmap
- * representation used by AI segmentations: block b holds only segment b+1's voxels
- * (N images per block, pixel value = segment index), blocks ordered by segment.
+ * Normalizes a DICOM-SEG display set into the canonical per-segment multi-block
+ * labelmap representation used by AI segmentations: block b holds only segment
+ * b+1's voxels (N images per block, pixel value = segment index), blocks ordered
+ * by segment. Applies to multi-layer SEGs (overlapping segments) and to
+ * single-layer SEGs whose one layer packs multiple segments (or a segment
+ * numbered != 1); only a single layer holding exactly segment 1 keeps the
+ * legacy flat representation.
  *
  * The SEG adapter packs overlapping segments into layers greedily — a layer may hold
  * several non-colliding segments, and layerCount != segmentCount. Registering those
@@ -50,7 +53,7 @@ export async function buildOverlappingSegLayers({
   segmentIndices?: number[];
   createDerivedImages: (sourceImageIds: string[]) => Promise<SegLayerImage[]> | SegLayerImage[];
 }): Promise<OverlappingSegLayerResult | null> {
-  if (!labelMapImages || labelMapImages.length <= 1) {
+  if (!labelMapImages?.length) {
     return null;
   }
 
@@ -96,6 +99,16 @@ export async function buildOverlappingSegLayers({
     ...layerSegmentSets.flatMap(set => Array.from(set))
   );
   if (maxSegmentIndex === 0) {
+    return null;
+  }
+
+  // A single layer holding only segment 1 already satisfies the canonical
+  // block b <-> segment b+1 invariant — keep the legacy path. Any other single
+  // layer (multiple segments packed together, or one segment numbered != 1)
+  // must be split: the refine flow clears/replaces block segmentNumber-1, so a
+  // shared block makes refines stack on top of the old mask (segment >= 2) or
+  // wipe the other segments (segment 1).
+  if (labelMapImages.length === 1 && maxSegmentIndex <= 1) {
     return null;
   }
 
