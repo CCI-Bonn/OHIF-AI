@@ -103,6 +103,47 @@ export default async function init({
   window.extensionManager = extensionManager;
   window.commandsManager = commandsManager;
 
+  // Single-click window activation: when this browser window gains OS focus,
+  // activate the viewport pane under the mouse cursor. The first click on an
+  // unfocused window may be swallowed by the OS/window manager (it only
+  // focuses the window), which otherwise forces a second click before
+  // hotkeys target the intended pane.
+  const lastMousePosition = { x: NaN, y: NaN };
+  const trackMousePosition = (event: MouseEvent) => {
+    lastMousePosition.x = event.clientX;
+    lastMousePosition.y = event.clientY;
+  };
+  const activateViewportUnderCursor = () => {
+    const { viewports, activeViewportId } = viewportGridService.getState() || {};
+    if (!viewports || Number.isNaN(lastMousePosition.x)) {
+      return;
+    }
+    const viewportIds =
+      viewports instanceof Map ? [...viewports.keys()] : Object.keys(viewports);
+    for (const viewportId of viewportIds) {
+      const element = cornerstoneViewportService.getCornerstoneViewport(viewportId)?.element;
+      if (!element) {
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      const inside =
+        lastMousePosition.x >= rect.left &&
+        lastMousePosition.x <= rect.right &&
+        lastMousePosition.y >= rect.top &&
+        lastMousePosition.y <= rect.bottom;
+      if (inside) {
+        if (viewportId !== activeViewportId) {
+          viewportGridService.setActiveViewportId(viewportId);
+        }
+        break;
+      }
+    }
+  };
+  document.addEventListener('mousemove', trackMousePosition, true);
+  // Defer so the focus transition (and a delivered click's own pane
+  // activation) settles first; ours then confirms or fills the gap.
+  window.addEventListener('focus', () => setTimeout(activateViewportUnderCursor, 0));
+
   if (appConfig.showCPUFallbackMessage && cornerstone.getShouldUseCPURendering()) {
     _showCPURenderingModal(uiModalService, hangingProtocolService);
   }

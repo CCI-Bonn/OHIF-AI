@@ -28,7 +28,7 @@ interface ButtonProps {
  * and display various tools and their corresponding options
  */
 export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { buttonSectionId: string; title: string; defaultOpen?: boolean }) {
-  const { servicesManager, commandsManager } = useSystem();
+  const { servicesManager, commandsManager, hotkeysManager } = useSystem();
   const { t } = useTranslation();
 
   const { toolbarService, customizationService, segmentationService, viewportGridService, measurementService } = servicesManager.services;
@@ -174,53 +174,46 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
       return;
     }
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const activeElement = document.activeElement;
-      const isInputField = activeElement?.tagName === 'INPUT' ||
-                           activeElement?.tagName === 'TEXTAREA' ||
-                           (activeElement as HTMLElement)?.contentEditable === 'true';
-      if (isInputField) return;
+    // Plain, structured-cloneable summary of a keydown — also what gets
+    // forwarded to sibling OHIF windows via hotkeysManager.
+    type AiKeyDescriptor = { key: string; ctrlKey: boolean; shiftKey: boolean };
 
-      switch (event.key.toLowerCase()) {
+    // Keys owned by the AI toolbox (must stay in sync with runAiKeyAction).
+    const matchesAiKey = ({ key, ctrlKey, shiftKey }: AiKeyDescriptor) => {
+      const k = key.toLowerCase();
+      if (k === 'z') {
+        return ctrlKey && !shiftKey;
+      }
+      return ['q', 't', 'p', 'b', 's', 'l', 'm', 'r', 'o', 'delete'].includes(k);
+    };
+
+    const runAiKeyAction = (descriptor: AiKeyDescriptor) => {
+      switch (descriptor.key.toLowerCase()) {
         case 'q': {
-          event.preventDefault();
-          event.stopPropagation();
           const newLiveMode = !toolboxState.getLiveMode();
           setLiveMode(newLiveMode);
           toolboxState.setLiveMode(newLiveMode);
           break;
         }
         case 't': {
-          event.preventDefault();
-          event.stopPropagation();
           const newPosNeg = !toolboxState.getPosNeg();
           setPosNeg(newPosNeg);
           toolboxState.setPosNeg(newPosNeg);
           break;
         }
         case 'p':
-          event.preventDefault();
-          event.stopPropagation();
           onInteractionRef.current?.({ itemId: 'Probe2' });
           break;
         case 'b':
-          event.preventDefault();
-          event.stopPropagation();
           onInteractionRef.current?.({ itemId: 'RectangleROI2' });
           break;
         case 's':
-          event.preventDefault();
-          event.stopPropagation();
           onInteractionRef.current?.({ itemId: 'PlanarFreehandROI2' });
           break;
         case 'l':
-          event.preventDefault();
-          event.stopPropagation();
           onInteractionRef.current?.({ itemId: 'PlanarFreehandROI3' });
           break;
         case 'm': {
-          event.preventDefault();
-          event.stopPropagation();
           const { activeViewportId: avId } = viewportGridService.getState();
           const activeSeg = segmentationService.getActiveSegmentation(avId)
             ?? segmentationService.getSegmentations()?.[0];
@@ -234,8 +227,6 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
           break;
         }
         case 'r': {
-          event.preventDefault();
-          event.stopPropagation();
           const { activeViewportId: avId } = viewportGridService.getState();
           const activeSeg = segmentationService.getActiveSegmentation(avId);
           const activeSeg2 = segmentationService.getActiveSegment(avId);
@@ -248,8 +239,6 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
           break;
         }
         case 'o': {
-          event.preventDefault();
-          event.stopPropagation();
           const next = !toolboxState.getPromptsVisible();
           toolboxState.setPromptsVisible(next);
           const AI_PROMPT_TOOLS = ['Probe2', 'RectangleROI2', 'PlanarFreehandROI2', 'PlanarFreehandROI3'];
@@ -261,16 +250,12 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
           break;
         }
         case 'z': {
-          if (event.ctrlKey && !event.shiftKey) {
-            event.preventDefault();
-            event.stopPropagation();
+          if (descriptor.ctrlKey && !descriptor.shiftKey) {
             commandsManager.run('undoNninter');
           }
           break;
         }
         case 'delete': {
-          event.preventDefault();
-          event.stopPropagation();
           const { activeViewportId: avId } = viewportGridService.getState();
           const activeSeg = segmentationService.getActiveSegmentation(avId);
           const activeSeg2 = segmentationService.getActiveSegment(avId);
@@ -290,10 +275,45 @@ export function Toolbox({ buttonSectionId, title, defaultOpen = true }: { button
       }
     };
 
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const activeElement = document.activeElement;
+      const isInputField = activeElement?.tagName === 'INPUT' ||
+                           activeElement?.tagName === 'TEXTAREA' ||
+                           (activeElement as HTMLElement)?.contentEditable === 'true';
+      if (isInputField) return;
+
+      const descriptor: AiKeyDescriptor = {
+        key: event.key,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+      };
+      if (!matchesAiKey(descriptor)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      // Same follow-the-mouse routing as Mousetrap hotkeys: act here unless
+      // a sibling OHIF window has the cursor — then hand the key to it.
+      if (hotkeysManager.shouldRunLocally()) {
+        runAiKeyAction(descriptor);
+      } else {
+        hotkeysManager.forwardKeyEvent(descriptor);
+      }
+    };
+
+    // Keys forwarded from a sibling window while the cursor is over this one.
+    const unsubscribeForwarded = hotkeysManager.subscribeForwardedKeys(descriptor => {
+      if (matchesAiKey(descriptor)) {
+        runAiKeyAction(descriptor);
+      }
+    });
+
     // Use capture phase so this fires before Mousetrap (bubble phase), preventing
     // global hotkey bindings from also firing for keys we own in the AI toolbox.
     document.addEventListener('keydown', handleKeyDown, true);
-    return () => document.removeEventListener('keydown', handleKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true);
+      unsubscribeForwarded();
+    };
   }, [hotkeysDisabled, isAIToolBox]);
 
 

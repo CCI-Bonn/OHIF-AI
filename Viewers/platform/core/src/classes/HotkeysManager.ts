@@ -18,6 +18,15 @@ export class HotkeysManager {
   private isEnabled: boolean = true;
   public hotkeyDefinitions: Record<string, any> = {};
   public hotkeyDefaults: any[] = [];
+  /** True while the mouse cursor is inside this browser window. */
+  private _hasMouse: boolean = false;
+  /** Channel connecting all same-origin OHIF windows for hotkey routing. */
+  private _channel: BroadcastChannel | null = null;
+  /** Instance ids of other OHIF windows currently on the channel. */
+  private _siblings: Set<string> = new Set();
+  private _instanceId: string = Math.random().toString(36).slice(2);
+  /** Handlers for key descriptors forwarded from sibling windows. */
+  private _keySubscribers: Set<(descriptor) => void> = new Set();
 
   constructor(
     commandsManager: AppTypes.CommandsManager,
@@ -76,6 +85,7 @@ export class HotkeysManager {
    *
    */
   destroy() {
+    this._teardownRouting();
     this.hotkeyDefaults = [];
     this.hotkeyDefinitions = {};
     mouseTrapAPI.reset();
@@ -202,6 +212,186 @@ export class HotkeysManager {
     };
   }
 
+  private _onMousePresent = () => {
+    this._hasMouse = true;
+  };
+
+  private _onMouseLeave = () => {
+    this._hasMouse = false;
+  };
+
+  private _onPageHide = () => {
+    this._channel?.postMessage({ type: 'bye', id: this._instanceId });
+  };
+
+  /**
+   * Re-announces this window on the channel. The startup hello can be missed
+   * when several windows (re)load around the same time or before the app has
+   * bound its hotkeys, and nothing else would ever heal the mesh — so we also
+   * announce on window focus and on becoming visible. Receivers use a Set, so
+   * repeated hellos are idempotent.
+   */
+  private _announcePresence = () => {
+    this._channel?.postMessage({ type: 'hello', id: this._instanceId });
+  };
+
+  // Tab-switching away fires no mouseleave, so _hasMouse would otherwise
+  // stay stuck true and a hidden tab could execute (or double-execute)
+  // forwarded commands invisibly.
+  private _onVisibilityChange = () => {
+    if (document.hidden) {
+      this._hasMouse = false;
+    } else {
+      this._announcePresence();
+    }
+  };
+
+  // bfcache restore skips our pagehide 'bye' handling on the way back in:
+  // the restored page still has its old channel/listeners and stale
+  // _siblings, while siblings have already forgotten it. Re-form the mesh.
+  private _onPageShow = (event: PageTransitionEvent) => {
+    if (event.persisted) {
+      this._siblings.clear();
+      this._channel?.postMessage({ type: 'hello', id: this._instanceId });
+    }
+  };
+
+  private _onChannelMessage = (event: MessageEvent) => {
+    const { type, id, commandName, commandOptions, context, descriptor } = event.data || {};
+    switch (type) {
+      case 'hello':
+        if (id) {
+          this._siblings.add(id);
+          this._channel?.postMessage({ type: 'hello-ack', id: this._instanceId });
+        }
+        break;
+      case 'hello-ack':
+        if (id) {
+          this._siblings.add(id);
+        }
+        break;
+      case 'bye':
+        this._siblings.delete(id);
+        break;
+      case 'run':
+        // Execute only if this window is the one under the cursor and its
+        // hotkeys are not paused (e.g. hotkey-recording dialog open).
+        // Deliberately NOT gated on document.hidden: Linux Chrome can
+        // misreport a visible unfocused window as hidden (occlusion
+        // tracking), which would drop legitimate keys. _hasMouse alone is
+        // safe — it is cleared on visibilitychange→hidden and only a real
+        // mousemove over the page re-arms it, which a genuinely hidden tab
+        // can never receive.
+        if (this._hasMouse && this.isEnabled) {
+          this._commandsManager.runCommand(commandName, { ...commandOptions }, context);
+        }
+        break;
+      case 'key':
+        // Same gate as 'run', but for raw key descriptors forwarded by
+        // components that bind their own keydown listeners outside Mousetrap
+        // (e.g. the AI toolbox). Subscribers decide what the key does.
+        if (this._hasMouse && this.isEnabled) {
+          this._keySubscribers.forEach(handler => handler(descriptor));
+        }
+        break;
+    }
+  };
+
+  /**
+   * Lazily joins the cross-window hotkey routing channel and starts tracking
+   * whether the mouse cursor is inside this window. Mouse events fire in
+   * windows without keyboard focus, which is what makes routing possible.
+   * No-op when BroadcastChannel is unavailable (tests/older browsers).
+   */
+  private _ensureRouting() {
+    if (this._channel || typeof BroadcastChannel === 'undefined') {
+      return;
+    }
+    this._channel = new BroadcastChannel('ohif-hotkeys');
+    this._channel.onmessage = this._onChannelMessage;
+    this._announcePresence();
+    document.documentElement.addEventListener('mouseenter', this._onMousePresent);
+    document.documentElement.addEventListener('mouseleave', this._onMouseLeave);
+    document.addEventListener('mousemove', this._onMousePresent);
+    window.addEventListener('pagehide', this._onPageHide);
+    document.addEventListener('visibilitychange', this._onVisibilityChange);
+    window.addEventListener('pageshow', this._onPageShow);
+    window.addEventListener('focus', this._announcePresence);
+    // Console-inspectable routing state for field debugging.
+    (window as any).__ohifHotkeysRouting = () => ({
+      instanceId: this._instanceId,
+      siblings: [...this._siblings],
+      hasMouse: this._hasMouse,
+      enabled: this.isEnabled,
+      keySubscribers: this._keySubscribers.size,
+      visibilityState: document.visibilityState,
+      focused: document.hasFocus(),
+    });
+  }
+
+  /**
+   * Runs a hotkey command in the window that currently contains the mouse
+   * cursor. Local execution when the cursor is here or when no sibling OHIF
+   * windows are known (preserves single-window behavior, e.g. Alt+Tab focus).
+   */
+  private _runOrForward(commandName, commandOptions = {}, context, evt) {
+    const shouldForward = this._channel && this._siblings.size > 0 && !this._hasMouse;
+    if (!shouldForward) {
+      this._commandsManager.runCommand(commandName, { evt, ...commandOptions }, context);
+      return;
+    }
+    // evt is a DOM event and cannot cross BroadcastChannel (not cloneable);
+    // preventDefault/stopPropagation already ran in this window.
+    this._channel.postMessage({ type: 'run', commandName, commandOptions, context });
+  }
+
+  /**
+   * Whether a keyboard handler in this window should act locally. False only
+   * when sibling OHIF windows exist and the mouse cursor is not inside this
+   * one — in that case forward the key with `forwardKeyEvent` instead.
+   * For components that bind their own keydown listeners outside Mousetrap.
+   */
+  public shouldRunLocally(): boolean {
+    return !(this._channel && this._siblings.size > 0 && !this._hasMouse);
+  }
+
+  /**
+   * Forwards a plain key descriptor ({key, ctrlKey, ...} — structured-cloneable,
+   * never the DOM event itself) to sibling windows; the one under the cursor
+   * delivers it to its `subscribeForwardedKeys` handlers.
+   */
+  public forwardKeyEvent(descriptor): void {
+    this._channel?.postMessage({ type: 'key', descriptor });
+  }
+
+  /**
+   * Registers a handler for key descriptors forwarded from sibling windows.
+   * Returns an unsubscribe function.
+   */
+  public subscribeForwardedKeys(handler: (descriptor) => void): () => void {
+    this._keySubscribers.add(handler);
+    return () => this._keySubscribers.delete(handler);
+  }
+
+  private _teardownRouting() {
+    if (!this._channel) {
+      return;
+    }
+    this._channel.postMessage({ type: 'bye', id: this._instanceId });
+    this._channel.close();
+    this._channel = null;
+    this._siblings.clear();
+    this._hasMouse = false;
+    document.documentElement.removeEventListener('mouseenter', this._onMousePresent);
+    document.documentElement.removeEventListener('mouseleave', this._onMouseLeave);
+    document.removeEventListener('mousemove', this._onMousePresent);
+    window.removeEventListener('pagehide', this._onPageHide);
+    document.removeEventListener('visibilitychange', this._onVisibilityChange);
+    window.removeEventListener('pageshow', this._onPageShow);
+    window.removeEventListener('focus', this._announcePresence);
+    delete (window as any).__ohifHotkeysRouting;
+  }
+
   /**
    * (Unbinds and) binds the specified command to one or more key combinations.
    * When the hotkey combination is triggered, the command name and active contexts
@@ -260,10 +450,11 @@ export class HotkeysManager {
     const isKeyArray = keys instanceof Array;
     const combinedKeys = isKeyArray ? keys.join('+') : keys;
 
+    this._ensureRouting();
     mouseTrapAPI.bind(combinedKeys, evt => {
       evt.preventDefault();
       evt.stopPropagation();
-      this._commandsManager.runCommand(commandName, { evt, ...commandOptions }, context);
+      this._runOrForward(commandName, commandOptions, context, evt);
     });
   }
 
