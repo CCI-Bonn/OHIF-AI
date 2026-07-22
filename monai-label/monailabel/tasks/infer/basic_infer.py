@@ -31,6 +31,7 @@ from monai.inferers import Inferer, SimpleInferer, SlidingWindowInferer
 from monai.utils import deprecated
 
 import pathlib
+import threading
 from pydicom.filereader import dcmread
 import traceback
 
@@ -1172,7 +1173,8 @@ class BasicInferTask(InferTask):
             # Restored full object buffer, cropped to its tight non-zero bbox
             # (identical packaging to the normal nninter result path).
             _t_result = time.time()
-            pred = session.target_buffer.clone().numpy()  # (Z, Y, X) uint8
+            # Zero-copy view + crop-only copy (same pattern as the normal result path).
+            pred = session.target_buffer.numpy()  # (Z, Y, X) uint8, VIEW
             pred_full_shape = list(pred.shape)
             z_nz = np.where(np.any(pred, axis=(1, 2)))[0]
             if z_nz.size > 0:
@@ -1181,7 +1183,7 @@ class BasicInferTask(InferTask):
                 z0, z1 = int(z_nz[0]), int(z_nz[-1]) + 1
                 y0, y1 = int(y_nz[0]), int(y_nz[-1]) + 1
                 x0, x1 = int(x_nz[0]), int(x_nz[-1]) + 1
-                pred = pred[z0:z1, y0:y1, x0:x1]
+                pred = np.ascontiguousarray(pred[z0:z1, y0:y1, x0:x1])  # copy of crop only
                 pred_offset = [z0, y0, x0]
             else:
                 # Undid the only interaction: object is now empty. Send an empty
@@ -1287,10 +1289,17 @@ class BasicInferTask(InferTask):
             logger.info("img_np cache hit — skipping all DICOM I/O")
         else:
             # Full I/O: directory scan + header reads needed for metadata / pixel load.
+            _t_scan = time.time()
             reader = sitk.ImageSeriesReader()
             dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
+            _scan_elapsed = time.time() - _t_scan
+            _t_hdr = time.time()
             dcm_img_sample   = dcmread(dicom_filenames[0], stop_before_pixels=True)
             dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
+            logger.info(
+                f"[timing] dicom_scan={_scan_elapsed:.3f}s  header_read={time.time()-_t_hdr:.3f}s  "
+                f"files={len(dicom_filenames)}"
+            )
 
             # Authoritative UID from DICOM tag (0020,000E); path-derived UID is unreliable
             # when path has trailing slash or a non-UID last component.
@@ -1358,10 +1367,26 @@ class BasicInferTask(InferTask):
                     _t_disk = time.time()
                     img_np = np.load(_disk_cache_path)
                     _disk_hit = True
-                    logger.info(f"[timing] img_np disk cache hit: {time.time()-_t_disk:.3f}s  shape={img_np.shape}")
+                    if img_np.dtype == np.float64:
+                        # Legacy float64 cache file: downcast now (same rationale as the
+                        # fresh-convert path) and rewrite the cache at float32 in the
+                        # background so the next cold start reads half the bytes.
+                        img_np = img_np.astype(np.float32)
+
+                        def _rewrite_cache(path=_disk_cache_path, arr=img_np):
+                            try:
+                                np.save(path, arr)
+                                logger.info(f"[timing] rewrote disk cache as float32: {path}")
+                            except Exception as e:
+                                logger.warning(f"Failed to rewrite disk cache as float32: {e}")
+
+                        threading.Thread(target=_rewrite_cache, daemon=True).start()
+                    logger.info(f"[timing] img_np disk cache hit: {time.time()-_t_disk:.3f}s  shape={img_np.shape}  dtype={img_np.dtype}")
                 else:
                     reader.SetFileNames(dicom_filenames)
+                    _t_exec = time.time()
                     img = reader.Execute()
+                    logger.info(f"[timing] reader.Execute (pixel read): {time.time()-_t_exec:.3f}s")
         
 
         before_nnInter = time.time()
@@ -1380,8 +1405,13 @@ class BasicInferTask(InferTask):
             else:
                 _t_conv = time.time()
                 img_np = sitk.GetArrayFromImage(img)[None]
+                if img_np.dtype == np.float64:
+                    # MR series decode as float64 (rescale slope/intercept applied in
+                    # double); nnInteractive preprocess normalizes to float32 anyway.
+                    # Halves RAM, disk cache size, and cache load time.
+                    img_np = img_np.astype(np.float32)
                 img_convert_elapsed = time.time() - _t_conv
-                logger.info(f"[timing] sitk.GetArrayFromImage: {img_convert_elapsed:.3f}s  shape={img_np.shape}")
+                logger.info(f"[timing] sitk.GetArrayFromImage: {img_convert_elapsed:.3f}s  shape={img_np.shape}  dtype={img_np.dtype}")
                 if _disk_cache_path:
                     try:
                         os.makedirs("/code/img_cache", exist_ok=True)
@@ -1394,6 +1424,7 @@ class BasicInferTask(InferTask):
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
 
             if nnInter == "init":
+                _init_pre_elapsed = 0.0   # pre-drain + set_image submit (0.0 on warm-session skip)
                 # Re-run set_image not only when the series changed, but also whenever the
                 # nnInteractive session itself has no valid image (e.g. a prior interaction shut
                 # down the executor / cleared preprocessed_image). Relying only on the img_np
@@ -1415,15 +1446,20 @@ class BasicInferTask(InferTask):
                     image_cache["instanceNumber2"] = instanceNumber2
                     try:
                         logger.info(f"init set_image (uid_changed={_uid_changed}, session_needs_image={_session_needs_image})")
-                        session.set_image(img_np)
-                        session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
-                        # Await the background preprocessing before returning (upstream
-                        # server pattern). Leaving the future un-awaited allowed a second
-                        # set_image (e.g. quick re-init on layout change) to deadlock the
-                        # session executor — see _drain_nninter_preprocess.
+                        # Overlap optimization: drain any IN-FLIGHT preprocess BEFORE
+                        # submitting (never submit while one may be running — the
+                        # 2-worker executor deadlocks, see _drain_nninter_preprocess;
+                        # set_image's _reset_session also drops the future reference,
+                        # so draining after submit would miss the old one). Then submit
+                        # and return WITHOUT waiting: the user's think-time between
+                        # init and the first click absorbs the ~1-2s preprocess, and
+                        # _safe_interaction's recovery path drains any remainder.
                         _t_pre = time.time()
                         _drain_nninter_preprocess(session)
-                        logger.info(f"[timing] init set_image preprocess: {time.time()-_t_pre:.3f}s")
+                        session.set_image(img_np)
+                        session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+                        _init_pre_elapsed = time.time() - _t_pre
+                        logger.info(f"[timing] init set_image submitted (preprocess overlapped): {_init_pre_elapsed:.3f}s")
                     except Exception as init_error:
                         logger.error(f"Failed to initialize session: {init_error}")
                         logger.info("Prefer fail!!")
@@ -1437,7 +1473,21 @@ class BasicInferTask(InferTask):
                     lst.clear()
                 _t_reset = time.time()
                 session.reset_interactions()
-                logger.info(f"[timing] session.reset_interactions: {time.time()-_t_reset:.3f}s")
+                _init_reset_elapsed = time.time() - _t_reset
+                logger.info(f"[timing] session.reset_interactions: {_init_reset_elapsed:.3f}s")
+                _init_total = time.time() - begin
+                logger.info(
+                    f"[timing][init] load={before_nnInter-begin:.3f}s  img_convert={img_convert_elapsed:.3f}s  "
+                    f"preprocess_submit={_init_pre_elapsed:.3f}s  reset={_init_reset_elapsed:.3f}s  "
+                    f"total_init={_init_total:.3f}s  (preprocess overlapped with user think-time)"
+                )
+                # --- init timing breakdown for the client ---
+                final_result_json["server_begin_ts"] = server_begin_ts
+                final_result_json["server_load_elapsed"] = before_nnInter - begin        # DICOM scan/read (0 on cache hit)
+                final_result_json["server_img_convert_elapsed"] = img_convert_elapsed    # sitk → numpy
+                final_result_json["server_init_preprocess_elapsed"] = _init_pre_elapsed  # pre-drain + set_image submit (preprocess overlapped)
+                final_result_json["server_init_reset_elapsed"] = _init_reset_elapsed     # reset_interactions
+                final_result_json["server_end_ts"] = time.time()
                 return f'/code/predictions/init.nii.gz', final_result_json
 
             logger.info(f"interactions in _session_used_interactions: {used_interactions}")
@@ -1927,6 +1977,11 @@ class BasicInferTask(InferTask):
                         logger.error(f"Failed to reset session: {reset_error}")
                     return False
             
+            # Dispatch window: everything from prompt bookkeeping through the last
+            # session call. loop_overhead (logged below) = this window minus the
+            # timed prompt_prep and model_core portions.
+            _t_dispatch = time.time()
+
             # Replay optimization: a normal request carries exactly one
             # not-yet-applied prompt. After a session-expired replay the request
             # carries the full history — encode all but the last without running
@@ -2154,10 +2209,16 @@ class BasicInferTask(InferTask):
                 if not _safe_interaction(lambda: session._predict()):
                     return f'/code/predictions/reset.nii.gz', final_result_json
 
+            dispatch_elapsed = time.time() - _t_dispatch
+
             # --- Retrieve Results ---
             _t_result = time.time()
-            results = session.target_buffer.clone()
-            pred = results.numpy()  # shape (Z, Y, X), dtype uint8
+            # Zero-copy view of the CPU target_buffer: skip the full-volume clone
+            # (~84MB for a 321x512x512 volume) and copy ONLY the cropped bbox below.
+            # entry.lock serializes interactions per session, so the buffer is stable
+            # for the duration of this request; ascontiguousarray detaches the crop
+            # before the lock is released.
+            pred = session.target_buffer.numpy()  # shape (Z, Y, X), dtype uint8, VIEW
 
             # Crop to tight non-zero bbox before sending.
             # Reduces wire bytes and compression time proportionally to segmentation size.
@@ -2173,9 +2234,11 @@ class BasicInferTask(InferTask):
                 z0, z1 = int(z_nz[0]),  int(z_nz[-1])  + 1
                 y0, y1 = int(y_nz[0]),  int(y_nz[-1])  + 1
                 x0, x1 = int(x_nz[0]),  int(x_nz[-1])  + 1
-                pred = pred[z0:z1, y0:y1, x0:x1]
+                pred = np.ascontiguousarray(pred[z0:z1, y0:y1, x0:x1])  # copy of crop only
                 pred_offset = [z0, y0, x0]
             else:
+                # Empty segmentation (rare): copy to detach from the live buffer.
+                pred = pred.copy()
                 pred_offset = [0, 0, 0]
             result_elapsed = time.time() - _t_result
 
@@ -2187,11 +2250,26 @@ class BasicInferTask(InferTask):
             #sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}.nii.gz')
             nninter_elapsed = time.time() - start
             server_load_elapsed = before_nnInter - begin
+            # loop_overhead: dispatch-loop time not captured by prompt_prep/model_core.
+            # Measured (2026-07): the loop's own work (md5 hashing, deepcopy, health
+            # checks, GC) is ~1ms; the intermittent 0.02-0.14s seen here is GIL/memory
+            # contention with the session's ASYNC UNDO SNAPSHOT, which _predict submits
+            # to the executor right when this tail runs (blosc2-compresses the ~1.3GB
+            # interactions tensor + 84MB target buffer). Accepted cost of instant undo.
+            loop_overhead = dispatch_elapsed - prompt_prep_elapsed - nninter_core_elapsed
+            # pre_dispatch: start → _t_dispatch minus img_convert (dim validation,
+            # used_interactions log, VLM-op check).
+            pre_dispatch = nninter_elapsed - img_convert_elapsed - dispatch_elapsed - result_elapsed
 
+            # Components now sum: img_convert + prompt_prep + model_core + loop_overhead
+            # + result_retrieve + pre_dispatch == total_nninter. load is a SIBLING
+            # window (DICOM I/O before the nnInter block): load + total_nninter ≈ total_request.
             logger.info(
-                f"[timing] load={server_load_elapsed:.3f}s  img_convert={img_convert_elapsed:.3f}s  "
+                f"[timing] load={server_load_elapsed:.3f}s | img_convert={img_convert_elapsed:.3f}s  "
                 f"prompt_prep={prompt_prep_elapsed:.3f}s  model_core={nninter_core_elapsed:.3f}s  "
-                f"result_retrieve={result_elapsed:.3f}s  total_nninter={nninter_elapsed:.3f}s"
+                f"loop_overhead={loop_overhead:.3f}s  result_retrieve={result_elapsed:.3f}s  "
+                f"pre_dispatch={pre_dispatch:.3f}s  total_nninter={nninter_elapsed:.3f}s | "
+                f"total_request={time.time()-begin:.3f}s"
             )
 
             final_result_json["prompt_info"] = result_json
@@ -2202,6 +2280,8 @@ class BasicInferTask(InferTask):
             final_result_json["server_prompt_prep_elapsed"] = prompt_prep_elapsed  # lasso/scribble mask build
             final_result_json["nninter_core_elapsed"] = nninter_core_elapsed       # GPU add_*_interaction
             final_result_json["server_result_elapsed"] = result_elapsed            # target_buffer → numpy + bbox crop
+            final_result_json["server_loop_overhead_elapsed"] = loop_overhead      # dispatch loop minus timed portions
+            final_result_json["server_pre_dispatch_elapsed"] = pre_dispatch        # validation + logs before prompt loop
             final_result_json["nninter_elapsed"] = nninter_elapsed                 # total nnInter block
             final_result_json["pred_offset"] = pred_offset            # [z0, y0, x0] of cropped region in full volume
             final_result_json["pred_full_shape"] = pred_full_shape  # [Z, Y, X] of full volume (before crop)
