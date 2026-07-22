@@ -18,6 +18,13 @@ export class HotkeysManager {
   private isEnabled: boolean = true;
   public hotkeyDefinitions: Record<string, any> = {};
   public hotkeyDefaults: any[] = [];
+  /** True while the mouse cursor is inside this browser window. */
+  private _hasMouse: boolean = false;
+  /** Channel connecting all same-origin OHIF windows for hotkey routing. */
+  private _channel: BroadcastChannel | null = null;
+  /** Instance ids of other OHIF windows currently on the channel. */
+  private _siblings: Set<string> = new Set();
+  private _instanceId: string = Math.random().toString(36).slice(2);
 
   constructor(
     commandsManager: AppTypes.CommandsManager,
@@ -76,6 +83,7 @@ export class HotkeysManager {
    *
    */
   destroy() {
+    this._teardownRouting();
     this.hotkeyDefaults = [];
     this.hotkeyDefinitions = {};
     mouseTrapAPI.reset();
@@ -200,6 +208,68 @@ export class HotkeysManager {
       commandName: propertyName,
       ...propertyValue,
     };
+  }
+
+  private _onMousePresent = () => {
+    this._hasMouse = true;
+  };
+
+  private _onMouseLeave = () => {
+    this._hasMouse = false;
+  };
+
+  private _onPageHide = () => {
+    this._channel?.postMessage({ type: 'bye', id: this._instanceId });
+  };
+
+  private _onChannelMessage = (event: MessageEvent) => {
+    const { type, id } = event.data || {};
+    switch (type) {
+      case 'hello':
+        this._siblings.add(id);
+        this._channel?.postMessage({ type: 'hello-ack', id: this._instanceId });
+        break;
+      case 'hello-ack':
+        this._siblings.add(id);
+        break;
+      case 'bye':
+        this._siblings.delete(id);
+        break;
+    }
+  };
+
+  /**
+   * Lazily joins the cross-window hotkey routing channel and starts tracking
+   * whether the mouse cursor is inside this window. Mouse events fire in
+   * windows without keyboard focus, which is what makes routing possible.
+   * No-op when BroadcastChannel is unavailable (tests/older browsers).
+   */
+  private _ensureRouting() {
+    if (this._channel || typeof BroadcastChannel === 'undefined') {
+      return;
+    }
+    this._channel = new BroadcastChannel('ohif-hotkeys');
+    this._channel.onmessage = this._onChannelMessage;
+    this._channel.postMessage({ type: 'hello', id: this._instanceId });
+    document.documentElement.addEventListener('mouseenter', this._onMousePresent);
+    document.documentElement.addEventListener('mouseleave', this._onMouseLeave);
+    document.addEventListener('mousemove', this._onMousePresent);
+    window.addEventListener('pagehide', this._onPageHide);
+  }
+
+  private _teardownRouting() {
+    if (!this._channel) {
+      return;
+    }
+    this._channel.postMessage({ type: 'bye', id: this._instanceId });
+    this._channel.close();
+    this._channel = null;
+    this._siblings.clear();
+    this._hasMouse = false;
+    document.documentElement.removeEventListener('mouseenter', this._onMousePresent);
+    document.documentElement.removeEventListener('mouseleave', this._onMouseLeave);
+    document.removeEventListener('mousemove', this._onMousePresent);
+    window.removeEventListener('pagehide', this._onPageHide);
   }
 
   /**
