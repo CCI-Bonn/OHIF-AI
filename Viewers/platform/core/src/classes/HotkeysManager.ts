@@ -222,23 +222,46 @@ export class HotkeysManager {
     this._channel?.postMessage({ type: 'bye', id: this._instanceId });
   };
 
+  // Tab-switching away fires no mouseleave, so _hasMouse would otherwise
+  // stay stuck true and a hidden tab could execute (or double-execute)
+  // forwarded commands invisibly.
+  private _onVisibilityChange = () => {
+    if (document.hidden) {
+      this._hasMouse = false;
+    }
+  };
+
+  // bfcache restore skips our pagehide 'bye' handling on the way back in:
+  // the restored page still has its old channel/listeners and stale
+  // _siblings, while siblings have already forgotten it. Re-form the mesh.
+  private _onPageShow = (event: PageTransitionEvent) => {
+    if (event.persisted) {
+      this._siblings.clear();
+      this._channel?.postMessage({ type: 'hello', id: this._instanceId });
+    }
+  };
+
   private _onChannelMessage = (event: MessageEvent) => {
     const { type, id, commandName, commandOptions, context } = event.data || {};
     switch (type) {
       case 'hello':
-        this._siblings.add(id);
-        this._channel?.postMessage({ type: 'hello-ack', id: this._instanceId });
+        if (id) {
+          this._siblings.add(id);
+          this._channel?.postMessage({ type: 'hello-ack', id: this._instanceId });
+        }
         break;
       case 'hello-ack':
-        this._siblings.add(id);
+        if (id) {
+          this._siblings.add(id);
+        }
         break;
       case 'bye':
         this._siblings.delete(id);
         break;
       case 'run':
-        // Execute only if this window is the one under the cursor and its
-        // hotkeys are not paused (e.g. hotkey-recording dialog open).
-        if (this._hasMouse && this.isEnabled) {
+        // Execute only if this window is the one under the cursor, visible,
+        // and its hotkeys are not paused (e.g. hotkey-recording dialog open).
+        if (this._hasMouse && !document.hidden && this.isEnabled) {
           this._commandsManager.runCommand(commandName, { ...commandOptions }, context);
         }
         break;
@@ -262,6 +285,8 @@ export class HotkeysManager {
     document.documentElement.addEventListener('mouseleave', this._onMouseLeave);
     document.addEventListener('mousemove', this._onMousePresent);
     window.addEventListener('pagehide', this._onPageHide);
+    document.addEventListener('visibilitychange', this._onVisibilityChange);
+    window.addEventListener('pageshow', this._onPageShow);
   }
 
   /**
@@ -293,6 +318,8 @@ export class HotkeysManager {
     document.documentElement.removeEventListener('mouseleave', this._onMouseLeave);
     document.removeEventListener('mousemove', this._onMousePresent);
     window.removeEventListener('pagehide', this._onPageHide);
+    document.removeEventListener('visibilitychange', this._onVisibilityChange);
+    window.removeEventListener('pageshow', this._onPageShow);
   }
 
   /**
