@@ -25,6 +25,8 @@ export class HotkeysManager {
   /** Instance ids of other OHIF windows currently on the channel. */
   private _siblings: Set<string> = new Set();
   private _instanceId: string = Math.random().toString(36).slice(2);
+  /** Handlers for key descriptors forwarded from sibling windows. */
+  private _keySubscribers: Set<(descriptor) => void> = new Set();
 
   constructor(
     commandsManager: AppTypes.CommandsManager,
@@ -242,7 +244,7 @@ export class HotkeysManager {
   };
 
   private _onChannelMessage = (event: MessageEvent) => {
-    const { type, id, commandName, commandOptions, context } = event.data || {};
+    const { type, id, commandName, commandOptions, context, descriptor } = event.data || {};
     switch (type) {
       case 'hello':
         if (id) {
@@ -263,6 +265,14 @@ export class HotkeysManager {
         // and its hotkeys are not paused (e.g. hotkey-recording dialog open).
         if (this._hasMouse && !document.hidden && this.isEnabled) {
           this._commandsManager.runCommand(commandName, { ...commandOptions }, context);
+        }
+        break;
+      case 'key':
+        // Same gate as 'run', but for raw key descriptors forwarded by
+        // components that bind their own keydown listeners outside Mousetrap
+        // (e.g. the AI toolbox). Subscribers decide what the key does.
+        if (this._hasMouse && !document.hidden && this.isEnabled) {
+          this._keySubscribers.forEach(handler => handler(descriptor));
         }
         break;
     }
@@ -303,6 +313,34 @@ export class HotkeysManager {
     // evt is a DOM event and cannot cross BroadcastChannel (not cloneable);
     // preventDefault/stopPropagation already ran in this window.
     this._channel.postMessage({ type: 'run', commandName, commandOptions, context });
+  }
+
+  /**
+   * Whether a keyboard handler in this window should act locally. False only
+   * when sibling OHIF windows exist and the mouse cursor is not inside this
+   * one — in that case forward the key with `forwardKeyEvent` instead.
+   * For components that bind their own keydown listeners outside Mousetrap.
+   */
+  public shouldRunLocally(): boolean {
+    return !(this._channel && this._siblings.size > 0 && !this._hasMouse);
+  }
+
+  /**
+   * Forwards a plain key descriptor ({key, ctrlKey, ...} — structured-cloneable,
+   * never the DOM event itself) to sibling windows; the one under the cursor
+   * delivers it to its `subscribeForwardedKeys` handlers.
+   */
+  public forwardKeyEvent(descriptor): void {
+    this._channel?.postMessage({ type: 'key', descriptor });
+  }
+
+  /**
+   * Registers a handler for key descriptors forwarded from sibling windows.
+   * Returns an unsubscribe function.
+   */
+  public subscribeForwardedKeys(handler: (descriptor) => void): () => void {
+    this._keySubscribers.add(handler);
+    return () => this._keySubscribers.delete(handler);
   }
 
   private _teardownRouting() {
