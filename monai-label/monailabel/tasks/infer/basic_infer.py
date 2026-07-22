@@ -188,7 +188,11 @@ try:
             # respected: we never take entry.lock here).
             _t_full = time.time()
             try:
-                _dummy = np.zeros((1, 128, 512, 512), dtype=np.float32)
+                # Gaussian noise, not zeros: set_image z-normalizes and rejects
+                # an all-zero volume ("cannot determine normalization statistics").
+                _dummy = np.random.default_rng(0).standard_normal(
+                    size=(1, 128, 512, 512), dtype=np.float32
+                )
                 _artifact_loader.set_image(_dummy)
                 _artifact_loader.set_target_buffer(torch.zeros(_dummy.shape[1:], dtype=torch.uint8))
                 _drain_nninter_preprocess(_artifact_loader)
