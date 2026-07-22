@@ -274,9 +274,15 @@ export class HotkeysManager {
         this._siblings.delete(id);
         break;
       case 'run':
-        // Execute only if this window is the one under the cursor, visible,
-        // and its hotkeys are not paused (e.g. hotkey-recording dialog open).
-        if (this._hasMouse && !document.hidden && this.isEnabled) {
+        // Execute only if this window is the one under the cursor and its
+        // hotkeys are not paused (e.g. hotkey-recording dialog open).
+        // Deliberately NOT gated on document.hidden: Linux Chrome can
+        // misreport a visible unfocused window as hidden (occlusion
+        // tracking), which would drop legitimate keys. _hasMouse alone is
+        // safe — it is cleared on visibilitychange→hidden and only a real
+        // mousemove over the page re-arms it, which a genuinely hidden tab
+        // can never receive.
+        if (this._hasMouse && this.isEnabled) {
           this._commandsManager.runCommand(commandName, { ...commandOptions }, context);
         }
         break;
@@ -284,7 +290,7 @@ export class HotkeysManager {
         // Same gate as 'run', but for raw key descriptors forwarded by
         // components that bind their own keydown listeners outside Mousetrap
         // (e.g. the AI toolbox). Subscribers decide what the key does.
-        if (this._hasMouse && !document.hidden && this.isEnabled) {
+        if (this._hasMouse && this.isEnabled) {
           this._keySubscribers.forEach(handler => handler(descriptor));
         }
         break;
@@ -318,6 +324,8 @@ export class HotkeysManager {
       hasMouse: this._hasMouse,
       enabled: this.isEnabled,
       keySubscribers: this._keySubscribers.size,
+      visibilityState: document.visibilityState,
+      focused: document.hasFocus(),
     });
   }
 
