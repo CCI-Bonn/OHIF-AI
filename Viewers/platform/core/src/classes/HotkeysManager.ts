@@ -223,7 +223,7 @@ export class HotkeysManager {
   };
 
   private _onChannelMessage = (event: MessageEvent) => {
-    const { type, id } = event.data || {};
+    const { type, id, commandName, commandOptions, context } = event.data || {};
     switch (type) {
       case 'hello':
         this._siblings.add(id);
@@ -234,6 +234,13 @@ export class HotkeysManager {
         break;
       case 'bye':
         this._siblings.delete(id);
+        break;
+      case 'run':
+        // Execute only if this window is the one under the cursor and its
+        // hotkeys are not paused (e.g. hotkey-recording dialog open).
+        if (this._hasMouse && this.isEnabled) {
+          this._commandsManager.runCommand(commandName, { ...commandOptions }, context);
+        }
         break;
     }
   };
@@ -255,6 +262,22 @@ export class HotkeysManager {
     document.documentElement.addEventListener('mouseleave', this._onMouseLeave);
     document.addEventListener('mousemove', this._onMousePresent);
     window.addEventListener('pagehide', this._onPageHide);
+  }
+
+  /**
+   * Runs a hotkey command in the window that currently contains the mouse
+   * cursor. Local execution when the cursor is here or when no sibling OHIF
+   * windows are known (preserves single-window behavior, e.g. Alt+Tab focus).
+   */
+  private _runOrForward(commandName, commandOptions = {}, context, evt) {
+    const shouldForward = this._channel && this._siblings.size > 0 && !this._hasMouse;
+    if (!shouldForward) {
+      this._commandsManager.runCommand(commandName, { evt, ...commandOptions }, context);
+      return;
+    }
+    // evt is a DOM event and cannot cross BroadcastChannel (not cloneable);
+    // preventDefault/stopPropagation already ran in this window.
+    this._channel.postMessage({ type: 'run', commandName, commandOptions, context });
   }
 
   private _teardownRouting() {
@@ -330,10 +353,11 @@ export class HotkeysManager {
     const isKeyArray = keys instanceof Array;
     const combinedKeys = isKeyArray ? keys.join('+') : keys;
 
+    this._ensureRouting();
     mouseTrapAPI.bind(combinedKeys, evt => {
       evt.preventDefault();
       evt.stopPropagation();
-      this._commandsManager.runCommand(commandName, { evt, ...commandOptions }, context);
+      this._runOrForward(commandName, commandOptions, context, evt);
     });
   }
 
