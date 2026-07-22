@@ -224,12 +224,25 @@ export class HotkeysManager {
     this._channel?.postMessage({ type: 'bye', id: this._instanceId });
   };
 
+  /**
+   * Re-announces this window on the channel. The startup hello can be missed
+   * when several windows (re)load around the same time or before the app has
+   * bound its hotkeys, and nothing else would ever heal the mesh — so we also
+   * announce on window focus and on becoming visible. Receivers use a Set, so
+   * repeated hellos are idempotent.
+   */
+  private _announcePresence = () => {
+    this._channel?.postMessage({ type: 'hello', id: this._instanceId });
+  };
+
   // Tab-switching away fires no mouseleave, so _hasMouse would otherwise
   // stay stuck true and a hidden tab could execute (or double-execute)
   // forwarded commands invisibly.
   private _onVisibilityChange = () => {
     if (document.hidden) {
       this._hasMouse = false;
+    } else {
+      this._announcePresence();
     }
   };
 
@@ -290,13 +303,22 @@ export class HotkeysManager {
     }
     this._channel = new BroadcastChannel('ohif-hotkeys');
     this._channel.onmessage = this._onChannelMessage;
-    this._channel.postMessage({ type: 'hello', id: this._instanceId });
+    this._announcePresence();
     document.documentElement.addEventListener('mouseenter', this._onMousePresent);
     document.documentElement.addEventListener('mouseleave', this._onMouseLeave);
     document.addEventListener('mousemove', this._onMousePresent);
     window.addEventListener('pagehide', this._onPageHide);
     document.addEventListener('visibilitychange', this._onVisibilityChange);
     window.addEventListener('pageshow', this._onPageShow);
+    window.addEventListener('focus', this._announcePresence);
+    // Console-inspectable routing state for field debugging.
+    (window as any).__ohifHotkeysRouting = () => ({
+      instanceId: this._instanceId,
+      siblings: [...this._siblings],
+      hasMouse: this._hasMouse,
+      enabled: this.isEnabled,
+      keySubscribers: this._keySubscribers.size,
+    });
   }
 
   /**
@@ -358,6 +380,8 @@ export class HotkeysManager {
     window.removeEventListener('pagehide', this._onPageHide);
     document.removeEventListener('visibilitychange', this._onVisibilityChange);
     window.removeEventListener('pageshow', this._onPageShow);
+    window.removeEventListener('focus', this._announcePresence);
+    delete (window as any).__ohifHotkeysRouting;
   }
 
   /**
