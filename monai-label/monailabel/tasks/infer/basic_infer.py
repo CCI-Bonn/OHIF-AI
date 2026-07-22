@@ -176,6 +176,31 @@ try:
             _artifact_loader.warmup()
             _NNINTER_ARTIFACTS["network"] = _artifact_loader.network
             _wlog.info("nnInteractive warmup: done.")
+
+            # Full dummy cycle: warmup() only runs the bare network forward, but the
+            # first real prediction per PROCESS still paid ~0.8s of lazy one-off costs
+            # (measured: first click model_core≈1.1s vs 0.28s for a later session in
+            # the same process). Run one end-to-end set_image -> point -> predict on
+            # a throwaway volume so the first real user click is fast. Sized to use
+            # the same interactions backend ("tensor", < AUTO_TENSOR_MAX_VOXELS=2^27
+            # voxels) as typical volumes. gpu_lock serializes against any real user
+            # prediction racing warmup at boot (lock order entry.lock -> gpu_lock is
+            # respected: we never take entry.lock here).
+            _t_full = time.time()
+            try:
+                _dummy = np.zeros((1, 128, 512, 512), dtype=np.float32)
+                _artifact_loader.set_image(_dummy)
+                _artifact_loader.set_target_buffer(torch.zeros(_dummy.shape[1:], dtype=torch.uint8))
+                _drain_nninter_preprocess(_artifact_loader)
+                with get_pool().gpu_lock:
+                    _artifact_loader.add_point_interaction(
+                        (64, 256, 256), include_interaction=True, run_prediction=True
+                    )
+                _wlog.info(f"[timing] warmup full dummy cycle: {time.time()-_t_full:.3f}s")
+            finally:
+                # Frees image/interactions/target tensors and drains the pending
+                # undo snapshot; the loader session is never used for inference.
+                _artifact_loader._reset_session()
         except Exception:
             _wlog.exception("nnInteractive warmup failed (non-fatal)")
 
