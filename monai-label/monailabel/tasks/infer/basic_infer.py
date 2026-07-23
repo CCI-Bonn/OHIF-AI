@@ -153,6 +153,74 @@ def _new_nninter_session() -> nnInteractiveInferenceSession:
     return s
 
 
+# Network input descriptor for the just-in-time warmup forward:
+# (batch=1, image + interaction channels, *patch_size). Both come from the model
+# plan; hard-failing here would be wrong, so we read them once with a fallback.
+try:
+    _WARMUP_PATCH_SIZE = tuple(_NNINTER_ARTIFACTS["configuration_manager"].patch_size)
+    _WARMUP_IN_CHANNELS = _artifact_loader.num_interaction_channels + 1  # +1 image channel
+except Exception:
+    _WARMUP_PATCH_SIZE = (192, 192, 192)
+    _WARMUP_IN_CHANNELS = 8
+_WARMUP_INPUT_SHAPE = (1, _WARMUP_IN_CHANNELS, *_WARMUP_PATCH_SIZE)
+
+
+# Set by the boot warmup thread once warmup() has run torch.compile, so the
+# inline MainThread warmup below never has to eat the ~12s compile itself.
+_boot_warmup_done = threading.Event()
+# Guards the once-per-process MainThread cuDNN warmup. Only ever touched from the
+# inference (MainThread) path, so no lock is needed.
+_mainthread_cudnn_warmed = False
+
+
+def _warm_mainthread_cudnn() -> None:
+    """Pay the cuDNN per-THREAD first-forward cost on the inference thread, once.
+
+    The first network() forward on any given thread costs ~0.75s of REAL GPU
+    time: cuDNN's algorithm cache and workspace are bound to a per-thread cuDNN
+    handle, so that thread runs algorithm selection + workspace alloc on its
+    first forward and reuses them (~0.05s) forever after. (The conv KERNELS
+    themselves are context-global and already loaded by the boot warmup; only the
+    per-thread handle state is cold.)
+
+    All inference runs INLINE on the async endpoint's event-loop thread
+    (MainThread) — api_run_inference is `async def` and calls run_inference
+    directly, serialized — so warming MainThread's handle ONCE per process makes
+    every real click the already-warm second forward. This must run ON
+    MainThread: a warmup on the boot thread or a spawned daemon warms the wrong
+    handle and does nothing for the click (confirmed: bg-thread warm -> MainThread
+    forward still 0.78s cold). We therefore call this synchronously from the init
+    request path, which is itself on MainThread.
+
+    Content-independent: algo/kernel choice keys on the tensor descriptor, so a
+    zeros tensor of the exact (1, in_channels, *patch_size) shape warms the
+    identical path the real click uses — no set_image / interaction / autozoom
+    needed. Runs under gpu_lock to serialize with any concurrent prediction."""
+    global _mainthread_cudnn_warmed
+    if _mainthread_cudnn_warmed:
+        return
+    # Don't warm before torch.compile has finished on the boot thread, or this
+    # inline forward would eat the ~12s compile and stall the init response.
+    # Skip silently if not ready yet; a later init retries (flag stays False).
+    if not _boot_warmup_done.wait(timeout=0):
+        return
+    try:
+        net = _NNINTER_ARTIFACTS["network"]
+        dummy = torch.zeros(_WARMUP_INPUT_SHAPE, device=_artifact_loader.device, dtype=torch.float32)
+        _t = time.time()
+        with get_pool().gpu_lock:
+            with torch.inference_mode(), torch.autocast("cuda", enabled=True):
+                net(dummy.contiguous())
+            torch.cuda.synchronize()
+        _mainthread_cudnn_warmed = True
+        logger.info(
+            f"[timing] MainThread cuDNN warmup forward: {time.time() - _t:.3f}s "
+            f"(first real click is now warm)"
+        )
+    except Exception:
+        logger.exception("MainThread cuDNN warmup failed (non-fatal)")
+
+
 set_pool(SessionPool(factory=_new_nninter_session))
 
 # Warmup: trigger torch.compile JIT at startup so the first real inference is
@@ -176,35 +244,12 @@ try:
             _artifact_loader.warmup()
             _NNINTER_ARTIFACTS["network"] = _artifact_loader.network
             _wlog.info("nnInteractive warmup: done.")
-
-            # Full dummy cycle: warmup() only runs the bare network forward, but the
-            # first real prediction per PROCESS still paid ~0.8s of lazy one-off costs
-            # (measured: first click model_core≈1.1s vs 0.28s for a later session in
-            # the same process). Run one end-to-end set_image -> point -> predict on
-            # a throwaway volume so the first real user click is fast. Sized to use
-            # the same interactions backend ("tensor", < AUTO_TENSOR_MAX_VOXELS=2^27
-            # voxels) as typical volumes. gpu_lock serializes against any real user
-            # prediction racing warmup at boot (lock order entry.lock -> gpu_lock is
-            # respected: we never take entry.lock here).
-            _t_full = time.time()
-            try:
-                # Gaussian noise, not zeros: set_image z-normalizes and rejects
-                # an all-zero volume ("cannot determine normalization statistics").
-                _dummy = np.random.default_rng(0).standard_normal(
-                    size=(1, 128, 512, 512), dtype=np.float32
-                )
-                _artifact_loader.set_image(_dummy)
-                _artifact_loader.set_target_buffer(torch.zeros(_dummy.shape[1:], dtype=torch.uint8))
-                _drain_nninter_preprocess(_artifact_loader)
-                with get_pool().gpu_lock:
-                    _artifact_loader.add_point_interaction(
-                        (64, 256, 256), include_interaction=True, run_prediction=True
-                    )
-                _wlog.info(f"[timing] warmup full dummy cycle: {time.time()-_t_full:.3f}s")
-            finally:
-                # Frees image/interactions/target tensors and drains the pending
-                # undo snapshot; the loader session is never used for inference.
-                _artifact_loader._reset_session()
+            # Signal that torch.compile is done so the inline MainThread cuDNN
+            # warmup (see _warm_mainthread_cudnn) can run without eating compile.
+            # NOTE: this boot thread canNOT itself warm the inference path —
+            # cuDNN handle state is per-thread and inference runs on MainThread,
+            # not here. The MainThread warmup happens on the first init request.
+            _boot_warmup_done.set()
         except Exception:
             _wlog.exception("nnInteractive warmup failed (non-fatal)")
 
@@ -1394,12 +1439,25 @@ class BasicInferTask(InferTask):
                 _disk_cache_path = os.path.join("/code/img_cache", f"{_disk_cache_key}.npy")
                 if os.path.exists(_disk_cache_path):
                     _t_disk = time.time()
-                    img_np = np.load(_disk_cache_path)
+                    # mmap the .npy instead of reading it eagerly: np.load returns a
+                    # read-only memmap in ~1ms, so the 336MB read moves OFF this
+                    # synchronous init request and INTO set_image's background
+                    # preprocess, where _background_set_image copies the array
+                    # anyway (np.ascontiguousarray -> .copy(), which pages it in on
+                    # the executor thread, overlapped with user think-time). This is
+                    # what keeps init fast when the box is under CPU/memory-bandwidth
+                    # contention: eager np.load is an in-process memcpy that gets
+                    # starved by concurrent numpy work (blosc2 undo-snapshots, GPU
+                    # preprocess), turning a 0.18s read into 10-30s; the mmap open is
+                    # immune. The memmap is read-only, which is safe precisely
+                    # because _background_set_image never mutates the caller's array.
+                    img_np = np.load(_disk_cache_path, mmap_mode="r")
                     _disk_hit = True
                     if img_np.dtype == np.float64:
                         # Legacy float64 cache file: downcast now (same rationale as the
                         # fresh-convert path) and rewrite the cache at float32 in the
-                        # background so the next cold start reads half the bytes.
+                        # background so the next cold start reads half the bytes. astype
+                        # materializes a real (writable) array from the memmap.
                         img_np = img_np.astype(np.float32)
 
                         def _rewrite_cache(path=_disk_cache_path, arr=img_np):
@@ -1410,7 +1468,7 @@ class BasicInferTask(InferTask):
                                 logger.warning(f"Failed to rewrite disk cache as float32: {e}")
 
                         threading.Thread(target=_rewrite_cache, daemon=True).start()
-                    logger.info(f"[timing] img_np disk cache hit: {time.time()-_t_disk:.3f}s  shape={img_np.shape}  dtype={img_np.dtype}")
+                    logger.info(f"[timing] img_np disk cache hit (mmap): {time.time()-_t_disk:.3f}s  shape={img_np.shape}  dtype={img_np.dtype}  (read deferred to preprocess)")
                 else:
                     reader.SetFileNames(dicom_filenames)
                     _t_exec = time.time()
@@ -1489,6 +1547,14 @@ class BasicInferTask(InferTask):
                         session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
                         _init_pre_elapsed = time.time() - _t_pre
                         logger.info(f"[timing] init set_image submitted (preprocess overlapped): {_init_pre_elapsed:.3f}s")
+                        # Warm the inference thread's per-thread cuDNN handle once
+                        # per process, INLINE on this (MainThread) init request, so
+                        # the user's first click is the warm second forward. Adds
+                        # ~0.75s to the first init only (no-op thereafter); runs on
+                        # MainThread because that is where predictions run — see
+                        # _warm_mainthread_cudnn. Overlapped with preprocess, which
+                        # is running on the session executor meanwhile.
+                        _warm_mainthread_cudnn()
                     except Exception as init_error:
                         logger.error(f"Failed to initialize session: {init_error}")
                         logger.info("Prefer fail!!")
