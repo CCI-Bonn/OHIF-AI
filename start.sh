@@ -5,6 +5,65 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 HASH_DIR="$REPO_ROOT/.build-hashes"
 mkdir -p "$HASH_DIR"
 
+# ── Optional-model boot loading ───────────────────────────────────────────────
+# nnInteractive (the primary model) always loads at boot. These optional models
+# can either load at boot ("eager", first use instant) or on first use ("lazy",
+# faster boot, no GPU until requested). By default start.sh ASKS about each one;
+# flags below skip the prompts (conventions borrowed from apt-get -y):
+#   -y, --yes    load ALL optional models at boot (eager), no prompts
+#   -n, --no     load NO optional models at boot (all lazy), no prompts
+#   -h, --help   show this help and exit
+# An already-set LOAD_<MODEL> env var is always honored and never prompted, so
+# `LOAD_SAM2=eager bash start.sh -n` still loads SAM2. Non-interactive shells
+# (no TTY, e.g. CI) default to lazy instead of hanging on a prompt.
+OPTIONAL_MODELS=(SAM2 SAM3 MEDSAM2 VOXTELL)
+ASSUME=""  # "", "yes", or "no"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes) ASSUME="yes" ;;
+        -n|--no)  ASSUME="no" ;;
+        -h|--help)
+            echo "Usage: bash start.sh [-y|--yes | -n|--no]"
+            echo "  (no flag)   prompt whether to load each optional model at boot"
+            echo "  -y, --yes   load ALL optional models at boot (eager)"
+            echo "  -n, --no    load NO optional models at boot (all lazy)"
+            echo "Optional models: ${OPTIONAL_MODELS[*]} (nnInteractive always loads)."
+            exit 0 ;;
+        *) echo "[start.sh] Unknown option: $1 (try --help)" >&2; exit 1 ;;
+    esac
+    shift
+done
+
+_resolve_model_load() {
+    local name="$1"
+    local var="LOAD_${name}"
+    # 1. Explicit env override wins — never prompt.
+    if [ -n "${!var}" ]; then
+        echo "[start.sh] ${name}: ${!var} (from environment)"
+    # 2. Non-interactive assume flags.
+    elif [ "$ASSUME" = "yes" ]; then
+        export "$var=eager"; echo "[start.sh] ${name}: eager (-y)"
+    elif [ "$ASSUME" = "no" ]; then
+        export "$var=lazy";  echo "[start.sh] ${name}: lazy (-n)"
+    # 3. No TTY (piped / CI) — default lazy rather than hang.
+    elif [ ! -t 0 ]; then
+        export "$var=lazy";  echo "[start.sh] ${name}: lazy (no TTY, default)"
+    # 4. Interactive prompt, default No (lazy) on bare Enter.
+    else
+        local ans
+        read -r -p "[start.sh] Load ${name} at startup? [y/N] " ans
+        case "$ans" in
+            [Yy]*) export "$var=eager"; echo "[start.sh]   -> ${name}: eager" ;;
+            *)     export "$var=lazy";  echo "[start.sh]   -> ${name}: lazy" ;;
+        esac
+    fi
+}
+
+for _m in "${OPTIONAL_MODELS[@]}"; do
+    _resolve_model_load "$_m"
+done
+
 # ── Model weights ─────────────────────────────────────────────────────────────
 CHECKPOINTS_DIR="$REPO_ROOT/monai-label/checkpoints"
 SAM2_WEIGHTS="$CHECKPOINTS_DIR/sam2.1_hiera_tiny.pt"

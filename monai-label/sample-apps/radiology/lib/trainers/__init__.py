@@ -9,10 +9,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .deepedit import DeepEdit
-from .deepgrow import Deepgrow
-from .localization_spine import LocalizationSpine
-from .localization_vertebra import LocalizationVertebra
 from .segmentation import Segmentation
-from .segmentation_spleen import SegmentationSpleen
-from .segmentation_vertebra import SegmentationVertebra

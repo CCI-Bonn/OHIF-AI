@@ -1,0 +1,34 @@
+# Build context for the monai_server image is the repo root (see docker-compose
+# `context: ./`). Docker only reads .dockerignore from the CONTEXT ROOT, so this
+# file — not monai-label/.dockerignore — is what actually applies to that build.
+# The monai Dockerfile only needs sam2/, sam3/, and the monai-label SOURCE; keep
+# everything else out so the daemon isn't shipped ~30GB and the `COPY monai-label`
+# app layer stays a few MB instead of ~24GB.
+#
+# (The ohif_viewer image builds from ./Viewers with its own context and is
+# unaffected by this file.)
+
+.git
+.gitignore
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# OHIF viewer — built from its own ./Viewers context, never copied by the monai Dockerfile.
+Viewers/
+
+# Runtime data — all volume-mounted at run time (see docker-compose), so baking it
+# into the image is pure dead weight (and is shadowed by the mounts anyway).
+monai-label/volumes/
+monai-label/checkpoints/
+monai-label/img_cache/
+monai-label/predictions/
+monai-label/apps/
+monai-label/tests/
+
+# Local scratch / tooling / build metadata
+.local/
+.build-hashes/
+benchmark_playground/
+**/node_modules/
+*.log
