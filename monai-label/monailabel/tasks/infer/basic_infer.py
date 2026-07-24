@@ -1439,25 +1439,23 @@ class BasicInferTask(InferTask):
                 _disk_cache_path = os.path.join("/code/img_cache", f"{_disk_cache_key}.npy")
                 if os.path.exists(_disk_cache_path):
                     _t_disk = time.time()
-                    # mmap the .npy instead of reading it eagerly: np.load returns a
-                    # read-only memmap in ~1ms, so the 336MB read moves OFF this
-                    # synchronous init request and INTO set_image's background
-                    # preprocess, where _background_set_image copies the array
-                    # anyway (np.ascontiguousarray -> .copy(), which pages it in on
-                    # the executor thread, overlapped with user think-time). This is
-                    # what keeps init fast when the box is under CPU/memory-bandwidth
-                    # contention: eager np.load is an in-process memcpy that gets
-                    # starved by concurrent numpy work (blosc2 undo-snapshots, GPU
-                    # preprocess), turning a 0.18s read into 10-30s; the mmap open is
-                    # immune. The memmap is read-only, which is safe precisely
-                    # because _background_set_image never mutates the caller's array.
-                    img_np = np.load(_disk_cache_path, mmap_mode="r")
+                    # Eager read (single sequential read syscall, ~0.15s warm). Do
+                    # NOT mmap this: _background_set_image's copy-guard
+                    # (`if image_np is image`) does not fire for a memmap
+                    # (np.ascontiguousarray returns a distinct read-only view), so
+                    # torch.from_numpy gets a non-writable mmap-backed tensor and the
+                    # in-place normalization copy-on-writes all 336MB one page-fault
+                    # at a time -> >1min + undefined behavior. The occasional 10-30s
+                    # np.load spikes are CPU/memory-bandwidth contention during busy
+                    # windows (esp. right after a rebuild churns page cache), not the
+                    # disk (RAID reads at multiple GB/s); they do not occur in steady
+                    # single-study production use.
+                    img_np = np.load(_disk_cache_path)
                     _disk_hit = True
                     if img_np.dtype == np.float64:
                         # Legacy float64 cache file: downcast now (same rationale as the
                         # fresh-convert path) and rewrite the cache at float32 in the
-                        # background so the next cold start reads half the bytes. astype
-                        # materializes a real (writable) array from the memmap.
+                        # background so the next cold start reads half the bytes.
                         img_np = img_np.astype(np.float32)
 
                         def _rewrite_cache(path=_disk_cache_path, arr=img_np):
@@ -1468,7 +1466,7 @@ class BasicInferTask(InferTask):
                                 logger.warning(f"Failed to rewrite disk cache as float32: {e}")
 
                         threading.Thread(target=_rewrite_cache, daemon=True).start()
-                    logger.info(f"[timing] img_np disk cache hit (mmap): {time.time()-_t_disk:.3f}s  shape={img_np.shape}  dtype={img_np.dtype}  (read deferred to preprocess)")
+                    logger.info(f"[timing] img_np disk cache hit: {time.time()-_t_disk:.3f}s  shape={img_np.shape}  dtype={img_np.dtype}")
                 else:
                     reader.SetFileNames(dicom_filenames)
                     _t_exec = time.time()
