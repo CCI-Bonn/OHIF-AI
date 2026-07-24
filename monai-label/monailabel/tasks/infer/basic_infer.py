@@ -157,7 +157,12 @@ _artifact_loader = nnInteractiveInferenceSession(
     device=torch.device("cuda:0"),
     use_torch_compile=True,
     verbose=True,
-    torch_n_threads=os.cpu_count(),
+    # nnInteractive's default (8). The only CPU-parallel work here is set_image
+    # normalization, which is memory-bandwidth-bound (more threads don't help),
+    # and the model math runs on the GPU — so os.cpu_count() (=224 on this box)
+    # just oversubscribes CPU and inflates the thread count on a shared host.
+    # torch.set_num_threads() is process-global; keep it modest.
+    torch_n_threads=8,
     do_autozoom=True,
 )
 _NNINTER_ARTIFACTS = _artifact_loader._load_model_artifacts_from_disk(model_path)
@@ -168,7 +173,7 @@ def _new_nninter_session() -> nnInteractiveInferenceSession:
         device=torch.device("cuda:0"),
         use_torch_compile=True,
         verbose=True,
-        torch_n_threads=os.cpu_count(),
+        torch_n_threads=8,  # see _artifact_loader above
         do_autozoom=True,
     )
     s.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
