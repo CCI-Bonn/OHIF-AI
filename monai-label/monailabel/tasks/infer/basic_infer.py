@@ -9,6 +9,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import copy
 import hashlib
 import logging
@@ -118,22 +119,55 @@ REPO_ID = "nnInteractive/nnInteractive"
 MODEL_NAME = "nnInteractive_v1.0"  # Updated models may be available in the future
 DOWNLOAD_DIR = "/code/checkpoints"  # Specify the download directory
 
-download_path = snapshot_download(
+
+def _snapshot_download_cached(**kwargs):
+    """snapshot_download that skips the HF Hub network round-trip when the model
+    files are already present locally. The weights live in the checkpoints volume,
+    so the steady-state case is a cache hit; local_files_only avoids the (~0.5-2s)
+    hub metadata check on every boot. Falls back to a real network fetch on a cold
+    cache (fresh machine)."""
+    try:
+        return snapshot_download(local_files_only=True, **kwargs)
+    except Exception:
+        return snapshot_download(**kwargs)
+
+
+download_path = _snapshot_download_cached(
     repo_id=REPO_ID,
     allow_patterns=[f"{MODEL_NAME}/*"],
-    local_dir=DOWNLOAD_DIR
+    local_dir=DOWNLOAD_DIR,
 )
 
-VOX_MODEL_NAME = "voxtell_v1.1" # Updated models may be available in the future
-
-vox_download_path = snapshot_download(
-      repo_id="mrokuss/VoxTell",
-      allow_patterns=[f"{VOX_MODEL_NAME}/*", "*.json"],
-      local_dir=DOWNLOAD_DIR
-)
+VOX_MODEL_NAME = "voxtell_v1.1"  # Updated models may be available in the future
 vox_model_path = os.path.join(DOWNLOAD_DIR, VOX_MODEL_NAME)
-from voxtell.inference.predictor import VoxTellPredictor
-vox_predictor = VoxTellPredictor(model_dir=vox_model_path, device=torch.device("cuda:0"))
+
+
+# ── Optional-model boot toggles ──────────────────────────────────────────────
+# nnInteractive is the primary model and always loads at boot. The SAM-family
+# models (SAM2, SAM3, MedSAM2) and VoxTell are optional and default to LAZY —
+# loaded on first use so they cost no boot time or GPU until actually requested.
+# Flip any to EAGER (load at boot, first use instant) via env in
+# docker-compose / start.sh:
+#   LOAD_SAM2 / LOAD_SAM3 / LOAD_MEDSAM2 / LOAD_VOXTELL = eager | lazy
+def _model_eager(name: str) -> bool:
+    return os.environ.get(f"LOAD_{name}", "lazy").strip().lower() == "eager"
+
+
+_vox_predictor = None
+
+
+def _get_vox_predictor():
+    """Lazily build (and cache) the VoxTell text-prompt predictor on cuda:0."""
+    global _vox_predictor
+    if _vox_predictor is None:
+        _snapshot_download_cached(
+            repo_id="mrokuss/VoxTell",
+            allow_patterns=[f"{VOX_MODEL_NAME}/*", "*.json"],
+            local_dir=DOWNLOAD_DIR,
+        )
+        from voxtell.inference.predictor import VoxTellPredictor
+        _vox_predictor = VoxTellPredictor(model_dir=vox_model_path, device=torch.device("cuda:0"))
+    return _vox_predictor
 
 from nnInteractive.inference.inference_session import nnInteractiveInferenceSession
 
@@ -285,6 +319,29 @@ except Exception as _warmup_err:
     print(f"nnInteractive warmup failed (non-fatal): {_warmup_err}")
 
 
+# Pay the ~3s MainThread cuDNN warm during boot idle time instead of on the first
+# user's study-open. _warm_mainthread_cudnn MUST run on the event-loop thread
+# (MainThread) where inference runs — see its docstring. This module is imported
+# on that thread during app startup, so if a loop is already running we schedule a
+# task that fires _warm_mainthread_cudnn once torch.compile finishes. The forward
+# blocks the idle loop ~3s exactly once, before any traffic arrives; every user's
+# first click is then the already-warm second forward. If there is no running loop
+# at import (non-server context), the inline first-init call remains the fallback.
+async def _prewarm_cudnn_when_ready():
+    while not _mainthread_cudnn_warmed:
+        if _boot_warmup_done.wait(timeout=0):
+            _warm_mainthread_cudnn()
+            break
+        await asyncio.sleep(0.5)
+
+
+try:
+    asyncio.get_running_loop().create_task(_prewarm_cudnn_when_ready())
+except RuntimeError:
+    # No running event loop at import time; first-init inline warm is the fallback.
+    pass
+
+
 def _drain_nninter_preprocess(session, timeout: float = 120.0) -> None:
     """Block until the session's background set_image preprocessing completes.
 
@@ -315,18 +372,61 @@ def _drain_nninter_preprocess(session, timeout: float = 120.0) -> None:
 # Initialize the DetInferencer
 #inferencer = DetInferencer(model=config_path, weights=checkpoint, palette='random')
 
-predictor_sam2 = build_sam2_video_predictor(model_cfg, sam2_checkpoint, vos_optimized=False)
+_predictor_sam2 = None
 
-if os.path.exists(sam3_checkpoint):
-    sam3_model = build_sam3_video_model(checkpoint_path=sam3_checkpoint)
-    predictor_sam3 = sam3_model.tracker
-    predictor_sam3.backbone = sam3_model.detector.backbone
-else:
-    print(f"Warning: SAM3 checkpoint not found at {sam3_checkpoint}, skipping SAM3 model initialization")
-    sam3_model = None
-    predictor_sam3 = None
 
-predictor_med = build_sam2_video_predictor_npz(medsam2_model_cfg, medsam2_checkpoint, vos_optimized=False)
+def _get_predictor_sam2():
+    """Lazily build (and cache) the SAM2 predictor."""
+    global _predictor_sam2
+    if _predictor_sam2 is None:
+        _predictor_sam2 = build_sam2_video_predictor(model_cfg, sam2_checkpoint, vos_optimized=False)
+    return _predictor_sam2
+
+
+_predictor_sam3 = None
+_sam3_checked = False
+
+
+def _get_predictor_sam3():
+    """Lazily build (and cache) the SAM3 tracker. Returns None when the checkpoint
+    is absent (callers already handle None)."""
+    global _predictor_sam3, _sam3_checked
+    if not _sam3_checked:
+        _sam3_checked = True
+        if os.path.exists(sam3_checkpoint):
+            sam3_model = build_sam3_video_model(checkpoint_path=sam3_checkpoint)
+            _predictor_sam3 = sam3_model.tracker
+            _predictor_sam3.backbone = sam3_model.detector.backbone
+        else:
+            print(f"Warning: SAM3 checkpoint not found at {sam3_checkpoint}, skipping SAM3 model initialization")
+            _predictor_sam3 = None
+    return _predictor_sam3
+
+
+_predictor_med = None
+
+
+def _get_predictor_med():
+    """Lazily build (and cache) the MedSAM2 predictor."""
+    global _predictor_med
+    if _predictor_med is None:
+        _predictor_med = build_sam2_video_predictor_npz(medsam2_model_cfg, medsam2_checkpoint, vos_optimized=False)
+    return _predictor_med
+
+
+# Eager-load the optional models here — AFTER the torch.compile warmup thread has
+# been kicked off above — so their GPU/disk load OVERLAPS the ~13s compile instead
+# of delaying it (this is why VoxTell is loaded here rather than at its snapshot
+# above). Each is skipped when its LOAD_* toggle is "lazy", in which case the
+# get_* accessor loads it on first use.
+if _model_eager("SAM2"):
+    _get_predictor_sam2()
+if _model_eager("VOXTELL"):
+    _get_vox_predictor()
+if _model_eager("SAM3"):
+    _get_predictor_sam3()
+if _model_eager("MEDSAM2"):
+    _get_predictor_med()
 
 import transformers
 
@@ -2018,7 +2118,7 @@ class BasicInferTask(InferTask):
                 logger.info(f"Original orientation: {orig_orient}")
                 img_ras = sitk.DICOMOrient(img, "RAS")
                 img_np = sitk.GetArrayFromImage(img_ras)[None]
-                voxtell_seg_np_ras = vox_predictor.predict_single_image(img_np, data['texts'][0])
+                voxtell_seg_np_ras = _get_vox_predictor().predict_single_image(img_np, data['texts'][0])
 
                 voxtell_seg_sitk_ras = sitk.GetImageFromArray(voxtell_seg_np_ras[0])
                 voxtell_seg_sitk_ras.CopyInformation(img_ras)
@@ -2427,15 +2527,16 @@ class BasicInferTask(InferTask):
         if nnInter == False:
             medsam2 = data['medsam2']
             if medsam2 == 'medsam2':
-                predictor = predictor_med
+                predictor = _get_predictor_med()
             elif medsam2 == 'sam3':
+                predictor_sam3 = _get_predictor_sam3()
                 if predictor_sam3 is None:
                     logger.error(f"SAM3 model not available. Checkpoint not found at {sam3_checkpoint}.")
                     return f"/code/predictions/sam3_not_found.nii.gz", final_result_json
                 else:
                     predictor = predictor_sam3
             else:
-                predictor = predictor_sam2
+                predictor = _get_predictor_sam2()
             start = time.time()
             #result_json["pos_points"]=data["pos_points"]
             result_json["pos_points"] = copy.deepcopy(data["pos_points"]) if data["pos_points"] else []
