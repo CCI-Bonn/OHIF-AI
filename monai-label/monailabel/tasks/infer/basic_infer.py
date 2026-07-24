@@ -41,6 +41,28 @@ from monailabel.interfaces.utils.transform import dump_data, run_transforms
 from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
+
+# Disable Transparent Huge Pages for this (long-lived, ~120GB-VmSize) server
+# process. Profiled root cause of intermittent 12-20s init stalls: the large
+# per-request allocations — the 336MB np.load of the img_np disk cache and
+# set_image's array copy — fault in THP huge pages, and on this shared,
+# chronically fragmented host (hundreds of millions of historical compact_fail)
+# each huge-page fault enters *direct compaction that mostly fails*, spinning
+# MainThread on-CPU. Captured live: during one 12.6s np.load, MainThread was the
+# ONLY running thread the entire time and compact_stall rose ~437 (36/s vs
+# 0.25/s idle) — no disk I/O, no GIL wait. A fresh process never hits this (clean
+# heap), which is why it only bites the server. Regular 4KB pages skip the
+# high-order allocation path entirely. Process-local (other containers on the box
+# are unaffected) and inherited by threads; best-effort, never fatal.
+try:
+    import ctypes as _ctypes
+
+    _PR_SET_THP_DISABLE = 41
+    if _ctypes.CDLL("libc.so.6", use_errno=True).prctl(_PR_SET_THP_DISABLE, 1, 0, 0, 0) == 0:
+        logging.getLogger(__name__).info("Transparent Huge Pages disabled for this process (PR_SET_THP_DISABLE)")
+except Exception:
+    logging.getLogger(__name__).warning("Could not disable THP (non-fatal)", exc_info=True)
+
 from monailabel.utils.others.helper import (
     get_scanline_filled_points_3d,
     clean_and_densify_polyline,
