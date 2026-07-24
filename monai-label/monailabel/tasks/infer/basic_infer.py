@@ -31,6 +31,7 @@ from monai.inferers import Inferer, SimpleInferer, SlidingWindowInferer
 from monai.utils import deprecated
 
 import pathlib
+import threading
 from pydicom.filereader import dcmread
 import traceback
 
@@ -40,6 +41,28 @@ from monailabel.interfaces.utils.transform import dump_data, run_transforms
 from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
+
+# Disable Transparent Huge Pages for this (long-lived, ~120GB-VmSize) server
+# process. Profiled root cause of intermittent 12-20s init stalls: the large
+# per-request allocations — the 336MB np.load of the img_np disk cache and
+# set_image's array copy — fault in THP huge pages, and on this shared,
+# chronically fragmented host (hundreds of millions of historical compact_fail)
+# each huge-page fault enters *direct compaction that mostly fails*, spinning
+# MainThread on-CPU. Captured live: during one 12.6s np.load, MainThread was the
+# ONLY running thread the entire time and compact_stall rose ~437 (36/s vs
+# 0.25/s idle) — no disk I/O, no GIL wait. A fresh process never hits this (clean
+# heap), which is why it only bites the server. Regular 4KB pages skip the
+# high-order allocation path entirely. Process-local (other containers on the box
+# are unaffected) and inherited by threads; best-effort, never fatal.
+try:
+    import ctypes as _ctypes
+
+    _PR_SET_THP_DISABLE = 41
+    if _ctypes.CDLL("libc.so.6", use_errno=True).prctl(_PR_SET_THP_DISABLE, 1, 0, 0, 0) == 0:
+        logging.getLogger(__name__).info("Transparent Huge Pages disabled for this process (PR_SET_THP_DISABLE)")
+except Exception:
+    logging.getLogger(__name__).warning("Could not disable THP (non-fatal)", exc_info=True)
+
 from monailabel.utils.others.helper import (
     get_scanline_filled_points_3d,
     clean_and_densify_polyline,
@@ -134,7 +157,12 @@ _artifact_loader = nnInteractiveInferenceSession(
     device=torch.device("cuda:0"),
     use_torch_compile=True,
     verbose=True,
-    torch_n_threads=os.cpu_count(),
+    # nnInteractive's default (8). The only CPU-parallel work here is set_image
+    # normalization, which is memory-bandwidth-bound (more threads don't help),
+    # and the model math runs on the GPU — so os.cpu_count() (=224 on this box)
+    # just oversubscribes CPU and inflates the thread count on a shared host.
+    # torch.set_num_threads() is process-global; keep it modest.
+    torch_n_threads=8,
     do_autozoom=True,
 )
 _NNINTER_ARTIFACTS = _artifact_loader._load_model_artifacts_from_disk(model_path)
@@ -145,11 +173,79 @@ def _new_nninter_session() -> nnInteractiveInferenceSession:
         device=torch.device("cuda:0"),
         use_torch_compile=True,
         verbose=True,
-        torch_n_threads=os.cpu_count(),
+        torch_n_threads=8,  # see _artifact_loader above
         do_autozoom=True,
     )
     s.initialize_from_loaded_artifacts(_NNINTER_ARTIFACTS)
     return s
+
+
+# Network input descriptor for the just-in-time warmup forward:
+# (batch=1, image + interaction channels, *patch_size). Both come from the model
+# plan; hard-failing here would be wrong, so we read them once with a fallback.
+try:
+    _WARMUP_PATCH_SIZE = tuple(_NNINTER_ARTIFACTS["configuration_manager"].patch_size)
+    _WARMUP_IN_CHANNELS = _artifact_loader.num_interaction_channels + 1  # +1 image channel
+except Exception:
+    _WARMUP_PATCH_SIZE = (192, 192, 192)
+    _WARMUP_IN_CHANNELS = 8
+_WARMUP_INPUT_SHAPE = (1, _WARMUP_IN_CHANNELS, *_WARMUP_PATCH_SIZE)
+
+
+# Set by the boot warmup thread once warmup() has run torch.compile, so the
+# inline MainThread warmup below never has to eat the ~12s compile itself.
+_boot_warmup_done = threading.Event()
+# Guards the once-per-process MainThread cuDNN warmup. Only ever touched from the
+# inference (MainThread) path, so no lock is needed.
+_mainthread_cudnn_warmed = False
+
+
+def _warm_mainthread_cudnn() -> None:
+    """Pay the cuDNN per-THREAD first-forward cost on the inference thread, once.
+
+    The first network() forward on any given thread costs ~0.75s of REAL GPU
+    time: cuDNN's algorithm cache and workspace are bound to a per-thread cuDNN
+    handle, so that thread runs algorithm selection + workspace alloc on its
+    first forward and reuses them (~0.05s) forever after. (The conv KERNELS
+    themselves are context-global and already loaded by the boot warmup; only the
+    per-thread handle state is cold.)
+
+    All inference runs INLINE on the async endpoint's event-loop thread
+    (MainThread) — api_run_inference is `async def` and calls run_inference
+    directly, serialized — so warming MainThread's handle ONCE per process makes
+    every real click the already-warm second forward. This must run ON
+    MainThread: a warmup on the boot thread or a spawned daemon warms the wrong
+    handle and does nothing for the click (confirmed: bg-thread warm -> MainThread
+    forward still 0.78s cold). We therefore call this synchronously from the init
+    request path, which is itself on MainThread.
+
+    Content-independent: algo/kernel choice keys on the tensor descriptor, so a
+    zeros tensor of the exact (1, in_channels, *patch_size) shape warms the
+    identical path the real click uses — no set_image / interaction / autozoom
+    needed. Runs under gpu_lock to serialize with any concurrent prediction."""
+    global _mainthread_cudnn_warmed
+    if _mainthread_cudnn_warmed:
+        return
+    # Don't warm before torch.compile has finished on the boot thread, or this
+    # inline forward would eat the ~12s compile and stall the init response.
+    # Skip silently if not ready yet; a later init retries (flag stays False).
+    if not _boot_warmup_done.wait(timeout=0):
+        return
+    try:
+        net = _NNINTER_ARTIFACTS["network"]
+        dummy = torch.zeros(_WARMUP_INPUT_SHAPE, device=_artifact_loader.device, dtype=torch.float32)
+        _t = time.time()
+        with get_pool().gpu_lock:
+            with torch.inference_mode(), torch.autocast("cuda", enabled=True):
+                net(dummy.contiguous())
+            torch.cuda.synchronize()
+        _mainthread_cudnn_warmed = True
+        logger.info(
+            f"[timing] MainThread cuDNN warmup forward: {time.time() - _t:.3f}s "
+            f"(first real click is now warm)"
+        )
+    except Exception:
+        logger.exception("MainThread cuDNN warmup failed (non-fatal)")
 
 
 set_pool(SessionPool(factory=_new_nninter_session))
@@ -175,6 +271,12 @@ try:
             _artifact_loader.warmup()
             _NNINTER_ARTIFACTS["network"] = _artifact_loader.network
             _wlog.info("nnInteractive warmup: done.")
+            # Signal that torch.compile is done so the inline MainThread cuDNN
+            # warmup (see _warm_mainthread_cudnn) can run without eating compile.
+            # NOTE: this boot thread canNOT itself warm the inference path —
+            # cuDNN handle state is per-thread and inference runs on MainThread,
+            # not here. The MainThread warmup happens on the first init request.
+            _boot_warmup_done.set()
         except Exception:
             _wlog.exception("nnInteractive warmup failed (non-fatal)")
 
@@ -1172,7 +1274,8 @@ class BasicInferTask(InferTask):
             # Restored full object buffer, cropped to its tight non-zero bbox
             # (identical packaging to the normal nninter result path).
             _t_result = time.time()
-            pred = session.target_buffer.clone().numpy()  # (Z, Y, X) uint8
+            # Zero-copy view + crop-only copy (same pattern as the normal result path).
+            pred = session.target_buffer.numpy()  # (Z, Y, X) uint8, VIEW
             pred_full_shape = list(pred.shape)
             z_nz = np.where(np.any(pred, axis=(1, 2)))[0]
             if z_nz.size > 0:
@@ -1181,7 +1284,7 @@ class BasicInferTask(InferTask):
                 z0, z1 = int(z_nz[0]), int(z_nz[-1]) + 1
                 y0, y1 = int(y_nz[0]), int(y_nz[-1]) + 1
                 x0, x1 = int(x_nz[0]), int(x_nz[-1]) + 1
-                pred = pred[z0:z1, y0:y1, x0:x1]
+                pred = np.ascontiguousarray(pred[z0:z1, y0:y1, x0:x1])  # copy of crop only
                 pred_offset = [z0, y0, x0]
             else:
                 # Undid the only interaction: object is now empty. Send an empty
@@ -1287,10 +1390,17 @@ class BasicInferTask(InferTask):
             logger.info("img_np cache hit — skipping all DICOM I/O")
         else:
             # Full I/O: directory scan + header reads needed for metadata / pixel load.
+            _t_scan = time.time()
             reader = sitk.ImageSeriesReader()
             dicom_filenames = reader.GetGDCMSeriesFileNames(dicom_dir)
+            _scan_elapsed = time.time() - _t_scan
+            _t_hdr = time.time()
             dcm_img_sample   = dcmread(dicom_filenames[0], stop_before_pixels=True)
             dcm_img_sample_2 = dcmread(dicom_filenames[1], stop_before_pixels=True)
+            logger.info(
+                f"[timing] dicom_scan={_scan_elapsed:.3f}s  header_read={time.time()-_t_hdr:.3f}s  "
+                f"files={len(dicom_filenames)}"
+            )
 
             # Authoritative UID from DICOM tag (0020,000E); path-derived UID is unreliable
             # when path has trailing slash or a non-UID last component.
@@ -1356,12 +1466,39 @@ class BasicInferTask(InferTask):
                 _disk_cache_path = os.path.join("/code/img_cache", f"{_disk_cache_key}.npy")
                 if os.path.exists(_disk_cache_path):
                     _t_disk = time.time()
+                    # Eager read (single sequential read syscall, ~0.15s warm). Do
+                    # NOT mmap this: _background_set_image's copy-guard
+                    # (`if image_np is image`) does not fire for a memmap
+                    # (np.ascontiguousarray returns a distinct read-only view), so
+                    # torch.from_numpy gets a non-writable mmap-backed tensor and the
+                    # in-place normalization copy-on-writes all 336MB one page-fault
+                    # at a time -> >1min + undefined behavior. The occasional 10-30s
+                    # np.load spikes are CPU/memory-bandwidth contention during busy
+                    # windows (esp. right after a rebuild churns page cache), not the
+                    # disk (RAID reads at multiple GB/s); they do not occur in steady
+                    # single-study production use.
                     img_np = np.load(_disk_cache_path)
                     _disk_hit = True
-                    logger.info(f"[timing] img_np disk cache hit: {time.time()-_t_disk:.3f}s  shape={img_np.shape}")
+                    if img_np.dtype == np.float64:
+                        # Legacy float64 cache file: downcast now (same rationale as the
+                        # fresh-convert path) and rewrite the cache at float32 in the
+                        # background so the next cold start reads half the bytes.
+                        img_np = img_np.astype(np.float32)
+
+                        def _rewrite_cache(path=_disk_cache_path, arr=img_np):
+                            try:
+                                np.save(path, arr)
+                                logger.info(f"[timing] rewrote disk cache as float32: {path}")
+                            except Exception as e:
+                                logger.warning(f"Failed to rewrite disk cache as float32: {e}")
+
+                        threading.Thread(target=_rewrite_cache, daemon=True).start()
+                    logger.info(f"[timing] img_np disk cache hit: {time.time()-_t_disk:.3f}s  shape={img_np.shape}  dtype={img_np.dtype}")
                 else:
                     reader.SetFileNames(dicom_filenames)
+                    _t_exec = time.time()
                     img = reader.Execute()
+                    logger.info(f"[timing] reader.Execute (pixel read): {time.time()-_t_exec:.3f}s")
         
 
         before_nnInter = time.time()
@@ -1380,8 +1517,13 @@ class BasicInferTask(InferTask):
             else:
                 _t_conv = time.time()
                 img_np = sitk.GetArrayFromImage(img)[None]
+                if img_np.dtype == np.float64:
+                    # MR series decode as float64 (rescale slope/intercept applied in
+                    # double); nnInteractive preprocess normalizes to float32 anyway.
+                    # Halves RAM, disk cache size, and cache load time.
+                    img_np = img_np.astype(np.float32)
                 img_convert_elapsed = time.time() - _t_conv
-                logger.info(f"[timing] sitk.GetArrayFromImage: {img_convert_elapsed:.3f}s  shape={img_np.shape}")
+                logger.info(f"[timing] sitk.GetArrayFromImage: {img_convert_elapsed:.3f}s  shape={img_np.shape}  dtype={img_np.dtype}")
                 if _disk_cache_path:
                     try:
                         os.makedirs("/code/img_cache", exist_ok=True)
@@ -1394,6 +1536,7 @@ class BasicInferTask(InferTask):
                 raise ValueError("Input image must be 4D with shape (1, x, y, z)")
 
             if nnInter == "init":
+                _init_pre_elapsed = 0.0   # pre-drain + set_image submit (0.0 on warm-session skip)
                 # Re-run set_image not only when the series changed, but also whenever the
                 # nnInteractive session itself has no valid image (e.g. a prior interaction shut
                 # down the executor / cleared preprocessed_image). Relying only on the img_np
@@ -1415,15 +1558,28 @@ class BasicInferTask(InferTask):
                     image_cache["instanceNumber2"] = instanceNumber2
                     try:
                         logger.info(f"init set_image (uid_changed={_uid_changed}, session_needs_image={_session_needs_image})")
-                        session.set_image(img_np)
-                        session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
-                        # Await the background preprocessing before returning (upstream
-                        # server pattern). Leaving the future un-awaited allowed a second
-                        # set_image (e.g. quick re-init on layout change) to deadlock the
-                        # session executor — see _drain_nninter_preprocess.
+                        # Overlap optimization: drain any IN-FLIGHT preprocess BEFORE
+                        # submitting (never submit while one may be running — the
+                        # 2-worker executor deadlocks, see _drain_nninter_preprocess;
+                        # set_image's _reset_session also drops the future reference,
+                        # so draining after submit would miss the old one). Then submit
+                        # and return WITHOUT waiting: the user's think-time between
+                        # init and the first click absorbs the ~1-2s preprocess, and
+                        # _safe_interaction's recovery path drains any remainder.
                         _t_pre = time.time()
                         _drain_nninter_preprocess(session)
-                        logger.info(f"[timing] init set_image preprocess: {time.time()-_t_pre:.3f}s")
+                        session.set_image(img_np)
+                        session.set_target_buffer(torch.zeros(img_np.shape[1:], dtype=torch.uint8))
+                        _init_pre_elapsed = time.time() - _t_pre
+                        logger.info(f"[timing] init set_image submitted (preprocess overlapped): {_init_pre_elapsed:.3f}s")
+                        # Warm the inference thread's per-thread cuDNN handle once
+                        # per process, INLINE on this (MainThread) init request, so
+                        # the user's first click is the warm second forward. Adds
+                        # ~0.75s to the first init only (no-op thereafter); runs on
+                        # MainThread because that is where predictions run — see
+                        # _warm_mainthread_cudnn. Overlapped with preprocess, which
+                        # is running on the session executor meanwhile.
+                        _warm_mainthread_cudnn()
                     except Exception as init_error:
                         logger.error(f"Failed to initialize session: {init_error}")
                         logger.info("Prefer fail!!")
@@ -1437,7 +1593,21 @@ class BasicInferTask(InferTask):
                     lst.clear()
                 _t_reset = time.time()
                 session.reset_interactions()
-                logger.info(f"[timing] session.reset_interactions: {time.time()-_t_reset:.3f}s")
+                _init_reset_elapsed = time.time() - _t_reset
+                logger.info(f"[timing] session.reset_interactions: {_init_reset_elapsed:.3f}s")
+                _init_total = time.time() - begin
+                logger.info(
+                    f"[timing][init] load={before_nnInter-begin:.3f}s  img_convert={img_convert_elapsed:.3f}s  "
+                    f"preprocess_submit={_init_pre_elapsed:.3f}s  reset={_init_reset_elapsed:.3f}s  "
+                    f"total_init={_init_total:.3f}s  (preprocess overlapped with user think-time)"
+                )
+                # --- init timing breakdown for the client ---
+                final_result_json["server_begin_ts"] = server_begin_ts
+                final_result_json["server_load_elapsed"] = before_nnInter - begin        # DICOM scan/read (0 on cache hit)
+                final_result_json["server_img_convert_elapsed"] = img_convert_elapsed    # sitk → numpy
+                final_result_json["server_init_preprocess_elapsed"] = _init_pre_elapsed  # pre-drain + set_image submit (preprocess overlapped)
+                final_result_json["server_init_reset_elapsed"] = _init_reset_elapsed     # reset_interactions
+                final_result_json["server_end_ts"] = time.time()
                 return f'/code/predictions/init.nii.gz', final_result_json
 
             logger.info(f"interactions in _session_used_interactions: {used_interactions}")
@@ -1927,6 +2097,11 @@ class BasicInferTask(InferTask):
                         logger.error(f"Failed to reset session: {reset_error}")
                     return False
             
+            # Dispatch window: everything from prompt bookkeeping through the last
+            # session call. loop_overhead (logged below) = this window minus the
+            # timed prompt_prep and model_core portions.
+            _t_dispatch = time.time()
+
             # Replay optimization: a normal request carries exactly one
             # not-yet-applied prompt. After a session-expired replay the request
             # carries the full history — encode all but the last without running
@@ -2154,10 +2329,16 @@ class BasicInferTask(InferTask):
                 if not _safe_interaction(lambda: session._predict()):
                     return f'/code/predictions/reset.nii.gz', final_result_json
 
+            dispatch_elapsed = time.time() - _t_dispatch
+
             # --- Retrieve Results ---
             _t_result = time.time()
-            results = session.target_buffer.clone()
-            pred = results.numpy()  # shape (Z, Y, X), dtype uint8
+            # Zero-copy view of the CPU target_buffer: skip the full-volume clone
+            # (~84MB for a 321x512x512 volume) and copy ONLY the cropped bbox below.
+            # entry.lock serializes interactions per session, so the buffer is stable
+            # for the duration of this request; ascontiguousarray detaches the crop
+            # before the lock is released.
+            pred = session.target_buffer.numpy()  # shape (Z, Y, X), dtype uint8, VIEW
 
             # Crop to tight non-zero bbox before sending.
             # Reduces wire bytes and compression time proportionally to segmentation size.
@@ -2173,9 +2354,11 @@ class BasicInferTask(InferTask):
                 z0, z1 = int(z_nz[0]),  int(z_nz[-1])  + 1
                 y0, y1 = int(y_nz[0]),  int(y_nz[-1])  + 1
                 x0, x1 = int(x_nz[0]),  int(x_nz[-1])  + 1
-                pred = pred[z0:z1, y0:y1, x0:x1]
+                pred = np.ascontiguousarray(pred[z0:z1, y0:y1, x0:x1])  # copy of crop only
                 pred_offset = [z0, y0, x0]
             else:
+                # Empty segmentation (rare): copy to detach from the live buffer.
+                pred = pred.copy()
                 pred_offset = [0, 0, 0]
             result_elapsed = time.time() - _t_result
 
@@ -2187,11 +2370,26 @@ class BasicInferTask(InferTask):
             #sitk.WriteImage(pred_itk, f'/code/predictions/nninter_{image_series_desc}.nii.gz')
             nninter_elapsed = time.time() - start
             server_load_elapsed = before_nnInter - begin
+            # loop_overhead: dispatch-loop time not captured by prompt_prep/model_core.
+            # Measured (2026-07): the loop's own work (md5 hashing, deepcopy, health
+            # checks, GC) is ~1ms; the intermittent 0.02-0.14s seen here is GIL/memory
+            # contention with the session's ASYNC UNDO SNAPSHOT, which _predict submits
+            # to the executor right when this tail runs (blosc2-compresses the ~1.3GB
+            # interactions tensor + 84MB target buffer). Accepted cost of instant undo.
+            loop_overhead = dispatch_elapsed - prompt_prep_elapsed - nninter_core_elapsed
+            # pre_dispatch: start → _t_dispatch minus img_convert (dim validation,
+            # used_interactions log, VLM-op check).
+            pre_dispatch = nninter_elapsed - img_convert_elapsed - dispatch_elapsed - result_elapsed
 
+            # Components now sum: img_convert + prompt_prep + model_core + loop_overhead
+            # + result_retrieve + pre_dispatch == total_nninter. load is a SIBLING
+            # window (DICOM I/O before the nnInter block): load + total_nninter ≈ total_request.
             logger.info(
-                f"[timing] load={server_load_elapsed:.3f}s  img_convert={img_convert_elapsed:.3f}s  "
+                f"[timing] load={server_load_elapsed:.3f}s | img_convert={img_convert_elapsed:.3f}s  "
                 f"prompt_prep={prompt_prep_elapsed:.3f}s  model_core={nninter_core_elapsed:.3f}s  "
-                f"result_retrieve={result_elapsed:.3f}s  total_nninter={nninter_elapsed:.3f}s"
+                f"loop_overhead={loop_overhead:.3f}s  result_retrieve={result_elapsed:.3f}s  "
+                f"pre_dispatch={pre_dispatch:.3f}s  total_nninter={nninter_elapsed:.3f}s | "
+                f"total_request={time.time()-begin:.3f}s"
             )
 
             final_result_json["prompt_info"] = result_json
@@ -2202,6 +2400,8 @@ class BasicInferTask(InferTask):
             final_result_json["server_prompt_prep_elapsed"] = prompt_prep_elapsed  # lasso/scribble mask build
             final_result_json["nninter_core_elapsed"] = nninter_core_elapsed       # GPU add_*_interaction
             final_result_json["server_result_elapsed"] = result_elapsed            # target_buffer → numpy + bbox crop
+            final_result_json["server_loop_overhead_elapsed"] = loop_overhead      # dispatch loop minus timed portions
+            final_result_json["server_pre_dispatch_elapsed"] = pre_dispatch        # validation + logs before prompt loop
             final_result_json["nninter_elapsed"] = nninter_elapsed                 # total nnInter block
             final_result_json["pred_offset"] = pred_offset            # [z0, y0, x0] of cropped region in full volume
             final_result_json["pred_full_shape"] = pred_full_shape  # [Z, Y, X] of full volume (before crop)
