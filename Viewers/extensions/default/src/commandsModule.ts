@@ -2858,7 +2858,6 @@ const commandsModule = ({
 
       
       const beforePost = Date.now();
-      console.log(`Before Post request: ${(beforePost - start)/1000} Seconds`);
 
       // Create the axios promise
       const segmentationPromise = axios.post(url, data, {
@@ -3001,11 +3000,16 @@ const commandsModule = ({
           let merged_derivedImages = [];
           let z_range = [];
           if(overlap){
-          let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
           let derivedImages = [];
           if (segImageIds.length > 0){
             derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
           }
+
+          // NOTE: block-reuse on refine was tried and REVERTED — clearing the existing block's
+          // pixels needs getScalarData() on each old slice, which lazily re-materialises the
+          // labelmap buffer at ~7ms/slice (240ms for 34 slices) — MORE than just allocating a
+          // fresh block (~88ms). Fresh images' getScalarData is ~free, so allocate-fresh wins.
+          let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
 
           if(flipped){
             derivedImages_new.reverse();
@@ -3040,8 +3044,6 @@ const commandsModule = ({
               }
             }
           }
-          console.log(`After slice assignment: ${(Date.now() - start)/1000} Seconds`);
-
 
           let filteredDerivedImages = [];
           const imgLength = imageIds.length;
@@ -3056,14 +3058,11 @@ const commandsModule = ({
             const candidateBlock = segmentNumber - 1;
             if (candidateBlock >= 0 && candidateBlock < numBlocks) {
               excludedBlockIndex = candidateBlock;
-              const blockStart = excludedBlockIndex * imgLength;
-              const blockEnd = Math.min(blockStart + imgLength, derivedImages.length);
-              for (let i = blockStart; i < blockEnd; i++) {
-                const sd = (derivedImages[i].voxelManager as csTypes.IVoxelManager<number>).getScalarData();
-                for (let k = 0; k < sd.length; k++) {
-                  if (sd[k] === segmentNumber) sd[k] = 0;
-                }
-              }
+              // No pixel-clear needed: this old block is EXCLUDED below and replaced wholesale by
+              // the freshly-created all-zero derivedImages_new (which already holds the new crop
+              // from the slice loop above). createAndCacheDerivedLabelmapImages mints fresh
+              // derived:uuid images every call, so the old block is orphaned, and nnInteractive
+              // returns the full current mask each refine — the old pixels are superseded anyway.
             }
             for (let i = 0; i < derivedImages.length; i++) {
               if (Math.floor(i / imgLength) !== excludedBlockIndex) filteredDerivedImages.push(derivedImages[i]);
@@ -3208,8 +3207,7 @@ const commandsModule = ({
         }
           
                     
-          const derivedImageIds = merged_derivedImages.map(image => image.imageId);  
-          console.log(`Just after derivedImageIds: ${(Date.now() - start)/1000} Seconds`);
+          const derivedImageIds = merged_derivedImages.map(image => image.imageId);
           segments[segmentNumber] = {
             segmentIndex: segmentNumber,
             label: label_name,
@@ -3226,7 +3224,6 @@ const commandsModule = ({
               dirtySlices: z_range,
             }
           };
-          console.log(`Before add or update segs: ${(Date.now() - start)/1000} Seconds`);
           // Post-segmentation processing: update representations, handle viewports, trigger events
           await postSegmentationProcessing({
             activeViewportId,
@@ -3242,7 +3239,6 @@ const commandsModule = ({
             currentImageIdIndex,
             z_range,
           });
-          const tViz = Date.now();
           return response;
         }
       } catch (error) {
