@@ -2037,7 +2037,12 @@ const commandsModule = ({
     },
     async resetSegment({ segmentationId, segmentIndex }: { segmentationId: string; segmentIndex: number }) {
       const segmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
-      const imageIds: string[] = (segmentation?.representationData?.Labelmap as any)?.imageIds ?? [];
+      // Use allImageIds (every block). representationData.Labelmap.imageIds is reverted to the PRIMARY
+      // block (segment 1) by syncLegacyLabelmapData, so it misses segments 2+ (their private blocks) —
+      // which is why Reset only cleared the 1st segment. _zeroImageId only zeros THIS segment's value,
+      // so scanning every block's images is safe (other segments' blocks hold other values, untouched).
+      const _lmData = (segmentation?.representationData?.Labelmap as any);
+      const imageIds: string[] = _lmData?.allImageIds ?? _lmData?.imageIds ?? [];
 
       const _zeroImageId = (imageId: string) => {
         const image = cache.getImage(imageId);
