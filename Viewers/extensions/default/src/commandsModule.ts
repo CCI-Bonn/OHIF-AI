@@ -2093,6 +2093,43 @@ const commandsModule = ({
       }
       (activeVp as any)?.render?.();   // synchronous WebGL render — instant visual removal
 
+      // 2b. MPR viewports render the labelmap as built 3D VOLUMEs (not per-slice stack images), so the
+      //     stack push above never touches them — and because reset keeps the same imageIds, cornerstone
+      //     just re-serves the cached (pre-zeroed) volume, which is why a remount/DATA_MODIFIED didn't
+      //     clear it. Instead, zero this segment's value directly in each labelmap volume's scalar buffer
+      //     and re-render. Only labelmap volumes are Uint8Array (the CT is Int16/float) so the source is
+      //     never touched; native indexOf skips block volumes that don't hold this segment; and volumes
+      //     shared across the 3 MPR viewports are scanned once.
+      {
+        const _vpService = servicesManager.services.cornerstoneViewportService;
+        const _scanned = new Set<any>();
+        const _mprVps: any[] = [];
+        for (const _vid of _vpService.getViewportIds()) {
+          const _vp = _vpService.getCornerstoneViewport(_vid) as any;
+          if (!(_vp instanceof VolumeViewport) || _vp instanceof VolumeViewport3D) continue;
+          _mprVps.push(_vp);
+          for (const _ae of (_vp?.getActors?.() ?? [])) {
+            const _inputData = _ae?.actor?.getMapper?.()?.getInputData?.();
+            const _scalars = _inputData?.getPointData?.()?.getScalars?.();
+            const _vtkData = _scalars?.getData?.();
+            if (!(_vtkData instanceof Uint8Array)) continue;   // labelmap volumes only; skip the CT
+            if (!_scanned.has(_vtkData)) {
+              _scanned.add(_vtkData);
+              if (_vtkData.indexOf(segmentIndex) !== -1) {   // this block volume holds the segment
+                for (let i = 0; i < _vtkData.length; i++) {
+                  if (_vtkData[i] === segmentIndex) _vtkData[i] = 0;
+                }
+                _scalars.modified?.();
+                _inputData.modified?.();
+              }
+            }
+            _ae.actor?.modified?.();
+            _ae.actor?.getMapper?.()?.modified?.();
+          }
+        }
+        for (const _vp of _mprVps) _vp?.render?.();
+      }
+
       // 3. Background: zero all remaining slices, remove measurements, reset server.
       setTimeout(() => {
         for (const imageId of imageIds) {
