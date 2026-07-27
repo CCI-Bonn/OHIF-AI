@@ -2999,6 +2999,10 @@ const commandsModule = ({
 
           let merged_derivedImages = [];
           let z_range = [];
+          // Old block's imageIds when this is a refine — evicted from the cornerstone cache
+          // AFTER the representation swap below, so the ~84MB fresh block minted each refine
+          // doesn't accumulate (leak was ~+84MB/refine, inflating MPR remount + GC pauses).
+          let _orphanedImageIds: string[] = [];
           if(overlap){
           let derivedImages = [];
           if (segImageIds.length > 0){
@@ -3058,6 +3062,10 @@ const commandsModule = ({
             const candidateBlock = segmentNumber - 1;
             if (candidateBlock >= 0 && candidateBlock < numBlocks) {
               excludedBlockIndex = candidateBlock;
+              _orphanedImageIds = derivedImages
+                .slice(excludedBlockIndex * imgLength, (excludedBlockIndex + 1) * imgLength)
+                .map((img: any) => img?.imageId)
+                .filter(Boolean);
               // No pixel-clear needed: this old block is EXCLUDED below and replaced wholesale by
               // the freshly-created all-zero derivedImages_new (which already holds the new crop
               // from the slice loop above). createAndCacheDerivedLabelmapImages mints fresh
@@ -3239,6 +3247,12 @@ const commandsModule = ({
             currentImageIdIndex,
             z_range,
           });
+          // Evict the orphaned old block now that the representation swap + volume rebuild are
+          // done and nothing references these imageIds. Caps the ~84MB/refine cache growth that
+          // was inflating the MPR remount and causing GC-pause spikes across the other legs.
+          for (const _oid of _orphanedImageIds) {
+            try { cache.removeImageLoadObject(_oid, { force: true }); } catch { /* already gone */ }
+          }
           return response;
         }
       } catch (error) {
