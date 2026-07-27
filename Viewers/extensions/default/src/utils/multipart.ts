@@ -89,10 +89,10 @@ function uint8ToString(u8: Uint8Array): string {
       if (u8[i] === 13 && u8[i + 1] === 10) i += 2;
   
       // final boundary?
-      if (u8.slice(i, i + finalBoundaryBytes.length).every((b, k) => b === finalBoundaryBytes[k])) break;
-  
+      if (u8.subarray(i, i + finalBoundaryBytes.length).every((b, k) => b === finalBoundaryBytes[k])) break;
+
       // need a boundary
-      if (!u8.slice(i, i + boundaryBytes.length).every((b, k) => b === boundaryBytes[k])) {
+      if (!u8.subarray(i, i + boundaryBytes.length).every((b, k) => b === boundaryBytes[k])) {
         i++; // resync
         continue;
       }
@@ -101,25 +101,31 @@ function uint8ToString(u8: Uint8Array): string {
       let j = i + boundaryBytes.length;
       if (u8[j] === 13 && u8[j + 1] === 10) j += 2;
   
-      const rest = u8.slice(j);
+      const rest = u8.subarray(j);
       const split = findCRLFCRLF(rest);
       if (split < 0) break;
-  
+
       const bodyStart = j + split + 4;
-  
-      // find end before "\r\n--boundary"
-      let k = bodyStart;
+
+      // Find the end of this part = the next "\r\n--boundary". Use native indexOf on CR (13)
+      // to jump through the body instead of comparing every byte: the seg body is a 0/1 mask,
+      // so CR is effectively absent until the real boundary. This turns an O(bodySize) JS scan
+      // (previously up to ~800ms on large masks) into a single optimized native jump.
       let end = -1;
-      for (; k + nextMarker.length <= u8.length; k++) {
+      let k = bodyStart;
+      while (k + nextMarker.length <= u8.length) {
+        const cr = u8.indexOf(13, k);
+        if (cr < 0 || cr + nextMarker.length > u8.length) break;
         let match = true;
-        for (let t = 0; t < nextMarker.length; t++) {
-          if (u8[k + t] !== nextMarker[t]) { match = false; break; }
+        for (let t = 1; t < nextMarker.length; t++) {
+          if (u8[cr + t] !== nextMarker[t]) { match = false; break; }
         }
-        if (match) { end = k; break; }
+        if (match) { end = cr; break; }
+        k = cr + 1;
       }
       if (end === -1) end = u8.length;
-  
-      parts.push(u8.slice(j, end)); // headers + CRLFCRLF + body
+
+      parts.push(u8.subarray(j, end)); // headers + CRLFCRLF + body (view, no copy)
       i = end + 2; // skip CRLF before next boundary
     }
   
@@ -129,8 +135,8 @@ function uint8ToString(u8: Uint8Array): string {
     for (const p of parts) {
       const split = findCRLFCRLF(p);
       if (split < 0) continue;
-      const headers = parseHeaders(uint8ToString(p.slice(0, split)));
-      let body = p.slice(split + 4);
+      const headers = parseHeaders(uint8ToString(p.subarray(0, split)));
+      let body = p.subarray(split + 4);
   
       // Defensive: if someone accidentally placed header lines into the body, peel them.
       const headProbe = uint8ToString(body.slice(0, 16));
