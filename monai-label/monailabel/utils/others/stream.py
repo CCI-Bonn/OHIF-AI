@@ -59,8 +59,10 @@ def stream_multipart(meta: dict, seg_payload: Union[BytesLike, "np.ndarray"]) ->
     """
     Sends a multipart/form-data with:
       - part "meta": application/json, Content-Encoding: gzip
-      - part "seg" : application/octet-stream, Content-Encoding: gzip
-    Both parts are gzip-compressed on the fly and streamed.
+      - part "seg" : application/octet-stream, sent UNCOMPRESSED
+    The seg is a 0/1 mask crop; on a fast (same-host) link the raw transfer is cheap,
+    whereas gzip made the client pay a DecompressionStream gunzip that scaled with mask
+    size (~180-450ms on large masks). Only the tiny meta part is still gzipped.
     """
     boundary = f"monai-{secrets.token_hex(12)}"
     CRLF = b"\r\n"
@@ -79,7 +81,6 @@ def stream_multipart(meta: dict, seg_payload: Union[BytesLike, "np.ndarray"]) ->
         dash_boundary,
         b'Content-Disposition: form-data; name="seg"; filename="seg.bin"',
         b"Content-Type: application/octet-stream",
-        b"Content-Encoding: gzip",
         b"",
     ]) + CRLF
 
@@ -99,10 +100,10 @@ def stream_multipart(meta: dict, seg_payload: Union[BytesLike, "np.ndarray"]) ->
             yield gz
         yield CRLF  # end of meta body
 
-        # seg part
+        # seg part — sent UNCOMPRESSED (no Content-Encoding), so the client skips gunzip.
         yield seg_headers
-        for gz in _gzip_stream(seg_iter, level=6):
-            yield gz
+        for ch in seg_iter:
+            yield ch.tobytes()
         yield CRLF  # end of seg body
 
         # closing boundary
