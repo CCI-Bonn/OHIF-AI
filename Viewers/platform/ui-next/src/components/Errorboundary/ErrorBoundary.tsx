@@ -137,7 +137,7 @@ const DefaultFallback = ({
   const [showDetails, setShowDetails] = useState(false);
   const { show } = useNotification();
 
-  const title = `${t('Something went wrong')}${!isProduction && ` ${t('in')} ${context}`}.`;
+  const title = `${t('Something went wrong')}${!isProduction ? ` ${t('in')} ${context}` : ''}.`;
   const subtitle = t('Sorry, something went wrong there. Try again.');
 
   const { errorTitle, code, firstFilename } = parseErrorStack(error);
@@ -155,6 +155,13 @@ const DefaultFallback = ({
   };
 
   useEffect(() => {
+    // Product decision: do NOT surface a generic "Something went wrong" toast to end users —
+    // it isn't actionable and only confuses them. The component still degrades gracefully and
+    // every caught error is still logged to the console (see onErrorHandler). Kept in dev so
+    // developers still get the toast + details dialog.
+    if (isProduction) {
+      return;
+    }
     // Use a stable ID based on error message to support deduplication
     const errorId = `error-${errorTitle || error.message}`;
 
