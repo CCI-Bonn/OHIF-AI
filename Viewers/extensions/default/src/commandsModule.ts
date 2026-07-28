@@ -3394,9 +3394,13 @@ const commandsModule = ({
           // which lets us skip the remount (the remount is what orphans a volume every refine).
           let _mprInPlaceDone = false;
           if(overlap){
-          let derivedImages = [];
-          if (segImageIds.length > 0){
-            derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
+          // LRU-touch every existing block's images before the fresh allocation below. cache.getImage
+          // refreshes each image's timeStamp, and cornerstone purges strictly by oldest timestamp when
+          // decacheIfNecessaryUntilBytesAvailable runs — so without this a live block could be evicted
+          // out from under the representation. (Previously an incidental side-effect of building a
+          // `derivedImages` array that no longer has any readers.)
+          for (const id of segImageIds) {
+            cache.getImage(id);
           }
 
           // TRUE IN-PLACE REFINE: reuse this segment's EXISTING block instead of minting a fresh one.
@@ -3568,11 +3572,19 @@ const commandsModule = ({
           const _newBlock: LabelmapBlock = {
             segmentIndex: segmentNumber,
             z0: _newBlockZ0,
-            imageIds: derivedImages_new.map((img: any) => img?.imageId).filter(Boolean),
+            imageIds: _reuseIdx >= 0
+              ? _prevBlock!.imageIds.slice()
+              : derivedImages_new.map((img: any) => img.imageId),
           };
           _nextBlocks = _isRefine
             ? replaceBlockAt(_prevBlocks, _blockIdxForSeg, _newBlock)
             : appendBlock(
+                // Filter out any pre-existing block for this segment before appending the new one.
+                // This cannot strand a block without evicting it: when getRefineNew() is true,
+                // segmentNumber is assigned minAvailableNumber (see ~line 3120-3130), so it never
+                // collides with an existing block's segmentIndex. And releaseSegmentBlock already
+                // drops blocks on segment delete. The filter is correct defence-in-depth; the
+                // _orphanedImageIds gate below is only reached on the _isRefine path.
                 _prevBlocks.filter(b => b.segmentIndex !== segmentNumber),
                 _newBlock
               );
