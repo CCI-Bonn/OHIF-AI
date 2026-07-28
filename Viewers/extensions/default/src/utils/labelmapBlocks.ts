@@ -45,6 +45,50 @@ export type LabelmapBlock = {
 export const MIN_BLOCK_SLICES = 2;
 
 /**
+ * Grid that fresh block bounds snap to. Allocating a block to the mask's EXACT extent meant an
+ * nnInteractive mask — which grows a little on each refine — outgrew its block every time, and each
+ * reallocation changes imageIds, which forces a remount, which builds a new MPR volume and orphans
+ * the old one. Rounding out to a grid keeps that growth inside the block the segment already has.
+ * 32 slices is a bounded waste (<32 per side) against a typical ~40-slice mask, and it makes block
+ * lengths cluster on a handful of values rather than taking arbitrary ones.
+ */
+export const BLOCK_GRID_SLICES = 32;
+
+/**
+ * Snap a working range outward onto a fixed grid, so a slowly-growing mask keeps fitting the
+ * block it already has instead of reallocating (and remounting, and orphaning an MPR volume)
+ * on every refine. Lower bound rounds DOWN to a multiple of `grid`, upper bound rounds UP.
+ * Result is clamped to [0, sourceCount] and is always a superset of the input range.
+ *
+ * This is for ALLOCATION only. Containment must still be tested against the mask's own range:
+ * an existing block can legitimately cover the mask without covering the whole grid cell, and
+ * testing the snapped range would reallocate in exactly the case this function exists to avoid.
+ */
+export function snapRangeToGrid(
+  w0: number,
+  w1: number,
+  sourceCount: number,
+  grid: number
+): [number, number] {
+  const count = Math.max(0, sourceCount);
+  const a = Math.max(0, Math.min(w0, count));
+  const b = Math.max(a, Math.min(w1, count));
+  // An unusable grid degrades to the clamped input rather than producing NaN bounds — the caller
+  // has already applied MIN_BLOCK_SLICES, so the range is still allocatable.
+  if (!Number.isFinite(grid) || grid <= 0) {
+    return [a, b];
+  }
+  // A series shorter than one cell has nothing to snap to; take the whole thing.
+  if (count <= grid) {
+    return [0, count];
+  }
+  // The extra floor/ceil keep the bounds integral for a non-integer grid, and only ever widen.
+  const lo = Math.max(0, Math.floor(Math.floor(a / grid) * grid));
+  const hi = Math.min(count, Math.ceil(Math.ceil(b / grid) * grid));
+  return [lo, hi];
+}
+
+/**
  * Describe an existing representation as explicit blocks.
  * Falls back to the legacy uniform layout (flat allImageIds in N-sized chunks, optionally with a
  * blockSegments map) so representations built before sparse blocks keep working.

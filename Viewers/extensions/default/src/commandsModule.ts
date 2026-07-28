@@ -37,7 +37,7 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
-import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, sourceRangeForWorking, MIN_BLOCK_SLICES } from './utils/labelmapBlocks';
+import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES } from './utils/labelmapBlocks';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
@@ -3526,9 +3526,10 @@ const commandsModule = ({
             );
           }
 
-          // THE working range this refine needs, clamped to the series and widened to
-          // MIN_BLOCK_SLICES. Computed ONCE, here, and used for BOTH the containment test below and
-          // the allocation further down — they must agree.
+          // THE working range this refine needs — the MASK's own extent, clamped to the series and
+          // widened to MIN_BLOCK_SLICES. Computed ONCE, here. This is what CONTAINMENT is tested
+          // against, and it is the input the allocation range below is derived from, so the two can
+          // never drift apart.
           //
           // Testing containment against the raw server geometry instead was a trap: if the server
           // ever returned _segZ1 > _imgLen0 (or _segZ0 < 0), allocation would truncate the block to
@@ -3543,6 +3544,22 @@ const commandsModule = ({
           // Without crop geometry the mask extent is unknown, so fall back to the full series.
           const [_bw0, _bw1] = _hasCropGeom
             ? clampRange(_segZ0, _segZ1, _imgLen0, MIN_BLOCK_SLICES)
+            : [0, _imgLen0];
+
+          // How much room a FRESH block reserves — the same range, snapped outward onto a fixed
+          // grid. Two DIFFERENT questions, deliberately answered by two different ranges:
+          //   [_bw0, _bw1)  "does the block I already have still cover this mask?"   (containment)
+          //   [_aw0, _aw1)  "how much room should a new block reserve?"              (allocation)
+          // Allocating to the mask's exact extent meant a mask that grows a slice per refine
+          // outgrew its block every refine, and every reallocation remounts and orphans an MPR
+          // volume (vols climbed to 25; syncRepr 12ms -> 61ms). Reserving to the grid absorbs that
+          // growth. Containment must NOT be tested against this range: a block cut from an earlier
+          // grid cell, or a pre-existing full-length block, can genuinely cover the mask without
+          // covering this whole cell, and testing it here would force the very reallocations the
+          // grid exists to prevent. Superset of [_bw0, _bw1), so MIN_BLOCK_SLICES still holds even
+          // when snapRangeToGrid degrades.
+          const [_aw0, _aw1] = _hasCropGeom
+            ? snapRangeToGrid(_bw0, _bw1, _imgLen0, BLOCK_GRID_SLICES)
             : [0, _imgLen0];
 
           // Reuse requires the existing block to still COVER the new mask. nnInteractive returns the
@@ -3617,13 +3634,13 @@ const commandsModule = ({
             // resident heap is what drives the GC pauses. Cornerstone sizes the MPR volume from the
             // block's own images (dimensions[2] = imageIds.length) and takes its origin from their
             // positions, so a shorter block renders at the correct place.
-            // [_bw0, _bw1] was computed ABOVE, so the range allocation uses and the range
-            // containment was tested against are one and the same value.
+            // [_aw0, _aw1) — the grid-snapped superset of the containment range, computed ABOVE.
+            // Reserving the extra room here is what lets the NEXT few refines take the reuse path.
             //
             // imageIds are in DISPLAY order; a flipped series mirrors the working range onto them
             // and the result needs reversing to come back in working order. This replaces the old
             // blanket `if (flipped) derivedImages_new.reverse()`, which assumed a full-length block.
-            const _src = sourceRangeForWorking(_bw0, _bw1, _imgLen0, flipped);
+            const _src = sourceRangeForWorking(_aw0, _aw1, _imgLen0, flipped);
             // The block's SOURCE slices. Recorded on the block below so the labelmap -> series
             // pairing never has to be re-derived from the (LRU-purgeable) image cache.
             _newBlockRefIds = imageIds.slice(_src.start, _src.end);
@@ -3635,7 +3652,8 @@ const commandsModule = ({
               _newBlockRefIds = _newBlockRefIds.slice().reverse();
               derivedImages_new.reverse();
             }
-            _newBlockZ0 = _bw0;
+            // Fresh block: its own start is the SNAPPED lower bound, matching the images just cut.
+            _newBlockZ0 = _aw0;
           }
 
           if (_reuseIdx >= 0) {
