@@ -37,7 +37,7 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
-import { LabelmapBlock, describeBlocks } from './utils/labelmapBlocks';
+import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks } from './utils/labelmapBlocks';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
@@ -3373,12 +3373,13 @@ const commandsModule = ({
             const segImageIds = refreshedContext.segImageIds;
             const existingSegments = refreshedContext.existingSegments;
             const existing = refreshedContext.existing;
-            // Which segment each existing block holds. Null for representations built before the
-            // explicit map existed -> the positional fallback (block b = segment b+1) applies.
-            const _prevBlockSegments: number[] | null = refreshedContext.blockSegments;
-            const _blockIdxForSeg = _prevBlockSegments
-              ? _prevBlockSegments.indexOf(segmentNumber)
-              : segmentNumber - 1;
+            // Block list is the source of truth for layout. describeBlocks already normalises a
+            // pre-sparse representation to full-length blocks, so the old positional fallback
+            // (block b holds segment b+1) is no longer needed here.
+            const _prevBlocks: LabelmapBlock[] = refreshedContext.blocks ?? [];
+            const _blockIdxForSeg = blockIndexForSegment(_prevBlocks, segmentNumber);
+            const _prevBlock: LabelmapBlock | null =
+              _blockIdxForSeg >= 0 ? _prevBlocks[_blockIdxForSeg] : null;
 
           let merged_derivedImages = [];
           let z_range = [];
@@ -3388,6 +3389,7 @@ const commandsModule = ({
           let _orphanedImageIds: string[] = [];
           // Block -> segment map for the representation we are about to write.
           let _nextBlockSegments: number[] | null = null;
+          let _nextBlocks: LabelmapBlock[] | null = null;
           // Set when the refined crop was written straight into the on-screen MPR labelmap volume,
           // which lets us skip the remount (the remount is what orphans a volume every refine).
           let _mprInPlaceDone = false;
@@ -3404,7 +3406,6 @@ const commandsModule = ({
           // representation point at the new block while the screen still showed the volume built from
           // the old one — the refined segment disappeared. Reuse keeps both in agreement.)
           const _imgLen0 = imageIds.length;
-          const _numBlocks0 = _imgLen0 > 0 ? Math.floor(derivedImages.length / _imgLen0) : 0;
           // Only take the in-place path in an MPR-ONLY layout. With a stack viewport on screen the
           // images must stay current every frame, so deferring their write would show stale pixels;
           // there the fresh-block path is used (its images are cheap to write and its remount is
@@ -3417,15 +3418,17 @@ const commandsModule = ({
             else if (!(_vp instanceof VolumeViewport3D)) _nStack++;
           }
           const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
-            && _blockIdxForSeg >= 0 && _blockIdxForSeg < _numBlocks0) ? _blockIdxForSeg : -1;
+            && !!_prevBlock) ? _blockIdxForSeg : -1;
 
+          // Always 0 for now; Task 5 will assign the real crop-aligned z0 here.
+          let _newBlockZ0 = 0;
+          const _tCreateStart = performance.now();
           let derivedImages_new: any[];
           let _clearIdxs: number[] = [];
           if (_reuseIdx >= 0) {
             // Reuse the block as-is: NO image reads/writes here (that is the ~2.5s getScalarData tax).
             // The crop goes into the volume below; the images are synced lazily via _pendingImageSync.
-            const _bStart = _reuseIdx * _imgLen0;
-            derivedImages_new = derivedImages.slice(_bStart, _bStart + _imgLen0);
+            derivedImages_new = _prevBlock!.imageIds.map(id => cache.getImage(id));
             const _ps = (existingSegments[segmentNumber] as any)?.cachedStats;
             const _pd = _ps?.dirtySlices as number[] | undefined;
             // Bound the clear to slices that actually held pixels. With NO recorded extent there is
@@ -3557,54 +3560,28 @@ const commandsModule = ({
           }
 
 
-          let filteredDerivedImages = [];
-          const imgLength = imageIds.length;
-          let excludedBlockIndex = -1; // 0-based block index of the segment being refined
-
-          // buildMultiBlockLabelmapRepresentation assigns block b → segment b+1, so we can
-          // compute the excluded block directly instead of scanning all images pixel-by-pixel.
-          // Old approach: O(N_segments × N_slices × pixels) — grows with every new segment.
-          // New approach: O(N_slices × pixels) — clears only the one target block.
-          if (!toolboxState.getRefineNew() && derivedImages.length > 0) {
-            const numBlocks = Math.ceil(derivedImages.length / imgLength);
-            const candidateBlock = _blockIdxForSeg;
-            if (candidateBlock >= 0 && candidateBlock < numBlocks) {
-              excludedBlockIndex = candidateBlock;
-              // NEVER evict when reusing: that block IS derivedImages_new (still live/on screen).
-              // Only a fresh block orphans the old one.
-              _orphanedImageIds = _reuseIdx >= 0 ? [] : derivedImages
-                .slice(excludedBlockIndex * imgLength, (excludedBlockIndex + 1) * imgLength)
-                .map((img: any) => img?.imageId)
-                .filter(Boolean);
-              // No pixel-clear needed: this old block is EXCLUDED below and replaced wholesale by
-              // the freshly-created all-zero derivedImages_new (which already holds the new crop
-              // from the slice loop above). createAndCacheDerivedLabelmapImages mints fresh
-              // derived:uuid images every call, so the old block is orphaned, and nnInteractive
-              // returns the full current mask each refine — the old pixels are superseded anyway.
-            }
-            for (let i = 0; i < derivedImages.length; i++) {
-              if (Math.floor(i / imgLength) !== excludedBlockIndex) filteredDerivedImages.push(derivedImages[i]);
-            }
-          } else if (derivedImages.length > 0) {
-            filteredDerivedImages = derivedImages;
-          }
-
-          // Insert derivedImages_new at the excluded block's original position to preserve
-          // the block-index → segment-index invariant used by buildMultiBlockLabelmapRepresentation.
-          if (excludedBlockIndex >= 0) {
-            const blocksBefore = filteredDerivedImages.slice(0, excludedBlockIndex * imgLength);
-            const blocksAfter = filteredDerivedImages.slice(excludedBlockIndex * imgLength);
-            merged_derivedImages = [...blocksBefore, ...derivedImages_new, ...blocksAfter];
-          } else {
-            merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new];
-          }
-          // Track which segment each block now holds. Refining an existing segment replaces its
-          // block in place (map unchanged); a new segment appends a block at the end.
-          const _basePrev = _prevBlockSegments
-            ?? Array.from({ length: _numBlocks0 }, (_, b) => b + 1);
-          _nextBlockSegments = excludedBlockIndex >= 0
-            ? _basePrev.slice()
-            : [..._basePrev.filter(sg => sg !== segmentNumber), segmentNumber];
+          // The refined segment's block is REPLACED in the list (keeping its position, so no other
+          // segment is renumbered); a new segment APPENDS one. This used to be done by slicing the
+          // flat image array at N-sized boundaries, which only worked while every block was the
+          // full series length.
+          const _isRefine = !toolboxState.getRefineNew() && _blockIdxForSeg >= 0;
+          const _newBlock: LabelmapBlock = {
+            segmentIndex: segmentNumber,
+            z0: _newBlockZ0,
+            imageIds: derivedImages_new.map((img: any) => img?.imageId).filter(Boolean),
+          };
+          _nextBlocks = _isRefine
+            ? replaceBlockAt(_prevBlocks, _blockIdxForSeg, _newBlock)
+            : appendBlock(
+                _prevBlocks.filter(b => b.segmentIndex !== segmentNumber),
+                _newBlock
+              );
+          _nextBlockSegments = _nextBlocks.map(b => b.segmentIndex);
+          // NEVER evict when reusing: the old block IS derivedImages_new (still live and on screen).
+          // Only a freshly allocated block orphans the previous one.
+          _orphanedImageIds =
+            _isRefine && _reuseIdx < 0 && _prevBlock ? _prevBlock.imageIds.slice() : [];
+          merged_derivedImages = flattenBlocks(_nextBlocks).map(id => cache.getImage(id));
         } else {
           if (segImageIds.length == 0){
             const _tCreate2 = Date.now();
@@ -3768,7 +3745,7 @@ const commandsModule = ({
             z_range,
             mprInPlaceDone: _mprInPlaceDone,
             blockSegments: _nextBlockSegments,
-            blocks: null,
+            blocks: _nextBlocks,
           });
           // Evict the orphaned old block now that the representation swap + volume rebuild are
           // done and nothing references these imageIds. Caps the ~84MB/refine cache growth that
