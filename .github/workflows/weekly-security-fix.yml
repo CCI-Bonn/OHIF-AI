@@ -1,13 +1,27 @@
 name: Weekly security fix
 
-# Opens ONE pull request per week that closes as many security advisories as
-# possible with the SMALLEST version bump that fixes each one.
+# Opens ONE pull request per week that closes security advisories using the
+# SMALLEST version bump that fixes each one.
 #
-# Why this exists rather than Dependabot security updates: Dependabot opens one
-# PR per advisory. This batches every fixable advisory into a single PR.
+# Why this rather than Dependabot security updates: Dependabot opens one PR per
+# advisory. This batches every safely-fixable advisory into a single PR.
 #
-# It is deliberately NOT a general "upgrade everything" job. Packages with no
-# advisory against them are left exactly where they are.
+# GUIDING RULE: a security fix must never be allowed to break the viewer.
+# Where a fix cannot be applied safely, the vulnerability is REPORTED AND LEFT
+# IN PLACE rather than forced through. Everything below follows from that:
+#
+#   * No major version bumps, ever. `npm audit fix` semantics without --force,
+#     so only semver-compatible fixes are taken. Advisories needing a major are
+#     listed in the PR as remaining, for a human to handle deliberately.
+#   * @cornerstonejs/* is EXCLUDED outright. Viewers/backup/esm/ holds ~21
+#     hand-patched copies of cornerstone internals that the Dockerfile copies
+#     over the installed package; a version bump silently invalidates those
+#     patches and the symptom is broken RENDERING at runtime, not a build
+#     error. Cornerstone upgrades stay manual and deliberate.
+#   * Python is never auto-patched. monai-label/requirements.txt pins
+#     torch==2.8.0 and nninteractive==2.5.1, where the pin IS the bug fix.
+#   * If the lockfile does not resolve after the fix, the job fails and no PR
+#     is opened. A broken branch is worse than an open advisory.
 
 on:
   schedule:
@@ -15,11 +29,6 @@ on:
     - cron: '0 6 * * 1'
   workflow_dispatch:
     inputs:
-      force:
-        description: 'Allow MAJOR bumps for advisories that cannot be fixed within semver (breaking - review carefully)'
-        required: false
-        default: false
-        type: boolean
       run_build:
         description: 'Run the full viewer build to verify (slow, ~15-20 min)'
         required: false
@@ -33,6 +42,10 @@ permissions:
 concurrency:
   group: weekly-security-fix
   cancel-in-progress: false
+
+env:
+  # Packages this workflow must never move. Glob syntax, per yarn-audit-fix --exclude.
+  EXCLUDED_PACKAGES: '@cornerstonejs/**'
 
 jobs:
   security-fix:
@@ -61,19 +74,23 @@ jobs:
             > /tmp/summary-before.json || echo '{}' > /tmp/summary-before.json
           echo "Before:"; cat /tmp/summary-before.json
 
+          # Record the cornerstone versions we are contractually not allowed to move.
+          git ls-files '*package.json' | grep -v node_modules \
+            | xargs grep -h '"@cornerstonejs/' | sort -u > /tmp/cornerstone-before.txt || true
+          echo "Pinned cornerstone entries:"; cat /tmp/cornerstone-before.txt
+
       - name: Apply minimal security fixes
         id: fix
         working-directory: Viewers
         run: |
           set -o pipefail
           # yarn-audit-fix bridges `npm audit fix` onto a yarn v1 lockfile.
-          # Without --force it only makes SEMVER-COMPATIBLE bumps, i.e. the
-          # smallest change that clears each advisory.
-          if [ "${{ github.event.inputs.force }}" = "true" ]; then
-            npx --yes yarn-audit-fix@10 --force 2>&1 | tee /tmp/fix.log
-          else
-            npx --yes yarn-audit-fix@10 2>&1 | tee /tmp/fix.log
-          fi
+          # No --force: semver-compatible fixes only, so an advisory that would
+          # need a breaking change is skipped rather than forced.
+          # --exclude keeps cornerstone out of the fix set entirely.
+          npx --yes yarn-audit-fix@10 \
+            --exclude "$EXCLUDED_PACKAGES" \
+            2>&1 | tee /tmp/fix.log
 
           if git diff --quiet -- yarn.lock '*package.json'; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -85,6 +102,31 @@ jobs:
         if: steps.fix.outputs.changed == 'false'
         run: echo "No security fixes available this week. No PR opened."
 
+      # Safety net. --exclude should already prevent this; if cornerstone moved
+      # anyway, a transitive constraint forced it, and policy says drop the fix
+      # rather than take the upgrade. Abort without opening a PR.
+      - name: Enforce the cornerstone exclusion
+        if: steps.fix.outputs.changed == 'true'
+        id: guard
+        working-directory: Viewers
+        run: |
+          git ls-files '*package.json' | grep -v node_modules \
+            | xargs grep -h '"@cornerstonejs/' | sort -u > /tmp/cornerstone-after.txt || true
+
+          if ! diff -q /tmp/cornerstone-before.txt /tmp/cornerstone-after.txt > /dev/null; then
+            echo "::error::A fix could not be applied without moving @cornerstonejs/*."
+            echo "Policy is to keep the advisory rather than break the ESM overrides in Viewers/backup/esm/."
+            echo "Diff:"; diff /tmp/cornerstone-before.txt /tmp/cornerstone-after.txt || true
+            echo "Reverting; no PR will be opened."
+            git checkout -- yarn.lock '*package.json'
+            echo "aborted=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "aborted=false" >> "$GITHUB_OUTPUT"
+          echo "Cornerstone untouched."
+
+      # No continue-on-error: if the lockfile does not resolve, the job fails
+      # and no PR is opened. A broken branch is worse than an open advisory.
       - name: Verify the lockfile still resolves
         if: steps.fix.outputs.changed == 'true'
         working-directory: Viewers
@@ -106,23 +148,6 @@ jobs:
         continue-on-error: true
         run: yarn run build
 
-      # A cornerstone bump is a special hazard here: Viewers/backup/esm/ holds
-      # ~21 hand-patched copies of cornerstone internals that the Dockerfile
-      # copies over the installed package. Bumping cornerstone silently
-      # invalidates those patches and the symptom is broken RENDERING at
-      # runtime, not a build error. We do NOT skip such a fix - dropping a
-      # security patch silently would be worse - but we flag it loudly.
-      - name: Check whether cornerstone moved
-        if: steps.fix.outputs.changed == 'true'
-        id: cornerstone
-        working-directory: Viewers
-        run: |
-          if git diff -- yarn.lock '*package.json' | grep -qE '^[+-].*@cornerstonejs/'; then
-            echo "touched=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "touched=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build PR body
         if: steps.fix.outputs.changed == 'true'
         id: summary
@@ -142,36 +167,25 @@ jobs:
             echo 'Automated weekly **security** fix. Only packages with an open advisory are touched,'
             echo 'each bumped by the smallest version that clears it.'
             echo
-            echo "| | Vulnerabilities |"
-            echo "|---|---|"
+            echo '| | Vulnerabilities |'
+            echo '|---|---|'
             echo "| Before | $BEFORE |"
             echo "| After | $AFTER |"
             echo
-            if [ "${{ github.event.inputs.force }}" = "true" ]; then
-              echo '> Run with `force: true` — this PR **may contain major version bumps**.'
-            else
-              echo '> Semver-compatible bumps only. Advisories that need a major bump are listed as'
-              echo '> remaining below; re-run manually with `force: true` to take those.'
-            fi
+            echo '> **Semver-compatible fixes only.** Advisories that would need a major version bump'
+            echo '> are deliberately left open and listed below — this workflow never forces a'
+            echo '> breaking upgrade. `@cornerstonejs/*` is excluded entirely.'
             echo
-            if [ "${{ steps.cornerstone.outputs.touched }}" = "true" ]; then
-              echo '### :warning: This PR moves `@cornerstonejs/*`'
-              echo
-              echo '`Viewers/backup/esm/` contains ~21 hand-patched copies of cornerstone internals'
-              echo 'that the Dockerfile copies over the installed package. A cornerstone bump can'
-              echo 'silently invalidate those patches, and the symptom is **broken rendering at'
-              echo 'runtime, not a build failure**.'
-              echo
-              echo 'Do not merge without loading a study and checking rendering, segmentation and MPR.'
-              echo
-            fi
             echo '### Fix log'
             echo
             echo '```'
             tail -n 60 /tmp/fix.log
             echo '```'
             echo
-            echo '### Remaining advisories'
+            echo '### Left open (by design)'
+            echo
+            echo 'Advisories still present after this PR. Each needs a human decision — a major bump,'
+            echo 'an upstream fix, or an accepted risk.'
             echo
             echo '```'
             jq -r 'select(.type=="auditAdvisory") | .data.advisory | "\(.severity)\t\(.module_name)\t\(.title)"' \
@@ -180,21 +194,26 @@ jobs:
             echo
             echo '### Before merging'
             echo
-            echo "- [ ] Lockfile resolves (\`yarn install\` step: passed)"
-            echo "- [ ] Full build: ${{ steps.build.outcome || 'not run — enable run_build to verify' }}"
+            echo '- [ ] Lockfile resolves (the `yarn install` step passed, or this PR would not exist)'
+            echo "- [ ] Full build: ${{ steps.build.outcome || 'not run — re-run with run_build to verify' }}"
             echo '- [ ] Load a study and confirm rendering / segmentation / MPR'
             echo
             echo '---'
             echo
-            echo '<details><summary>Scope</summary>'
+            echo '<details><summary>Why the scope is this narrow</summary>'
             echo
-            echo '**JavaScript only.** `monai-label/requirements.txt` carries deliberate exact pins —'
-            echo '`torch==2.8.0`, `nninteractive==2.5.1` — where the pin *is* a bug fix. Changing them'
-            echo 'automatically would regress known fixes, so Python advisories are not auto-patched.'
-            echo 'Run `pip-audit` against that file when you want to review them.'
+            echo '**`@cornerstonejs/*` is excluded.** `Viewers/backup/esm/` holds ~21 hand-patched copies'
+            echo 'of cornerstone internals that the Dockerfile copies over the installed package. A version'
+            echo 'bump silently invalidates those patches, and the symptom is broken **rendering at runtime**,'
+            echo 'not a build failure. A guard step aborts the whole run if a fix cannot be applied without'
+            echo 'moving cornerstone — the advisory is kept instead.'
             echo
-            echo '**`Viewers/platform/docs` is skipped** — it sits outside the yarn workspaces and'
-            echo 'carries its own lockfile that this job does not regenerate.'
+            echo '**Python is never auto-patched.** `monai-label/requirements.txt` pins `torch==2.8.0` and'
+            echo '`nninteractive==2.5.1`, where the pin *is* the bug fix. Run `pip-audit` when you want to'
+            echo 'review those deliberately.'
+            echo
+            echo '**`Viewers/platform/docs` is skipped** — outside the yarn workspaces, and it carries its'
+            echo 'own lockfile this job does not regenerate.'
             echo '</details>'
             echo PRBODY
           } >> "$GITHUB_OUTPUT"
@@ -211,6 +230,7 @@ jobs:
             fix(deps): apply minimal security fixes
 
             Smallest semver-compatible bumps that clear the open advisories.
+            No major bumps; @cornerstonejs/* excluded; Python untouched.
             Automated by .github/workflows/weekly-security-fix.yml.
           labels: security, dependencies
           delete-branch: true
