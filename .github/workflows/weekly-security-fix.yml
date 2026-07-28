@@ -54,14 +54,18 @@ jobs:
 
     steps:
       - name: Check out main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
 
+      # Node 22, not 24: this is the version the yarn install/build runs under, and 22 is the
+      # conservative LTS choice for OHIF's toolchain. It is independent of the runner's own
+      # Node 24 runtime. Node 20 is EOL (April 2026), so it is not an option for a job whose
+      # whole purpose is security.
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
 
       # yarn audit exits with a non-zero BITMASK when it finds anything
       # (1=info 2=low 4=moderate 8=high 16=critical), so every audit call needs
@@ -220,7 +224,7 @@ jobs:
 
       - name: Open pull request
         if: steps.fix.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: chore/security-fix
           base: main
