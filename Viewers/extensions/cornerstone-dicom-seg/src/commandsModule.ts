@@ -96,11 +96,17 @@ const commandsModule = ({
       const lm = segmentation.representationData.Labelmap;
       const { imageIds, labelmaps } = lm;
 
-      // Series geometry comes from referencedImageIds — the SOURCE slice list for the whole series,
-      // which every producer sets (buildMultiBlockLabelmapRepresentation, SegmentationService, and
-      // buildOverlappingSegLayers). Labelmap.imageIds is NOT usable here: syncLegacyLabelmapData
-      // reverts it to the primary block, which is shorter than the series once blocks are z-cropped.
-      const sourceImageIds: string[] = (lm.referencedImageIds?.length ? lm.referencedImageIds : imageIds) as string[];
+      // Series geometry must come from allReferencedImageIds — the SOURCE slice list for the whole
+      // series, set by every producer and immune to syncLegacyLabelmapData because the adapter does
+      // not name it. Labelmap.imageIds AND referencedImageIds are both reverted by that adapter to
+      // the PRIMARY LAYER's value on every entry into state, and that value is deliberately
+      // block-scoped via refIdsFor, making both fields unreliable for series geometry once blocks
+      // are z-cropped. Fall back to referencedImageIds (pre-Task-4.6 segmentations) then imageIds.
+      const sourceImageIds: string[] = (
+        lm.allReferencedImageIds?.length ? lm.allReferencedImageIds
+        : lm.referencedImageIds?.length ? lm.referencedImageIds
+        : imageIds
+      ) as string[];
 
       // Indexed by SOURCE slice, so every layer lands on the right CT slice regardless of which
       // slices its own block covers.

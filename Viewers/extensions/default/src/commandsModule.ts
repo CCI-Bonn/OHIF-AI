@@ -300,7 +300,12 @@ const commandsModule = ({
         referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
         // The SOURCE image ids for the whole series (not a block's) — releaseSegmentBlock and the
         // legacy describeBlocks path both use this to know the series length.
+        // `referencedImageIds` cannot be trusted by readers: syncLegacyLabelmapData reverts it
+        // (and imageIds) to the PRIMARY LAYER's value on every entry into state, and that value is
+        // deliberately block-scoped via refIdsFor. `allReferencedImageIds` is named so the adapter
+        // leaves it alone — the same reason allImageIds survives alongside the reverted imageIds.
         referencedImageIds: imageIds,
+        allReferencedImageIds: imageIds,
         labelmaps,
         segmentBindings,
         primaryLabelmapId,
@@ -2326,7 +2331,11 @@ const commandsModule = ({
       const seg = csToolsSegmentation.state.getSegmentation(segmentationId);
       const lm = seg?.representationData?.Labelmap as any;
       if (!lm) return;
-      const srcIds: string[] = lm.referencedImageIds ?? [];
+      const srcIds: string[] = lm.allReferencedImageIds ?? lm.referencedImageIds ?? [];
+      // Guard: if srcIds is empty, we cannot reconstruct a valid representation.
+      // describeBlocks ignores sourceCount when lm.blocks is present, so an empty srcIds
+      // would flow into buildMultiBlockLabelmapRepresentation as imageIds: [].
+      if (srcIds.length === 0) return;
       const blocks = describeBlocks(lm, srcIds.length);
       // Keep at least one block: cornerstone needs a primary labelmap to render at all.
       if (blocks.length <= 1) return;
