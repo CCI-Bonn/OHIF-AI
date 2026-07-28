@@ -1,0 +1,220 @@
+name: Weekly security fix
+
+# Opens ONE pull request per week that closes as many security advisories as
+# possible with the SMALLEST version bump that fixes each one.
+#
+# Why this exists rather than Dependabot security updates: Dependabot opens one
+# PR per advisory. This batches every fixable advisory into a single PR.
+#
+# It is deliberately NOT a general "upgrade everything" job. Packages with no
+# advisory against them are left exactly where they are.
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Allow MAJOR bumps for advisories that cannot be fixed within semver (breaking - review carefully)'
+        required: false
+        default: false
+        type: boolean
+      run_build:
+        description: 'Run the full viewer build to verify (slow, ~15-20 min)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: weekly-security-fix
+  cancel-in-progress: false
+
+jobs:
+  security-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # yarn audit exits with a non-zero BITMASK when it finds anything
+      # (1=info 2=low 4=moderate 8=high 16=critical), so every audit call needs
+      # `|| true` or the step fails simply for finding vulnerabilities.
+      - name: Audit before
+        working-directory: Viewers
+        run: |
+          yarn audit --json > /tmp/audit-before.json || true
+          jq -r 'select(.type=="auditSummary") | .data.vulnerabilities' /tmp/audit-before.json \
+            > /tmp/summary-before.json || echo '{}' > /tmp/summary-before.json
+          echo "Before:"; cat /tmp/summary-before.json
+
+      - name: Apply minimal security fixes
+        id: fix
+        working-directory: Viewers
+        run: |
+          set -o pipefail
+          # yarn-audit-fix bridges `npm audit fix` onto a yarn v1 lockfile.
+          # Without --force it only makes SEMVER-COMPATIBLE bumps, i.e. the
+          # smallest change that clears each advisory.
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            npx --yes yarn-audit-fix@10 --force 2>&1 | tee /tmp/fix.log
+          else
+            npx --yes yarn-audit-fix@10 2>&1 | tee /tmp/fix.log
+          fi
+
+          if git diff --quiet -- yarn.lock '*package.json'; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Nothing to fix
+        if: steps.fix.outputs.changed == 'false'
+        run: echo "No security fixes available this week. No PR opened."
+
+      - name: Verify the lockfile still resolves
+        if: steps.fix.outputs.changed == 'true'
+        working-directory: Viewers
+        run: yarn install --ignore-engines --network-timeout 600000
+
+      - name: Audit after
+        if: steps.fix.outputs.changed == 'true'
+        working-directory: Viewers
+        run: |
+          yarn audit --json > /tmp/audit-after.json || true
+          jq -r 'select(.type=="auditSummary") | .data.vulnerabilities' /tmp/audit-after.json \
+            > /tmp/summary-after.json || echo '{}' > /tmp/summary-after.json
+          echo "After:"; cat /tmp/summary-after.json
+
+      - name: Build (optional)
+        if: steps.fix.outputs.changed == 'true' && github.event.inputs.run_build == 'true'
+        id: build
+        working-directory: Viewers
+        continue-on-error: true
+        run: yarn run build
+
+      # A cornerstone bump is a special hazard here: Viewers/backup/esm/ holds
+      # ~21 hand-patched copies of cornerstone internals that the Dockerfile
+      # copies over the installed package. Bumping cornerstone silently
+      # invalidates those patches and the symptom is broken RENDERING at
+      # runtime, not a build error. We do NOT skip such a fix - dropping a
+      # security patch silently would be worse - but we flag it loudly.
+      - name: Check whether cornerstone moved
+        if: steps.fix.outputs.changed == 'true'
+        id: cornerstone
+        working-directory: Viewers
+        run: |
+          if git diff -- yarn.lock '*package.json' | grep -qE '^[+-].*@cornerstonejs/'; then
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "touched=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build PR body
+        if: steps.fix.outputs.changed == 'true'
+        id: summary
+        run: |
+          fmt() {
+            if [ -s "$1" ]; then
+              jq -r 'to_entries | map("\(.key): \(.value)") | join(", ")' "$1" 2>/dev/null || echo 'n/a'
+            else
+              echo 'n/a'
+            fi
+          }
+          BEFORE=$(fmt /tmp/summary-before.json)
+          AFTER=$(fmt /tmp/summary-after.json)
+
+          {
+            echo 'body<<PRBODY'
+            echo 'Automated weekly **security** fix. Only packages with an open advisory are touched,'
+            echo 'each bumped by the smallest version that clears it.'
+            echo
+            echo "| | Vulnerabilities |"
+            echo "|---|---|"
+            echo "| Before | $BEFORE |"
+            echo "| After | $AFTER |"
+            echo
+            if [ "${{ github.event.inputs.force }}" = "true" ]; then
+              echo '> Run with `force: true` — this PR **may contain major version bumps**.'
+            else
+              echo '> Semver-compatible bumps only. Advisories that need a major bump are listed as'
+              echo '> remaining below; re-run manually with `force: true` to take those.'
+            fi
+            echo
+            if [ "${{ steps.cornerstone.outputs.touched }}" = "true" ]; then
+              echo '### :warning: This PR moves `@cornerstonejs/*`'
+              echo
+              echo '`Viewers/backup/esm/` contains ~21 hand-patched copies of cornerstone internals'
+              echo 'that the Dockerfile copies over the installed package. A cornerstone bump can'
+              echo 'silently invalidate those patches, and the symptom is **broken rendering at'
+              echo 'runtime, not a build failure**.'
+              echo
+              echo 'Do not merge without loading a study and checking rendering, segmentation and MPR.'
+              echo
+            fi
+            echo '### Fix log'
+            echo
+            echo '```'
+            tail -n 60 /tmp/fix.log
+            echo '```'
+            echo
+            echo '### Remaining advisories'
+            echo
+            echo '```'
+            jq -r 'select(.type=="auditAdvisory") | .data.advisory | "\(.severity)\t\(.module_name)\t\(.title)"' \
+              /tmp/audit-after.json 2>/dev/null | sort -u | head -n 40 || echo '(none)'
+            echo '```'
+            echo
+            echo '### Before merging'
+            echo
+            echo "- [ ] Lockfile resolves (\`yarn install\` step: passed)"
+            echo "- [ ] Full build: ${{ steps.build.outcome || 'not run — enable run_build to verify' }}"
+            echo '- [ ] Load a study and confirm rendering / segmentation / MPR'
+            echo
+            echo '---'
+            echo
+            echo '<details><summary>Scope</summary>'
+            echo
+            echo '**JavaScript only.** `monai-label/requirements.txt` carries deliberate exact pins —'
+            echo '`torch==2.8.0`, `nninteractive==2.5.1` — where the pin *is* a bug fix. Changing them'
+            echo 'automatically would regress known fixes, so Python advisories are not auto-patched.'
+            echo 'Run `pip-audit` against that file when you want to review them.'
+            echo
+            echo '**`Viewers/platform/docs` is skipped** — it sits outside the yarn workspaces and'
+            echo 'carries its own lockfile that this job does not regenerate.'
+            echo '</details>'
+            echo PRBODY
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        if: steps.fix.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/security-fix
+          base: main
+          title: 'fix(deps): weekly security fixes'
+          body: ${{ steps.summary.outputs.body }}
+          commit-message: |
+            fix(deps): apply minimal security fixes
+
+            Smallest semver-compatible bumps that clear the open advisories.
+            Automated by .github/workflows/weekly-security-fix.yml.
+          labels: security, dependencies
+          delete-branch: true
+          add-paths: |
+            Viewers/package.json
+            Viewers/**/package.json
+            Viewers/yarn.lock
