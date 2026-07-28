@@ -3428,7 +3428,11 @@ const commandsModule = ({
           const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
             && !!_prevBlock) ? _blockIdxForSeg : -1;
 
-          // Always 0 for now; Task 5 will assign the real crop-aligned z0 here.
+          // Working-order offset of the block being written. Always 0 while blocks span the whole series.
+          // INVARIANT for the sparse rework: on the REUSE path this MUST equal _prevBlock.z0, because
+          // _clearIdxs, the blockZ0 argument, the _pendingImageSync payload and the fallback write loop
+          // all index _prevBlock's own images/volume through it — and _newBlock.z0 is paired with
+          // _prevBlock.imageIds. A fresh block sets it to that block's own crop-aligned start instead.
           let _newBlockZ0 = 0;
           const _tCreateStart = performance.now();
           let derivedImages_new: any[];
@@ -3450,6 +3454,9 @@ const commandsModule = ({
                   { length: Math.max(0, (_ps?.segZ1 ?? _imgLen0) - (_ps?.segZ0 ?? 0)) },
                   (_, k) => (_ps?.segZ0 ?? 0) + k
                 );
+            // FIXME(sparse): the segZ0/segZ1 fallback below yields WORKING indices but is flipped as if
+            // they were display indices — wrong for a flipped series with no recorded dirtySlices.
+            // Pre-existing; becomes materially wrong once blocks are z-cropped.
             // dirtySlices are DISPLAY indices into the full series. Convert to working order (N is
             // the SERIES length, not the block's), then to this block's array index.
             _clearIdxs = _prevIdxs
@@ -3473,7 +3480,7 @@ const commandsModule = ({
               const _base = (z - _segZ0) * _sliceArea;
               for (let k = 0; k < _sliceArea; k++) {
                 if (cropBytes[_base + k] === 1) {
-                  z_range.push(flipped ? derivedImages_new.length - z - 1 : z);
+                  z_range.push(flipIndex(z, _imgLen0, flipped));
                   break;
                 }
               }
