@@ -184,6 +184,8 @@ const commandsModule = ({
     const timer = setTimeout(async () => {
       _statsDebounceTimers.delete(key);
       try {
+        // Stats are computed from the block IMAGES, so land any deferred in-place write first.
+        materializePendingImageSync(segmentationId);
         await updateSegmentationStats({
           segmentation: csToolsSegmentation.state.getSegmentation(segmentationId) ?? {
             segments: {},
@@ -200,21 +202,84 @@ const commandsModule = ({
     _statsDebounceTimers.set(key, timer);
   }
 
+  /**
+   * A labelmap block: the slices of ONE segment's mask.
+   *
+   * Blocks used to be uniform — every segment allocated a full-volume block (N slices, ~84MB) even
+   * though its mask typically covers ~40 of 321 slices (~95% zeros). That fixed size is what drives
+   * the resident memory and therefore the GC pauses. A block is now described explicitly so it can
+   * cover only [z0, z0+imageIds.length) — cornerstone builds the MPR volume from the block's own
+   * images (dimensions = imageIds.length, origin = first image's position), so a z-cropped block
+   * still renders at the correct place.
+   */
+  type LabelmapBlock = { segmentIndex: number; z0: number; imageIds: string[] };
+
+  /**
+   * Describe an existing representation as explicit blocks.
+   * Handles the legacy uniform layout (flat allImageIds in N-sized chunks, optionally with the
+   * blockSegments map) so representations built before sparse blocks keep working.
+   */
+  function describeBlocks(labelmapData: any, sourceCount: number): LabelmapBlock[] {
+    if (!labelmapData) return [];
+    if (Array.isArray(labelmapData.blocks) && labelmapData.blocks.length) {
+      return labelmapData.blocks.map((b: any) => ({
+        segmentIndex: b.segmentIndex,
+        z0: b.z0 ?? 0,
+        imageIds: b.imageIds ?? [],
+      }));
+    }
+    const all: string[] = labelmapData.allImageIds ?? labelmapData.imageIds ?? [];
+    if (!sourceCount || all.length < sourceCount) return [];
+    const count = Math.floor(all.length / sourceCount);
+    const segs: number[] = (labelmapData.blockSegments?.length === count)
+      ? labelmapData.blockSegments
+      : Array.from({ length: count }, (_, b) => b + 1);
+    return Array.from({ length: count }, (_, b) => ({
+      segmentIndex: segs[b],
+      z0: 0,
+      imageIds: all.slice(b * sourceCount, (b + 1) * sourceCount),
+    }));
+  }
+
   function buildMultiBlockLabelmapRepresentation({
     segmentationId,
     derivedImageIds,
     imageIds,
     currentDisplaySets,
     segments,
+    blockSegments,
+    blocks,
   }: {
     segmentationId: string;
     derivedImageIds: string[];
     imageIds: string[];
     currentDisplaySets: any;
     segments: { [segmentIndex: string]: cstTypes.Segment };
+    blockSegments?: number[];
+    blocks?: LabelmapBlock[];
   }) {
     const N = imageIds.length;
     const blockCount = N > 0 ? Math.floor(derivedImageIds.length / N) : 1;
+    // EXPLICIT block -> segment map. This used to be positional (block b always held segment b+1),
+    // which is why a segment's block could never be removed: dropping a middle block shifted every
+    // later block and silently renumbered those segments. Callers now pass the mapping so blocks can
+    // be added/removed independently of segment numbering; we fall back to the old positional rule
+    // for representations built before this existed.
+    const blockSeg: number[] = (blockSegments && blockSegments.length === blockCount)
+      ? blockSegments.slice()
+      : Array.from({ length: blockCount }, (_, b) => b + 1);
+
+    // Explicit blocks (possibly VARIABLE length — a z-cropped block covers only its mask's slices).
+    // Without them we fall back to the legacy uniform layout: N-sized chunks of derivedImageIds.
+    const blockList: LabelmapBlock[] = (blocks && blocks.length)
+      ? blocks
+      : Array.from({ length: blockCount }, (_, b) => ({
+          segmentIndex: blockSeg[b],
+          z0: 0,
+          imageIds: derivedImageIds.slice(b * N, (b + 1) * N),
+        }));
+    // Flat list cornerstone consumes; derived from the blocks so the two can never disagree.
+    const flatImageIds: string[] = blockList.flatMap(b => b.imageIds);
     const primaryLabelmapId = `${segmentationId}-storage-0`;
     const labelmaps: Record<string, object> = {};
     const segmentBindings: Record<number, object> = {};
@@ -227,12 +292,15 @@ const commandsModule = ({
     // (identity for a non-flipped series where blockImageIds are already in display order).
     const refIdsFor = (ids: string[]): string[] => {
       const refs = ids.map(id => (cache.getImage(id) as any)?.referencedImageId);
-      return refs.length === N && refs.every(Boolean) ? (refs as string[]) : imageIds;
+      // Compare against the BLOCK's own length: a sparse (z-cropped) block is shorter than N, and
+      // the old `refs.length === N` guard would silently fall back to the full source list, pairing
+      // its slices with the wrong source images.
+      return refs.length === ids.length && refs.every(Boolean) ? (refs as string[]) : imageIds;
     };
 
-    for (let b = 0; b < blockCount; b++) {
-      const segIdx = b + 1;
-      const blockImageIds = derivedImageIds.slice(b * N, (b + 1) * N);
+    for (let b = 0; b < blockList.length; b++) {
+      const segIdx = blockList[b].segmentIndex;
+      const blockImageIds = blockList[b].imageIds;
       const labelmapId = b === 0 ? primaryLabelmapId : `${segmentationId}-private-${segIdx}`;
       labelmaps[labelmapId] = {
         labelmapId,
@@ -246,7 +314,7 @@ const commandsModule = ({
     }
 
     // Single-layer labelmaps (e.g. SAM2 overlap=false) store multiple segment values in one block.
-    if (blockCount === 1) {
+    if (blockList.length === 1) {
       const primaryId = primaryLabelmapId;
       Object.keys(segments)
         .map(Number)
@@ -257,12 +325,20 @@ const commandsModule = ({
     }
 
     return {
-      blockCount,
+      blockCount: blockList.length,
+      blockSegments: blockList.map(b => b.segmentIndex),
+      blocks: blockList,
       labelmapRepresentation: {
-        imageIds: derivedImageIds,
-        allImageIds: derivedImageIds,
+        imageIds: flatImageIds,
+        allImageIds: flatImageIds,
+        // Persisted so later refines/deletes know which segment each block holds, and (for sparse
+        // blocks) which slices it covers.
+        blockSegments: blockList.map(b => b.segmentIndex),
+        blocks: blockList,
         referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-        referencedImageIds: refIdsFor(derivedImageIds.slice(0, N)),
+        // The SOURCE image ids for the whole series (not a block's) — releaseSegmentBlock and the
+        // legacy describeBlocks path both use this to know the series length.
+        referencedImageIds: imageIds,
         labelmaps,
         segmentBindings,
         primaryLabelmapId,
@@ -286,11 +362,13 @@ const commandsModule = ({
         segImageIds: [] as string[],
         existingSegments: {} as { [segmentIndex: string]: cstTypes.Segment },
         existing: false,
+        blockSegments: null as number[] | null,
       };
     }
 
     let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
     let segImageIds: string[] = [];
+    let blockSegments: number[] | null = null;
     let existing = false;
     let segmentationId = freshActiveSegmentation.segmentationId;
 
@@ -310,6 +388,8 @@ const commandsModule = ({
         freshActiveSegmentation.representationData?.Labelmap?.allImageIds ??
         freshActiveSegmentation.representationData?.Labelmap?.imageIds ??
         [];
+      blockSegments =
+        (freshActiveSegmentation.representationData?.Labelmap as any)?.blockSegments ?? null;
       existing = true;
     }
 
@@ -319,6 +399,7 @@ const commandsModule = ({
       segImageIds,
       existingSegments,
       existing,
+      blockSegments,
     };
   }
 
@@ -369,6 +450,204 @@ const commandsModule = ({
     }
   }
 
+  /**
+   * Pending image-sync work from volume-only in-place refines, keyed segmentationId -> segmentIndex.
+   *
+   * On an in-place refine we write the crop into the MPR labelmap VOLUME (what the screen shows) and
+   * deliberately skip writing the block's stack IMAGES, because touching an existing labelmap image
+   * costs ~7ms/slice (cornerstone re-materialises the buffer lazily) — that was ~2.5s/refine, far
+   * more than the remount it replaced. The images are only needed by stack viewports, DICOM-SEG
+   * export, and any later remount (which rebuilds the volume FROM them), so we defer that write until
+   * one of those actually happens.
+   *
+   * nnInteractive returns the segment's FULL current mask each refine (never a delta), so only the
+   * LATEST payload per segment matters — later refines simply overwrite the entry. That removes any
+   * ordering/replay concern: N rapid refines cost one materialisation, not N.
+   */
+  const _pendingImageSync = new Map<string, Map<number, any>>();
+
+  /** Apply (and clear) deferred image writes so the block's images match what MPR already shows. */
+  function materializePendingImageSync(segmentationId?: string) {
+    const keys = segmentationId ? [segmentationId] : Array.from(_pendingImageSync.keys());
+    for (const segId of keys) {
+      const bySegment = _pendingImageSync.get(segId);
+      if (!bySegment?.size) continue;
+      for (const p of bySegment.values()) {
+        // Clear the segment's previous pixels, then write the current crop — same result the
+        // interactive path would have produced, just paid once and off the critical path.
+        for (const arrIdx of p.clearIdxs as number[]) {
+          const vm = cache.getImage(p.blockImageIds[arrIdx])?.voxelManager as csTypes.IVoxelManager<number>;
+          if (!vm) continue;
+          const sd = vm.getScalarData();
+          for (let j = 0; j < sd.length; j++) if (sd[j] === p.segmentNumber) sd[j] = 0;
+        }
+        for (let z = p.segZ0; z < p.segZ1; z++) {
+          const vm = cache.getImage(p.blockImageIds[z])?.voxelManager as csTypes.IVoxelManager<number>;
+          if (!vm) continue;
+          const sd = vm.getScalarData();
+          const cropSliceBase = (z - p.segZ0) * p.cropY * p.cropX;
+          for (let cy = 0; cy < p.cropY; cy++) {
+            const srcRow = cropSliceBase + cy * p.cropX;
+            const dstRow = (p.y0 + cy) * p.fullX + p.x0;
+            for (let cx = 0; cx < p.cropX; cx++) {
+              if (p.cropBytes[srcRow + cx] === 1) sd[dstRow + cx] = p.segmentNumber;
+            }
+          }
+        }
+      }
+      _pendingImageSync.delete(segId);
+    }
+  }
+
+  /**
+   * IN-PLACE MPR UPDATE — write a refined segment's crop straight into its existing labelmap
+   * VOLUME, so a refine needs neither a fresh block nor a remount.
+   *
+   * Why: every refine used to mint a fresh full-volume block (new derived imageIds), which forced
+   * a remount, which made cornerstone build a NEW MPR labelmap volume and orphan the old one under
+   * an internal uuid. That orphan is unreachable (four eviction strategies failed to identify it),
+   * so the volume cache grew +1/refine unbounded — driving the MPR remount creep (36->158ms) and
+   * multi-second GC freezes. The only fix is to stop creating the orphan: keep the same imageIds
+   * and mutate the volume that is already on screen.
+   *
+   * Mechanism proven by resetSegment: the rendered labelmap volume's scalar buffer is a Uint8Array
+   * we can mutate + mark modified. Only labelmap volumes are Uint8Array (the CT is Int16/float), and
+   * in the multi-block scheme each segment owns its own block/volume, so indexOf(segmentNumber)
+   * identifies this segment's volume without needing its (unreachable) volumeId.
+   *
+   * Clears the segment's previous extent first so a refine REPLACES rather than unions, then writes
+   * the new crop. Both passes are bounded to the affected z-slabs, never the whole volume.
+   *
+   * Returns true if the segment's volume was found and updated (caller can then skip the remount).
+   */
+  function updateMprLabelmapVolumeInPlace({
+    segmentNumber,
+    cropBytes,
+    segZ0,
+    segZ1,
+    cropY,
+    cropX,
+    y0,
+    x0,
+    fullX,
+    fullY,
+    prevZ0,
+    prevZ1,
+    prevBox,
+  }: {
+    segmentNumber: number;
+    cropBytes: Uint8Array;
+    segZ0: number; segZ1: number;
+    cropY: number; cropX: number;
+    y0: number; x0: number;
+    fullX: number; fullY: number;
+    prevZ0: number; prevZ1: number;
+    prevBox?: { y0: number; x0: number; cropY: number; cropX: number } | null;
+  }): boolean {
+    const vpSvc = servicesManager.services.cornerstoneViewportService;
+    const sliceLen = fullY * fullX;
+    if (!sliceLen) return false;
+
+    const scanned = new Set<any>();
+    const mprVps: any[] = [];
+    let updated = false;
+
+    for (const viewportId of vpSvc.getViewportIds()) {
+      const vp = vpSvc.getCornerstoneViewport(viewportId) as any;
+      if (!(vp instanceof VolumeViewport) || vp instanceof VolumeViewport3D) continue;
+      mprVps.push(vp);
+
+      for (const actorEntry of (vp?.getActors?.() ?? [])) {
+        const inputData = actorEntry?.actor?.getMapper?.()?.getInputData?.();
+        const scalars = inputData?.getPointData?.()?.getScalars?.();
+        const data = scalars?.getData?.();
+        if (!(data instanceof Uint8Array)) continue;   // labelmap volumes only; never the CT
+        if (scanned.has(data)) continue;               // volumes are shared across the 3 MPR panes
+        scanned.add(data);
+        if (data.indexOf(segmentNumber) === -1) continue;  // not this segment's block volume
+
+        // Pass 1: clear the segment's previous extent. Bounded in Z *and* XY — the segment only ever
+        // occupies its crop bbox, so scanning full 512x512 slices was ~10M redundant checks/refine
+        // (measured 46-149ms). prevBox is the previous refine's bbox (union'd with the new crop so a
+        // moved/shrunk mask is fully cleared); without it we fall back to the full slice.
+        const clearZ0 = Math.max(0, Math.min(prevZ0, segZ0));
+        const clearZ1 = Math.min(Math.floor(data.length / sliceLen), Math.max(prevZ1, segZ1));
+        const bx0 = prevBox ? Math.max(0, Math.min(prevBox.x0, x0)) : 0;
+        const bx1 = prevBox ? Math.min(fullX, Math.max(prevBox.x0 + prevBox.cropX, x0 + cropX)) : fullX;
+        const by0 = prevBox ? Math.max(0, Math.min(prevBox.y0, y0)) : 0;
+        const by1 = prevBox ? Math.min(fullY, Math.max(prevBox.y0 + prevBox.cropY, y0 + cropY)) : fullY;
+        for (let z = clearZ0; z < clearZ1; z++) {
+          const base = z * sliceLen;
+          for (let by = by0; by < by1; by++) {
+            const row = base + by * fullX;
+            for (let bx = bx0; bx < bx1; bx++) {
+              if (data[row + bx] === segmentNumber) data[row + bx] = 0;
+            }
+          }
+        }
+
+        // Pass 2: write the new crop.
+        for (let z = segZ0; z < segZ1; z++) {
+          const cropSliceBase = (z - segZ0) * cropY * cropX;
+          const volSliceBase = z * sliceLen;
+          for (let cy = 0; cy < cropY; cy++) {
+            const srcRow = cropSliceBase + cy * cropX;
+            const dstRow = volSliceBase + (y0 + cy) * fullX + x0;
+            for (let cx = 0; cx < cropX; cx++) {
+              if (cropBytes[srcRow + cx] === 1) data[dstRow + cx] = segmentNumber;
+            }
+          }
+        }
+
+        scalars.modified?.();
+        inputData.modified?.();
+        actorEntry.actor?.modified?.();
+        actorEntry.actor?.getMapper?.()?.modified?.();
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      for (const vp of mprVps) vp?.render?.();
+    }
+    return updated;
+  }
+
+  /**
+   * Lightweight reconcile for a LAYER-SET change (a block added or removed).
+   *
+   * remountSegmentationRepresentations is all-or-nothing: cornerstone's remove/add API works on the
+   * whole segmentationId, so it tears down and rebuilds EVERY block's MPR volume even when only one
+   * block changed. That is both the cost that grows with segment count (mpr= 16->38ms) and the source
+   * of the remaining +1 volume/remount leak.
+   *
+   * We don't need it here. Per the note in remountSegmentationRepresentations, cornerstone's own
+   * reconcile already mounts/unmounts correctly WHEN THE LAYER SET CHANGES — the forced remove/re-add
+   * was only needed for the refine case (layer set unchanged, block imageIds swapped), and that case
+   * is now handled by writing into the volume in place. So for add/remove we just refresh the MPR
+   * image references and fire segmentationModified, letting the reconcile touch only the changed layer.
+   */
+  function reconcileLabelmapLayers(segmentationId: string) {
+    const vpSvc = servicesManager.services.cornerstoneViewportService;
+    for (const viewportId of vpSvc.getViewportIds()) {
+      const vp = vpSvc.getCornerstoneViewport(viewportId) as any;
+      if (vp instanceof VolumeViewport && !(vp instanceof VolumeViewport3D)) {
+        updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
+      }
+    }
+    const trig = (cornerstoneTools as any)?.segmentation?.triggerSegmentationEvents;
+    if (trig?.triggerSegmentationModified) {
+      trig.triggerSegmentationModified(segmentationId);
+    } else {
+      eventTarget.dispatchEvent(
+        new CustomEvent(csToolsEnums.Events.SEGMENTATION_MODIFIED, { detail: { segmentationId } })
+      );
+    }
+    eventTarget.dispatchEvent(
+      new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, { detail: { segmentationId } })
+    );
+  }
+
   async function syncLabelmapRepresentations({
     activeViewportId,
     segmentationId,
@@ -377,6 +656,7 @@ const commandsModule = ({
     prevBlockCount,
     currentImageIdIndex,
     representations,
+    mprInPlaceDone = false,
   }: {
     activeViewportId: string;
     segmentationId: string;
@@ -385,6 +665,7 @@ const commandsModule = ({
     prevBlockCount: number;
     currentImageIdIndex?: number;
     representations: any[];
+    mprInPlaceDone?: boolean;
   }) {
     const blockCountIncreased = existing && blockCount > prevBlockCount;
 
@@ -399,21 +680,22 @@ const commandsModule = ({
     }
 
     if (blockCountIncreased) {
-      await remountSegmentationRepresentations({
-        activeViewportId,
-        segmentationId,
-        currentImageIdIndex,
-        representations,
-      });
+      // Adding a segment only appends a layer — reconcile mounts it without rebuilding the others.
+      materializePendingImageSync(segmentationId);
+      reconcileLabelmapLayers(segmentationId);
+      return;
     } else {
       // Refine case (same block count): VolumeViewport (MPR) actors are VTK-based and need
       // remount when the block's imageIds change — SEGMENTATION_DATA_MODIFIED alone is not enough.
+      // EXCEPT when the crop was already written straight into the on-screen labelmap volume
+      // (updateMprLabelmapVolumeInPlace): the MPR is then already correct, and skipping the remount
+      // avoids building a fresh volume that orphans the previous one (+1 volume/refine leak).
       const allViewportIds = servicesManager.services.cornerstoneViewportService.getViewportIds();
       const hasMprViewport = allViewportIds.some(vid => {
         const vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(vid);
         return vp instanceof VolumeViewport && !(vp instanceof VolumeViewport3D);
       });
-      if (hasMprViewport) {
+      if (hasMprViewport && !mprInPlaceDone) {
         await remountSegmentationRepresentations({
           activeViewportId,
           segmentationId,
@@ -442,6 +724,10 @@ const commandsModule = ({
     currentImageIdIndex?: number;
     representations: any[];
   }) {
+    // A remount rebuilds the MPR volume FROM the block images, so any deferred write from a
+    // volume-only in-place refine must land first — otherwise the rebuild would resurrect the
+    // pre-refine mask and the segment would appear to roll back.
+    materializePendingImageSync(segmentationId);
     // Capture the current per-segment visibility BEFORE any remove/re-add. Removing and
     // re-adding a representation resets every segment to visible, so we restore this map
     // AFTER all re-adds below — otherwise each inference clobbers the user's hidden segments.
@@ -564,6 +850,7 @@ const commandsModule = ({
       await activeVp.setImageIdIndex(currentImageIdIndex);
     }
 
+
     eventTarget.dispatchEvent(
       new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
         detail: { segmentationId },
@@ -588,6 +875,8 @@ const commandsModule = ({
     activeSegmentation,
     currentImageIdIndex,
     z_range,
+    mprInPlaceDone = false,
+    blockSegments,
   }: {
     activeViewportId: string;
     segmentationId: string;
@@ -599,6 +888,8 @@ const commandsModule = ({
     existingSegments: { [segmentIndex: string]: cstTypes.Segment };
     existing: boolean;
     activeSegmentation: any;
+    mprInPlaceDone?: boolean;
+    blockSegments?: number[] | null;
     currentImageIdIndex?: number;
     z_range: number[];
   }) {
@@ -618,6 +909,7 @@ const commandsModule = ({
       imageIds,
       currentDisplaySets,
       segments,
+      blockSegments: blockSegments ?? undefined,
     });
     const mergedSegments = mergeSegmentsForUpdate(segmentationId, segments);
 
@@ -699,6 +991,7 @@ const commandsModule = ({
       prevBlockCount,
       currentImageIdIndex,
       representations,
+      mprInPlaceDone,
     });
   }
 
@@ -2035,7 +2328,78 @@ const commandsModule = ({
         throw error;
       }
     },
+    /**
+     * Release the labelmap block owned by a deleted segment.
+     *
+     * Each segment owns a full-volume block of derived labelmap images (~84MB). Deleting a segment
+     * goes through cornerstone's generic removeSegment, which only zeroes the segment's pixel VALUES
+     * — it knows nothing about our multi-block scheme, so the block's imageIds stayed in the
+     * representation and its images stayed in the cache forever (cacheMB never dropped after a
+     * delete). This rebuilds the representation without that block and evicts its images.
+     *
+     * Safe for middle segments now that block -> segment is an explicit map: dropping a block no
+     * longer renumbers the segments after it (which is why this could not be done before).
+     */
+    async releaseSegmentBlock({ segmentationId, segmentIndex }: { segmentationId: string; segmentIndex: number }) {
+      const seg = csToolsSegmentation.state.getSegmentation(segmentationId);
+      const lm = seg?.representationData?.Labelmap as any;
+      if (!lm) return;
+      const all: string[] = lm.allImageIds ?? lm.imageIds ?? [];
+      const srcIds: string[] = lm.referencedImageIds ?? [];
+      const N = srcIds.length;
+      if (!N || all.length < N) return;
+      const blockCount = Math.floor(all.length / N);
+      // Keep at least one block: cornerstone needs a primary labelmap to render at all.
+      if (blockCount <= 1) return;
+      const blockSeg: number[] = (lm.blockSegments?.length === blockCount)
+        ? lm.blockSegments.slice()
+        : Array.from({ length: blockCount }, (_, b) => b + 1);
+      const bIdx = blockSeg.indexOf(segmentIndex);
+      if (bIdx < 0) return;   // segment has no dedicated block (e.g. single-layer SAM2 labelmap)
+
+      // Drop any deferred in-place write for this segment — its block is going away.
+      _pendingImageSync.get(segmentationId)?.delete(segmentIndex);
+
+      const removed = all.slice(bIdx * N, (bIdx + 1) * N);
+      const remaining = [...all.slice(0, bIdx * N), ...all.slice((bIdx + 1) * N)];
+      const nextBlockSeg = blockSeg.filter((_, i) => i !== bIdx);
+
+      const { labelmapRepresentation } = buildMultiBlockLabelmapRepresentation({
+        segmentationId,
+        derivedImageIds: remaining,
+        imageIds: srcIds,
+        currentDisplaySets: { displaySetInstanceUID: lm.referencedVolumeId },
+        segments: seg?.segments ?? {},
+        blockSegments: nextBlockSeg,
+      });
+
+      const existingRepresentationData = seg?.representationData || {};
+      csToolsSegmentation.updateSegmentations([
+        {
+          segmentationId,
+          payload: {
+            representationData: { ...existingRepresentationData, [LABELMAP]: labelmapRepresentation },
+          },
+        },
+      ]);
+
+      // Removing a block is a LAYER-SET change, so cornerstone's reconcile can unmount just that
+      // layer — no need to tear down and rebuild every other block's volume (that full remount is
+      // what leaks a volume each time and scales with segment count).
+      reconcileLabelmapLayers(segmentationId);
+      // Let the reconcile settle before the images backing the dropped layer are freed below.
+      await new Promise(resolve => requestAnimationFrame(() => resolve(null)));
+
+      // Nothing references these now — reclaim the block (~84MB).
+      for (const id of removed) {
+        try { cache.removeImageLoadObject(id, { force: true }); } catch { /* already gone */ }
+      }
+    },
+
     async resetSegment({ segmentationId, segmentIndex }: { segmentationId: string; segmentIndex: number }) {
+      // Reset zeroes the block IMAGES; land any deferred in-place write first so it can't be
+      // re-applied afterwards and resurrect the segment.
+      materializePendingImageSync(segmentationId);
       const segmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
       // Use allImageIds (every block). representationData.Labelmap.imageIds is reverted to the PRIMARY
       // block (segment 1) by syncLegacyLabelmapData, so it misses segments 2+ (their private blocks) —
@@ -3007,15 +3371,15 @@ const commandsModule = ({
 
             // Crop geometry (exposed to slice loops below)
             let _segZ0 = 0, _segZ1 = Number.MAX_SAFE_INTEGER;
-            let _cropY = 0, _cropX = 0, _y0 = 0, _x0 = 0, _fullX = 0;
+            let _cropY = 0, _cropX = 0, _y0 = 0, _x0 = 0, _fullX = 0, _fullY = 0;
             let _hasCropGeom = false;
             if (predFull.length === 3 && predCrop.length === 3) {
-              const [, , fullX] = predFull;
+              const [, fullY, fullX] = predFull;   // predFull = [fullZ, fullY, fullX]
               const [cropZ, cropY, cropX] = predCrop;
               const [z0, y0, x0] = predOffset;
               _segZ0 = z0;  _segZ1 = z0 + cropZ;
               _cropY = cropY; _cropX = cropX;
-              _y0 = y0; _x0 = x0; _fullX = fullX;
+              _y0 = y0; _x0 = x0; _fullX = fullX; _fullY = fullY;
               _hasCropGeom = true;
             } else {
             }
@@ -3038,6 +3402,12 @@ const commandsModule = ({
             const segImageIds = refreshedContext.segImageIds;
             const existingSegments = refreshedContext.existingSegments;
             const existing = refreshedContext.existing;
+            // Which segment each existing block holds. Null for representations built before the
+            // explicit map existed -> the positional fallback (block b = segment b+1) applies.
+            const _prevBlockSegments: number[] | null = refreshedContext.blockSegments;
+            const _blockIdxForSeg = _prevBlockSegments
+              ? _prevBlockSegments.indexOf(segmentNumber)
+              : segmentNumber - 1;
 
           let merged_derivedImages = [];
           let z_range = [];
@@ -3045,22 +3415,85 @@ const commandsModule = ({
           // AFTER the representation swap below, so the ~84MB fresh block minted each refine
           // doesn't accumulate (leak was ~+84MB/refine, inflating MPR remount + GC pauses).
           let _orphanedImageIds: string[] = [];
+          // Block -> segment map for the representation we are about to write.
+          let _nextBlockSegments: number[] | null = null;
+          // Set when the refined crop was written straight into the on-screen MPR labelmap volume,
+          // which lets us skip the remount (the remount is what orphans a volume every refine).
+          let _mprInPlaceDone = false;
           if(overlap){
           let derivedImages = [];
           if (segImageIds.length > 0){
             derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
           }
 
-          // NOTE: block-reuse on refine was tried and REVERTED — clearing the existing block's
-          // pixels needs getScalarData() on each old slice, which lazily re-materialises the
-          // labelmap buffer at ~7ms/slice (240ms for 34 slices) — MORE than just allocating a
-          // fresh block (~88ms). Fresh images' getScalarData is ~free, so allocate-fresh wins.
-          let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+          // TRUE IN-PLACE REFINE: reuse this segment's EXISTING block instead of minting a fresh one.
+          // Keeping the same imageIds is what makes the whole thing consistent — the representation
+          // is unchanged, so no remount is needed, so cornerstone never builds (and orphans) another
+          // MPR volume. (An earlier attempt kept the new block AND skipped the remount; that made the
+          // representation point at the new block while the screen still showed the volume built from
+          // the old one — the refined segment disappeared. Reuse keeps both in agreement.)
+          const _imgLen0 = imageIds.length;
+          const _numBlocks0 = _imgLen0 > 0 ? Math.floor(derivedImages.length / _imgLen0) : 0;
+          // Only take the in-place path in an MPR-ONLY layout. With a stack viewport on screen the
+          // images must stay current every frame, so deferring their write would show stale pixels;
+          // there the fresh-block path is used (its images are cheap to write and its remount is
+          // only ~10-20ms without MPR volumes to rebuild).
+          const _vpIdsNow = servicesManager.services.cornerstoneViewportService.getViewportIds();
+          let _nMpr = 0, _nStack = 0;
+          for (const _vid of _vpIdsNow) {
+            const _vp = servicesManager.services.cornerstoneViewportService.getCornerstoneViewport(_vid);
+            if (_vp instanceof VolumeViewport && !(_vp instanceof VolumeViewport3D)) _nMpr++;
+            else if (!(_vp instanceof VolumeViewport3D)) _nStack++;
+          }
+          const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
+            && _blockIdxForSeg >= 0 && _blockIdxForSeg < _numBlocks0) ? _blockIdxForSeg : -1;
 
-          if(flipped){
+          let derivedImages_new: any[];
+          let _clearIdxs: number[] = [];
+          if (_reuseIdx >= 0) {
+            // Reuse the block as-is: NO image reads/writes here (that is the ~2.5s getScalarData tax).
+            // The crop goes into the volume below; the images are synced lazily via _pendingImageSync.
+            const _bStart = _reuseIdx * _imgLen0;
+            derivedImages_new = derivedImages.slice(_bStart, _bStart + _imgLen0);
+            const _ps = (existingSegments[segmentNumber] as any)?.cachedStats;
+            const _pd = _ps?.dirtySlices as number[] | undefined;
+            // Bound the clear to slices that actually held pixels. With NO recorded extent there is
+            // no prior mask to clear — the old code swept every slice at ~7ms each (321 slices was
+            // the ~5s stall seen whenever the volume lookup missed), for nothing.
+            const _prevIdxs: number[] = (!_pd?.length && (_ps?.segZ0 == null || _ps?.segZ1 == null))
+              ? []
+              : _pd?.length
+              ? _pd
+              : Array.from(
+                  { length: Math.max(0, (_ps?.segZ1 ?? _imgLen0) - (_ps?.segZ0 ?? 0)) },
+                  (_, k) => (_ps?.segZ0 ?? 0) + k
+                );
+            _clearIdxs = _prevIdxs.map((d: number) => (flipped ? (_imgLen0 - 1 - d) : d));
+          } else {
+            derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+          }
+
+          // A freshly-created block is in display order and needs reversing for a flipped series;
+          // a reused block is already stored in working order, so it must NOT be reversed again.
+          if(flipped && _reuseIdx < 0){
             derivedImages_new.reverse();
           }
-          for (let i = 0; i < derivedImages_new.length; i++) {
+          if (_reuseIdx >= 0) {
+            // Volume-only path: derive z_range straight from the crop bytes (which slices actually
+            // contain mask) instead of from the image writes we just skipped. Same values the write
+            // loop would have produced, for cachedStats/dirtySlices/center.
+            const _sliceArea = _cropY * _cropX;
+            for (let z = _segZ0; z < _segZ1; z++) {
+              const _base = (z - _segZ0) * _sliceArea;
+              for (let k = 0; k < _sliceArea; k++) {
+                if (cropBytes[_base + k] === 1) {
+                  z_range.push(flipped ? derivedImages_new.length - z - 1 : z);
+                  break;
+                }
+              }
+            }
+          }
+          for (let i = 0; _reuseIdx < 0 && i < derivedImages_new.length; i++) {
             if (_hasCropGeom && (i < _segZ0 || i >= _segZ1)) continue;
             const voxelManager = derivedImages_new[i].voxelManager as csTypes.IVoxelManager<number>;
             if (_hasCropGeom && i >= _segZ0 && i < _segZ1) {
@@ -3091,6 +3524,68 @@ const commandsModule = ({
             }
           }
 
+          // IN-PLACE MPR UPDATE — only meaningful when the block was REUSED above (imageIds
+          // unchanged). The block's images now hold the refined mask, but the MPR labelmap volume is
+          // a separate buffer built from them, so it must be written too. When that succeeds the
+          // representation AND the on-screen volume are both current, so the remount below can be
+          // skipped — and skipping it is what stops cornerstone building (and orphaning) a fresh
+          // volume every refine. If the volume can't be found we leave _mprInPlaceDone false and the
+          // normal remount still runs, so MPR is never left stale.
+          if (_reuseIdx >= 0) {
+            const _prevStats = (existingSegments[segmentNumber] as any)?.cachedStats;
+            _mprInPlaceDone = updateMprLabelmapVolumeInPlace({
+              segmentNumber,
+              cropBytes,
+              segZ0: _segZ0,
+              segZ1: _segZ1,
+              cropY: _cropY,
+              cropX: _cropX,
+              y0: _y0,
+              x0: _x0,
+              fullX: _fullX,
+              fullY: _fullY,
+              prevZ0: (_prevStats?.segZ0 != null) ? _prevStats.segZ0 as number : _segZ0,
+              prevZ1: (_prevStats?.segZ1 != null) ? _prevStats.segZ1 as number : _segZ1,
+              prevBox: (_prevStats?.cropBox ?? null) as any,
+            });
+            if (_mprInPlaceDone) {
+              // Queue the image write we skipped. Latest payload per segment wins (the server sends
+              // the full current mask each refine), so rapid refines collapse to one materialisation.
+              let _bySeg = _pendingImageSync.get(segmentationId);
+              if (!_bySeg) { _bySeg = new Map<number, any>(); _pendingImageSync.set(segmentationId, _bySeg); }
+              _bySeg.set(segmentNumber, {
+                blockImageIds: derivedImages_new.map((img: any) => img?.imageId),
+                segmentNumber, cropBytes,
+                segZ0: _segZ0, segZ1: _segZ1, cropY: _cropY, cropX: _cropX,
+                y0: _y0, x0: _x0, fullX: _fullX,
+                clearIdxs: _clearIdxs,
+              });
+            } else {
+              // Volume not found: nothing was written anywhere, so fall back to the normal path by
+              // writing the images now (the remount below will rebuild the volume from them).
+              for (const _ai of _clearIdxs) {
+                const _vm = derivedImages_new[_ai]?.voxelManager as csTypes.IVoxelManager<number>;
+                if (!_vm) continue;
+                const _sd = _vm.getScalarData();
+                for (let j = 0; j < _sd.length; j++) if (_sd[j] === segmentNumber) _sd[j] = 0;
+              }
+              for (let z = _segZ0; z < _segZ1; z++) {
+                const _vm = derivedImages_new[z]?.voxelManager as csTypes.IVoxelManager<number>;
+                if (!_vm) continue;
+                const _sd = _vm.getScalarData();
+                const _cb = (z - _segZ0) * _cropY * _cropX;
+                for (let cy = 0; cy < _cropY; cy++) {
+                  const _sr = _cb + cy * _cropX;
+                  const _dr = (_y0 + cy) * _fullX + _x0;
+                  for (let cx = 0; cx < _cropX; cx++) {
+                    if (cropBytes[_sr + cx] === 1) _sd[_dr + cx] = segmentNumber;
+                  }
+                }
+              }
+            }
+          }
+
+
           let filteredDerivedImages = [];
           const imgLength = imageIds.length;
           let excludedBlockIndex = -1; // 0-based block index of the segment being refined
@@ -3101,10 +3596,12 @@ const commandsModule = ({
           // New approach: O(N_slices × pixels) — clears only the one target block.
           if (!toolboxState.getRefineNew() && derivedImages.length > 0) {
             const numBlocks = Math.ceil(derivedImages.length / imgLength);
-            const candidateBlock = segmentNumber - 1;
+            const candidateBlock = _blockIdxForSeg;
             if (candidateBlock >= 0 && candidateBlock < numBlocks) {
               excludedBlockIndex = candidateBlock;
-              _orphanedImageIds = derivedImages
+              // NEVER evict when reusing: that block IS derivedImages_new (still live/on screen).
+              // Only a fresh block orphans the old one.
+              _orphanedImageIds = _reuseIdx >= 0 ? [] : derivedImages
                 .slice(excludedBlockIndex * imgLength, (excludedBlockIndex + 1) * imgLength)
                 .map((img: any) => img?.imageId)
                 .filter(Boolean);
@@ -3130,6 +3627,13 @@ const commandsModule = ({
           } else {
             merged_derivedImages = [...filteredDerivedImages, ...derivedImages_new];
           }
+          // Track which segment each block now holds. Refining an existing segment replaces its
+          // block in place (map unchanged); a new segment appends a block at the end.
+          const _basePrev = _prevBlockSegments
+            ?? Array.from({ length: _numBlocks0 }, (_, b) => b + 1);
+          _nextBlockSegments = excludedBlockIndex >= 0
+            ? _basePrev.slice()
+            : [..._basePrev.filter(sg => sg !== segmentNumber), segmentNumber];
         } else {
           if (segImageIds.length == 0){
             const _tCreate2 = Date.now();
@@ -3271,6 +3775,9 @@ const commandsModule = ({
               // z-range kept for fallback; dirtySlices is the fast-path clear target
               segZ0: _hasCropGeom ? _segZ0 : 0,
               segZ1: _hasCropGeom ? _segZ1 : (merged_derivedImages?.length ?? 0),
+              // XY bbox of this mask — lets the next in-place refine clear only the affected
+              // region instead of full slices.
+              cropBox: _hasCropGeom ? { y0: _y0, x0: _x0, cropY: _cropY, cropX: _cropX } : null,
               dirtySlices: z_range,
             }
           };
@@ -3288,6 +3795,8 @@ const commandsModule = ({
             activeSegmentation,
             currentImageIdIndex,
             z_range,
+            mprInPlaceDone: _mprInPlaceDone,
+            blockSegments: _nextBlockSegments,
           });
           // Evict the orphaned old block now that the representation swap + volume rebuild are
           // done and nothing references these imageIds. Caps the ~84MB/refine cache growth that
@@ -3708,6 +4217,11 @@ const commandsModule = ({
     undoNninter: actions.undoNninter,
     resetNninter: actions.resetNninter,
     resetSegment: actions.resetSegment,
+    releaseSegmentBlock: actions.releaseSegmentBlock,
+    materializeSegmentationWrites: {
+      commandFn: ({ segmentationId }: { segmentationId?: string } = {}) =>
+        materializePendingImageSync(segmentationId),
+    },
     medGemma: actions.medGemma,
     gemini: actions.gemini,
     openai: actions.openai,
