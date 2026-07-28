@@ -325,12 +325,14 @@ const commandsModule = ({
         existingSegments: {} as { [segmentIndex: string]: cstTypes.Segment },
         existing: false,
         blockSegments: null as number[] | null,
+        blocks: [] as LabelmapBlock[],
       };
     }
 
     let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
     let segImageIds: string[] = [];
     let blockSegments: number[] | null = null;
+    let blocks: LabelmapBlock[] = [];
     let existing = false;
     let segmentationId = freshActiveSegmentation.segmentationId;
 
@@ -352,6 +354,10 @@ const commandsModule = ({
         [];
       blockSegments =
         (freshActiveSegmentation.representationData?.Labelmap as any)?.blockSegments ?? null;
+      blocks = describeBlocks(
+        freshActiveSegmentation.representationData?.Labelmap,
+        currentDisplaySets?.imageIds?.length ?? 0
+      );
       existing = true;
     }
 
@@ -362,6 +368,7 @@ const commandsModule = ({
       existingSegments,
       existing,
       blockSegments,
+      blocks,
     };
   }
 
@@ -839,6 +846,7 @@ const commandsModule = ({
     z_range,
     mprInPlaceDone = false,
     blockSegments,
+    blocks,
   }: {
     activeViewportId: string;
     segmentationId: string;
@@ -852,6 +860,7 @@ const commandsModule = ({
     activeSegmentation: any;
     mprInPlaceDone?: boolean;
     blockSegments?: number[] | null;
+    blocks?: LabelmapBlock[] | null;
     currentImageIdIndex?: number;
     z_range: number[];
   }) {
@@ -859,11 +868,10 @@ const commandsModule = ({
     const representations = servicesManager.services.segmentationService.getSegmentationRepresentations(activeViewportId, { segmentationId });
 
     const prevSegmentation = csToolsSegmentation.state.getSegmentation(segmentationId);
-    const prevAllImageIds =
-      prevSegmentation?.representationData?.Labelmap?.allImageIds ??
-      prevSegmentation?.representationData?.Labelmap?.imageIds ??
-      [];
-    const prevBlockCount = imageIds.length > 0 ? Math.floor(prevAllImageIds.length / imageIds.length) : 0;
+    const prevLabelmap = prevSegmentation?.representationData?.Labelmap;
+    // Block count from the block LIST, not allImageIds.length / N — blocks can be shorter than the
+    // series once they are z-cropped, so that division no longer counts them.
+    const prevBlockCount = describeBlocks(prevLabelmap, imageIds.length).length;
 
     const { blockCount, labelmapRepresentation } = buildMultiBlockLabelmapRepresentation({
       segmentationId,
@@ -872,6 +880,7 @@ const commandsModule = ({
       currentDisplaySets,
       segments,
       blockSegments: blockSegments ?? undefined,
+      blocks: blocks ?? undefined,
     });
     const mergedSegments = mergeSegmentsForUpdate(segmentationId, segments);
 
@@ -3759,6 +3768,7 @@ const commandsModule = ({
             z_range,
             mprInPlaceDone: _mprInPlaceDone,
             blockSegments: _nextBlockSegments,
+            blocks: null,
           });
           // Evict the orphaned old block now that the representation swap + volume rebuild are
           // done and nothing references these imageIds. Caps the ~84MB/refine cache growth that
