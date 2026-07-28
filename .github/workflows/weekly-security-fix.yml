@@ -80,7 +80,7 @@ jobs:
           # The RESOLVED versions in yarn.lock are what actually get installed and therefore
           # what the ESM overrides are patched against - a package.json range like ^5.0.13 can
           # silently resolve to a different 5.x, so comparing ranges alone would miss a move.
-          ../.github/scripts/cornerstone-versions.sh > /tmp/cornerstone-before.txt
+          ../.github/scripts/cornerstone-versions.sh yarn.lock > /tmp/cornerstone-before.txt
           echo "Pinned cornerstone versions:"; cat /tmp/cornerstone-before.txt
 
       # yarn-audit-fix verifies the package structure before it runs and fails with
@@ -123,7 +123,7 @@ jobs:
         id: guard
         working-directory: Viewers
         run: |
-          ../.github/scripts/cornerstone-versions.sh > /tmp/cornerstone-after.txt
+          ../.github/scripts/cornerstone-versions.sh yarn.lock > /tmp/cornerstone-after.txt
 
           if ! diff -q /tmp/cornerstone-before.txt /tmp/cornerstone-after.txt > /dev/null; then
             echo "::error::A fix could not be applied without moving @cornerstonejs/*."
