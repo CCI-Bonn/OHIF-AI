@@ -37,7 +37,7 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
-import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks } from './utils/labelmapBlocks';
+import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt } from './utils/labelmapBlocks';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
@@ -451,7 +451,9 @@ const commandsModule = ({
           for (let j = 0; j < sd.length; j++) if (sd[j] === p.segmentNumber) sd[j] = 0;
         }
         for (let z = p.segZ0; z < p.segZ1; z++) {
-          const vm = cache.getImage(p.blockImageIds[z])?.voxelManager as csTypes.IVoxelManager<number>;
+          const arrIdx = z - p.z0;
+          if (arrIdx < 0 || arrIdx >= p.blockImageIds.length) continue;
+          const vm = cache.getImage(p.blockImageIds[arrIdx])?.voxelManager as csTypes.IVoxelManager<number>;
           if (!vm) continue;
           const sd = vm.getScalarData();
           const cropSliceBase = (z - p.segZ0) * p.cropY * p.cropX;
@@ -503,6 +505,7 @@ const commandsModule = ({
     prevZ0,
     prevZ1,
     prevBox,
+    blockZ0,
   }: {
     segmentNumber: number;
     cropBytes: Uint8Array;
@@ -512,6 +515,11 @@ const commandsModule = ({
     fullX: number; fullY: number;
     prevZ0: number; prevZ1: number;
     prevBox?: { y0: number; x0: number; cropY: number; cropX: number } | null;
+    /**
+     * Working-order offset of this block's first slice. The volume is built from the block's own
+     * images, so its z index is block-relative: volume z = working z - blockZ0.
+     */
+    blockZ0: number;
   }): boolean {
     const vpSvc = servicesManager.services.cornerstoneViewportService;
     const sliceLen = fullY * fullX;
@@ -539,8 +547,9 @@ const commandsModule = ({
         // occupies its crop bbox, so scanning full 512x512 slices was ~10M redundant checks/refine
         // (measured 46-149ms). prevBox is the previous refine's bbox (union'd with the new crop so a
         // moved/shrunk mask is fully cleared); without it we fall back to the full slice.
-        const clearZ0 = Math.max(0, Math.min(prevZ0, segZ0));
-        const clearZ1 = Math.min(Math.floor(data.length / sliceLen), Math.max(prevZ1, segZ1));
+        const blockDepth = Math.floor(data.length / sliceLen);
+        const clearZ0 = Math.max(0, Math.min(prevZ0, segZ0) - blockZ0);
+        const clearZ1 = Math.min(blockDepth, Math.max(prevZ1, segZ1) - blockZ0);
         const bx0 = prevBox ? Math.max(0, Math.min(prevBox.x0, x0)) : 0;
         const bx1 = prevBox ? Math.min(fullX, Math.max(prevBox.x0 + prevBox.cropX, x0 + cropX)) : fullX;
         const by0 = prevBox ? Math.max(0, Math.min(prevBox.y0, y0)) : 0;
@@ -558,7 +567,9 @@ const commandsModule = ({
         // Pass 2: write the new crop.
         for (let z = segZ0; z < segZ1; z++) {
           const cropSliceBase = (z - segZ0) * cropY * cropX;
-          const volSliceBase = z * sliceLen;
+          const volZ = z - blockZ0;
+          if (volZ < 0 || volZ >= blockDepth) continue;
+          const volSliceBase = volZ * sliceLen;
           for (let cy = 0; cy < cropY; cy++) {
             const srcRow = cropSliceBase + cy * cropX;
             const dstRow = volSliceBase + (y0 + cy) * fullX + x0;
@@ -2315,33 +2326,26 @@ const commandsModule = ({
       const seg = csToolsSegmentation.state.getSegmentation(segmentationId);
       const lm = seg?.representationData?.Labelmap as any;
       if (!lm) return;
-      const all: string[] = lm.allImageIds ?? lm.imageIds ?? [];
       const srcIds: string[] = lm.referencedImageIds ?? [];
-      const N = srcIds.length;
-      if (!N || all.length < N) return;
-      const blockCount = Math.floor(all.length / N);
+      const blocks = describeBlocks(lm, srcIds.length);
       // Keep at least one block: cornerstone needs a primary labelmap to render at all.
-      if (blockCount <= 1) return;
-      const blockSeg: number[] = (lm.blockSegments?.length === blockCount)
-        ? lm.blockSegments.slice()
-        : Array.from({ length: blockCount }, (_, b) => b + 1);
-      const bIdx = blockSeg.indexOf(segmentIndex);
+      if (blocks.length <= 1) return;
+      const bIdx = blockIndexForSegment(blocks, segmentIndex);
       if (bIdx < 0) return;   // segment has no dedicated block (e.g. single-layer SAM2 labelmap)
 
       // Drop any deferred in-place write for this segment — its block is going away.
       _pendingImageSync.get(segmentationId)?.delete(segmentIndex);
 
-      const removed = all.slice(bIdx * N, (bIdx + 1) * N);
-      const remaining = [...all.slice(0, bIdx * N), ...all.slice((bIdx + 1) * N)];
-      const nextBlockSeg = blockSeg.filter((_, i) => i !== bIdx);
+      const removed = blocks[bIdx].imageIds.slice();
+      const nextBlocks = withoutBlockAt(blocks, bIdx);
 
       const { labelmapRepresentation } = buildMultiBlockLabelmapRepresentation({
         segmentationId,
-        derivedImageIds: remaining,
+        derivedImageIds: flattenBlocks(nextBlocks),
         imageIds: srcIds,
         currentDisplaySets: { displaySetInstanceUID: lm.referencedVolumeId },
         segments: seg?.segments ?? {},
-        blockSegments: nextBlockSeg,
+        blocks: nextBlocks,
       });
 
       const existingRepresentationData = seg?.representationData || {};
@@ -3446,7 +3450,11 @@ const commandsModule = ({
                   { length: Math.max(0, (_ps?.segZ1 ?? _imgLen0) - (_ps?.segZ0 ?? 0)) },
                   (_, k) => (_ps?.segZ0 ?? 0) + k
                 );
-            _clearIdxs = _prevIdxs.map((d: number) => (flipped ? (_imgLen0 - 1 - d) : d));
+            // dirtySlices are DISPLAY indices into the full series. Convert to working order (N is
+            // the SERIES length, not the block's), then to this block's array index.
+            _clearIdxs = _prevIdxs
+              .map((d: number) => flipIndex(d, _imgLen0, flipped) - _newBlockZ0)
+              .filter((i: number) => i >= 0 && i < derivedImages_new.length);
           } else {
             derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
           }
@@ -3525,6 +3533,7 @@ const commandsModule = ({
               prevZ0: (_prevStats?.segZ0 != null) ? _prevStats.segZ0 as number : _segZ0,
               prevZ1: (_prevStats?.segZ1 != null) ? _prevStats.segZ1 as number : _segZ1,
               prevBox: (_prevStats?.cropBox ?? null) as any,
+              blockZ0: _newBlockZ0,
             });
             if (_mprInPlaceDone) {
               // Queue the image write we skipped. Latest payload per segment wins (the server sends
@@ -3537,6 +3546,7 @@ const commandsModule = ({
                 segZ0: _segZ0, segZ1: _segZ1, cropY: _cropY, cropX: _cropX,
                 y0: _y0, x0: _x0, fullX: _fullX,
                 clearIdxs: _clearIdxs,
+                z0: _newBlockZ0,
               });
             } else {
               // Volume not found: nothing was written anywhere, so fall back to the normal path by
@@ -3548,7 +3558,8 @@ const commandsModule = ({
                 for (let j = 0; j < _sd.length; j++) if (_sd[j] === segmentNumber) _sd[j] = 0;
               }
               for (let z = _segZ0; z < _segZ1; z++) {
-                const _vm = derivedImages_new[z]?.voxelManager as csTypes.IVoxelManager<number>;
+                const _ai = z - _newBlockZ0;
+                const _vm = derivedImages_new[_ai]?.voxelManager as csTypes.IVoxelManager<number>;
                 if (!_vm) continue;
                 const _sd = _vm.getScalarData();
                 const _cb = (z - _segZ0) * _cropY * _cropX;
