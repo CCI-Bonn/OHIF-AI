@@ -97,8 +97,10 @@ const commandsModule = ({
       const { imageIds, labelmaps } = lm;
 
       // Series geometry must come from allReferencedImageIds — the SOURCE slice list for the whole
-      // series, set by every producer and immune to syncLegacyLabelmapData because the adapter does
-      // not name it. Labelmap.imageIds AND referencedImageIds are both reverted by that adapter to
+      // series, set by every MULTI-BLOCK producer and immune to syncLegacyLabelmapData because the
+      // adapter does not name it. (Single-block non-AI representations don't set it and take the
+      // referencedImageIds branch below, which is safe: their primary layer spans the whole series.)
+      // Labelmap.imageIds AND referencedImageIds are both reverted by that adapter to
       // the PRIMARY LAYER's value on every entry into state, and that value is deliberately
       // block-scoped via refIdsFor, making both fields unreliable for series geometry once blocks
       // are z-cropped. Fall back to referencedImageIds (pre-Task-4.6 segmentations) then imageIds.
