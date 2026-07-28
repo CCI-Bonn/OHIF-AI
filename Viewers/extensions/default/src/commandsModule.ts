@@ -37,7 +37,7 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
-import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt } from './utils/labelmapBlocks';
+import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, sourceRangeForWorking, MIN_BLOCK_SLICES } from './utils/labelmapBlocks';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
@@ -3434,13 +3434,35 @@ const commandsModule = ({
             if (_vp instanceof VolumeViewport && !(_vp instanceof VolumeViewport3D)) _nMpr++;
             else if (!(_vp instanceof VolumeViewport3D)) _nStack++;
           }
-          const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
-            && !!_prevBlock) ? _blockIdxForSeg : -1;
+          // DEGENERATE REPRESENTATION. describeBlocks yields no blocks while the labelmap still holds
+          // images when there is no `blocks` array AND the flat list is shorter than the series — a
+          // state that only became reachable now that blocks are z-cropped. Those ids cannot be
+          // attributed to a segment, and the representation written below is rebuilt from _nextBlocks
+          // alone, so they are unreachable from here on. Evict them (see _orphanedImageIds) rather
+          // than strand them in the cache: a silent per-run leak is worse than a bounded reset, and
+          // the alternative — guessing an owner/z0 — would render masks at the wrong depth.
+          const _strandedImageIds: string[] =
+            _prevBlocks.length === 0 && segImageIds.length > 0 ? segImageIds.slice() : [];
+          if (_strandedImageIds.length) {
+            console.warn(
+              `[labelmap] ${_strandedImageIds.length} labelmap image(s) have no block mapping; ` +
+              `rebuilding the representation from this segment's block and evicting the rest.`
+            );
+          }
 
-          // Working-order offset of the block being written. Always 0 while blocks span the whole series.
-          // INVARIANT for the sparse rework: on the REUSE path this MUST equal _prevBlock.z0, because
-          // _clearIdxs, the blockZ0 argument, the _pendingImageSync payload and the fallback write loop
-          // all index _prevBlock's own images/volume through it — and _newBlock.z0 is paired with
+          // Reuse requires the existing block to still COVER the new mask. nnInteractive returns the
+          // full current mask each refine, so a mask that grew past the block's z-range needs a
+          // bigger block — which changes imageIds, so that refine takes the normal remount path.
+          // A block is never shrunk: staying at the high-water mark avoids realloc churn when a mask
+          // oscillates across a slice boundary.
+          const _fitsBlock = !!_prevBlock && blockContains(_prevBlock, _segZ0, _segZ1);
+          const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
+            && _fitsBlock) ? _blockIdxForSeg : -1;
+
+          // Working-order offset of the block being written.
+          // INVARIANT: on the REUSE path this MUST equal _prevBlock.z0, because _clearIdxs, the
+          // blockZ0 argument, the _pendingImageSync payload and the fallback write loop all index
+          // _prevBlock's own images/volume through it — and _newBlock.z0 is paired with
           // _prevBlock.imageIds. A fresh block sets it to that block's own crop-aligned start instead.
           let _newBlockZ0 = 0;
           const _tCreateStart = performance.now();
@@ -3449,37 +3471,69 @@ const commandsModule = ({
           if (_reuseIdx >= 0) {
             // Reuse the block as-is: NO image reads/writes here (that is the ~2.5s getScalarData tax).
             // The crop goes into the volume below; the images are synced lazily via _pendingImageSync.
+            _newBlockZ0 = _prevBlock!.z0;
             derivedImages_new = _prevBlock!.imageIds.map(id => cache.getImage(id));
             const _ps = (existingSegments[segmentNumber] as any)?.cachedStats;
             const _pd = _ps?.dirtySlices as number[] | undefined;
             // Bound the clear to slices that actually held pixels. With NO recorded extent there is
             // no prior mask to clear — the old code swept every slice at ~7ms each (321 slices was
             // the ~5s stall seen whenever the volume lookup missed), for nothing.
-            const _prevIdxs: number[] = (!_pd?.length && (_ps?.segZ0 == null || _ps?.segZ1 == null))
-              ? []
-              : _pd?.length
-              ? _pd
-              : Array.from(
-                  { length: Math.max(0, (_ps?.segZ1 ?? _imgLen0) - (_ps?.segZ0 ?? 0)) },
-                  (_, k) => (_ps?.segZ0 ?? 0) + k
-                );
-            // FIXME(sparse): the segZ0/segZ1 fallback below yields WORKING indices but is flipped as if
-            // they were display indices — wrong for a flipped series with no recorded dirtySlices.
-            // Pre-existing; becomes materially wrong once blocks are z-cropped.
-            // dirtySlices are DISPLAY indices into the full series. Convert to working order (N is
-            // the SERIES length, not the block's), then to this block's array index.
-            _clearIdxs = _prevIdxs
-              .map((d: number) => flipIndex(d, _imgLen0, flipped) - _newBlockZ0)
+            //
+            // The two sources live in DIFFERENT spaces and must be converted separately:
+            //   dirtySlices  — DISPLAY indices into the full series, so they need flipIndex with the
+            //                  SERIES length (never the block's). The old code got this right.
+            //   segZ0/segZ1  — WORKING indices when written by this (nnInteractive) path, since they
+            //                  come straight from the server's crop geometry. The old code flipped
+            //                  them as if they were display indices: a pre-existing bug, invisible
+            //                  only because flipIndex is the identity on a non-flipped series.
+            // The segZ0/segZ1 fallback is ambiguous across producers — the SAM2 path (~:1894) stores
+            // the DISPLAY-space z_range bounds under the same names and never writes dirtySlices — so
+            // when it is used at all we clear the UNION of both readings. Over-clearing is safe here:
+            // the server returns the segment's full current mask each refine, so every slice is
+            // rewritten below, and the clear only ever zeroes THIS segment's own voxels. The union is
+            // two extents (~2x40 slices), not the span between them.
+            const _prevWorking: number[] = _pd?.length
+              ? _pd.map((d: number) => flipIndex(d, _imgLen0, flipped))
+              : (_ps?.segZ0 != null && _ps?.segZ1 != null)
+              ? (() => {
+                  const _a = Math.max(0, _ps.segZ0 as number);
+                  const _b = Math.min(_imgLen0, _ps.segZ1 as number);
+                  const _out = new Set<number>();
+                  for (let k = _a; k < _b; k++) {
+                    _out.add(k);                              // read as WORKING
+                    _out.add(flipIndex(k, _imgLen0, flipped));// read as DISPLAY -> working
+                  }
+                  return Array.from(_out);
+                })()
+              : [];
+            // Working -> this block's array index, bounds-guarded (a sparse block covers only part
+            // of the series, so a prior slice can legitimately fall outside it).
+            _clearIdxs = _prevWorking
+              .map((w: number) => w - _newBlockZ0)
               .filter((i: number) => i >= 0 && i < derivedImages_new.length);
           } else {
-            derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+            // Z-CROP: allocate one derived image per slice the mask touches, not one per series
+            // slice. A full-volume block is ~84 MB against a typical mask's ~40 of 321 slices; that
+            // resident heap is what drives the GC pauses. Cornerstone sizes the MPR volume from the
+            // block's own images (dimensions[2] = imageIds.length) and takes its origin from their
+            // positions, so a shorter block renders at the correct place.
+            // Without crop geometry the mask extent is unknown, so fall back to the full series.
+            const [_bw0, _bw1] = _hasCropGeom
+              ? clampRange(_segZ0, _segZ1, _imgLen0, MIN_BLOCK_SLICES)
+              : [0, _imgLen0];
+            // imageIds are in DISPLAY order; a flipped series mirrors the working range onto them
+            // and the result needs reversing to come back in working order. This replaces the old
+            // blanket `if (flipped) derivedImages_new.reverse()`, which assumed a full-length block.
+            const _src = sourceRangeForWorking(_bw0, _bw1, _imgLen0, flipped);
+            derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(
+              imageIds.slice(_src.start, _src.end)
+            );
+            if (_src.reverse) {
+              derivedImages_new.reverse();
+            }
+            _newBlockZ0 = _bw0;
           }
 
-          // A freshly-created block is in display order and needs reversing for a flipped series;
-          // a reused block is already stored in working order, so it must NOT be reversed again.
-          if(flipped && _reuseIdx < 0){
-            derivedImages_new.reverse();
-          }
           if (_reuseIdx >= 0) {
             // Volume-only path: derive z_range straight from the crop bytes (which slices actually
             // contain mask) instead of from the image writes we just skipped. Same values the write
@@ -3495,13 +3549,16 @@ const commandsModule = ({
               }
             }
           }
-          for (let i = 0; _reuseIdx < 0 && i < derivedImages_new.length; i++) {
-            if (_hasCropGeom && (i < _segZ0 || i >= _segZ1)) continue;
-            const voxelManager = derivedImages_new[i].voxelManager as csTypes.IVoxelManager<number>;
-            if (_hasCropGeom && i >= _segZ0 && i < _segZ1) {
+          // Walks the BLOCK's own images: `ai` is a block-array index, `w = ai + _newBlockZ0` the
+          // working index into the full series that the crop geometry and cropBytes are expressed in.
+          // These were the same number only while a block spanned the whole series.
+          for (let ai = 0; _reuseIdx < 0 && ai < derivedImages_new.length; ai++) {
+            const w = ai + _newBlockZ0;
+            if (_hasCropGeom && (w < _segZ0 || w >= _segZ1)) continue;
+            const voxelManager = derivedImages_new[ai].voxelManager as csTypes.IVoxelManager<number>;
+            if (_hasCropGeom) {
               const scalarData = voxelManager.getScalarData();
-              const c = i - _segZ0;
-              const cropSliceBase = c * _cropY * _cropX;
+              const cropSliceBase = (w - _segZ0) * _cropY * _cropX;
               let wrote = false;
               for (let cy = 0; cy < _cropY; cy++) {
                 const srcRow = cropSliceBase + cy * _cropX;
@@ -3513,15 +3570,18 @@ const commandsModule = ({
                   }
                 }
               }
-              if (wrote) z_range.push(flipped ? derivedImages_new.length - i - 1 : i);
-            } else if (!_hasCropGeom && new_arrayBuffer) {
-              // Legacy: full-slice scan
+              // z_range feeds cachedStats.dirtySlices, which is read back as DISPLAY indices into
+              // the full series on the next refine — so convert with the SERIES length.
+              if (wrote) z_range.push(flipIndex(w, _imgLen0, flipped));
+            } else if (new_arrayBuffer) {
+              // Legacy full-slice path. Only reached without crop geometry, where the block spans
+              // the whole series, so ai === w.
               const scalarData = voxelManager.getScalarData();
               const sliceLen = scalarData.length;
-              const sliceData = new_arrayBuffer.slice(i * sliceLen, (i + 1) * sliceLen);
+              const sliceData = new_arrayBuffer.slice(w * sliceLen, (w + 1) * sliceLen);
               if (sliceData.some(v => v === 1)) {
                 voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
-                z_range.push(flipped ? derivedImages_new.length - i - 1 : i);
+                z_range.push(flipIndex(w, _imgLen0, flipped));
               }
             }
           }
@@ -3617,9 +3677,22 @@ const commandsModule = ({
               );
           _nextBlockSegments = _nextBlocks.map(b => b.segmentIndex);
           // NEVER evict when reusing: the old block IS derivedImages_new (still live and on screen).
-          // Only a freshly allocated block orphans the previous one.
-          _orphanedImageIds =
-            _isRefine && _reuseIdx < 0 && _prevBlock ? _prevBlock.imageIds.slice() : [];
+          // Only a freshly allocated block orphans the previous one. Images the representation held
+          // but could not attribute to any block (_strandedImageIds) are dropped by the rebuild
+          // below, so they are evicted here too rather than left to leak. Belt-and-braces: never
+          // evict an id the block we just wrote is using.
+          const _keepIds = new Set(flattenBlocks(_nextBlocks));
+          _orphanedImageIds = (
+            _isRefine && _reuseIdx < 0 && _prevBlock
+              ? _prevBlock.imageIds.concat(_strandedImageIds)
+              : _strandedImageIds
+          ).filter(id => !_keepIds.has(id));
+          if (_orphanedImageIds.length) {
+            // A deferred image write queued against the block we are about to evict is dead work:
+            // its blockImageIds no longer resolve, and this refine wrote the new block's images
+            // directly. Newly reachable now that a REFINE (not just a delete) can replace a block.
+            _pendingImageSync.get(segmentationId)?.delete(segmentNumber);
+          }
           merged_derivedImages = flattenBlocks(_nextBlocks).map(id => cache.getImage(id));
         } else {
           if (segImageIds.length == 0){
@@ -3629,6 +3702,9 @@ const commandsModule = ({
             if(flipped){
               derivedImages_new.reverse();
             }
+            // NON-SPARSE branch (SAM2 / single-layer): this block deliberately spans the whole
+            // series, so `i` is simultaneously a block-array index and a working index and the two
+            // never diverge. z_range must still be DISPLAY, converted with the SERIES length.
             for (let i = 0; i < derivedImages_new.length; i++) {
               if (_hasCropGeom && (i < _segZ0 || i >= _segZ1)) continue;
               const voxelManager = derivedImages_new[i]
@@ -3649,7 +3725,7 @@ const commandsModule = ({
                     }
                   }
                 }
-                if (wrote) z_range.push(flipped ? derivedImages_new.length - i - 1 : i);
+                if (wrote) z_range.push(flipIndex(i, imageIds.length, flipped));
               } else if (!_hasCropGeom && new_arrayBuffer) {
                 // Legacy: full-slice scan
                 const scalarData = voxelManager.getScalarData();
@@ -3657,7 +3733,7 @@ const commandsModule = ({
                 const sliceData = new_arrayBuffer.subarray(i * sliceLen, (i + 1) * sliceLen);
                 if (sliceData.some(v => v === 1)){
                   for (let j = 0; j < sliceLen; j++) { if (sliceData[j] === 1) scalarData[j] = segmentNumber; }
-                  z_range.push(flipped ? derivedImages_new.length - i - 1 : i);
+                  z_range.push(flipIndex(i, imageIds.length, flipped));
                 }
               }
             }
