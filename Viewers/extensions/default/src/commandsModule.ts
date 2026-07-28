@@ -252,12 +252,40 @@ const commandsModule = ({
     // with the wrong source slice and render the overlay z-mirrored. Derive referencedImageIds
     // from each labelmap image's own referencedImageId so the mapping is order-safe
     // (identity for a non-flipped series where blockImageIds are already in display order).
-    const refIdsFor = (ids: string[]): string[] => {
+    //
+    // PREFERENCE ORDER:
+    //   1. the block's own `referencedImageIds` — recorded at allocation from the exact source
+    //      slices, so it survives an LRU purge of the block's labelmap images;
+    //   2. the cache-derived ids, for blocks predating (1);
+    //   3. the whole-series list, and ONLY for a block that actually spans the series. For a
+    //      z-cropped block that fallback pairs block slice 0 with display slice 0 and renders the
+    //      segment at the wrong anatomical depth, so it is refused loudly instead.
+    const refIdsFor = (block: LabelmapBlock): string[] => {
+      const ids = block.imageIds;
+      if (block.referencedImageIds?.length === ids.length) {
+        return block.referencedImageIds;
+      }
       const refs = ids.map(id => (cache.getImage(id) as any)?.referencedImageId);
       // Compare against the BLOCK's own length: a sparse (z-cropped) block is shorter than N, and
       // the old `refs.length === N` guard would silently fall back to the full source list, pairing
       // its slices with the wrong source images.
-      return refs.length === ids.length && refs.every(Boolean) ? (refs as string[]) : imageIds;
+      if (refs.length === ids.length && refs.every(Boolean)) {
+        return refs as string[];
+      }
+      if (ids.length === imageIds.length) {
+        return imageIds;
+      }
+      console.error(
+        `[labelmap] segment ${block.segmentIndex}: cannot resolve referencedImageIds for its ` +
+        `${ids.length}-slice block (series has ${imageIds.length}); its labelmap images are no ` +
+        `longer cached and the block records none. Refusing to substitute the full-series list, ` +
+        `which would render this segment at the wrong depth.`
+      );
+      // Length-matched placeholder only: cornerstone pairs by index and a short/empty list would
+      // throw rather than degrade. The depth is still not trustworthy — that is what the error above
+      // is for. Unreachable in practice: allocation records referencedImageIds, and the LRU-touch
+      // loop keeps live blocks' images cached.
+      return imageIds.slice(0, ids.length);
     };
 
     for (let b = 0; b < blockList.length; b++) {
@@ -269,7 +297,7 @@ const commandsModule = ({
         type: 'stack',
         imageIds: blockImageIds,
         referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
-        referencedImageIds: refIdsFor(blockImageIds),
+        referencedImageIds: refIdsFor(blockList[b]),
         labelToSegmentIndex: {},
       };
       segmentBindings[segIdx] = { labelmapId, labelValue: segIdx };
@@ -2348,6 +2376,44 @@ const commandsModule = ({
       const removed = blocks[bIdx].imageIds.slice();
       const nextBlocks = withoutBlockAt(blocks, bIdx);
 
+      // Which labelmapIds change hands. Mirrors buildMultiBlockLabelmapRepresentation exactly:
+      // block 0 is the PRIMARY (`-storage-0`), every other block is `-private-${segmentIndex}`.
+      const _layerOwners = (bs: LabelmapBlock[]) => {
+        const m = new Map<string, number>();
+        bs.forEach((b, i) =>
+          m.set(i === 0 ? `${segmentationId}-storage-0` : `${segmentationId}-private-${b.segmentIndex}`, b.segmentIndex)
+        );
+        return m;
+      };
+      const _oldOwners = _layerOwners(blocks);
+      const _newOwners = _layerOwners(nextBlocks);
+      // Any id whose owning segment is not the same before and after. That is:
+      //   - the dropped block's own id (gone from _newOwners);
+      //   - `-storage-0` when block 0 itself was dropped, because the next block is PROMOTED into
+      //     position 0 and inherits that id — it must not inherit the deleted segment's volume;
+      //   - the promoted block's former `-private-N` id, now orphaned.
+      // Ids that keep the same owner are untouched: not purging them is the whole point of taking
+      // the light reconcile path instead of a full remount.
+      const _staleLayerIds = [..._oldOwners.keys(), ..._newOwners.keys()].filter(
+        id => _oldOwners.get(id) !== _newOwners.get(id)
+      );
+      // Same purge remountSegmentationRepresentations does (~:753-763): the explicit
+      // geometryVolumeId the layer store stamped on the layer, plus the `${labelmapId}-geometry`
+      // key it defaults to. Read from the OLD labelmaps, before updateSegmentations replaces them.
+      const _oldLayers = (lm.labelmaps ?? {}) as Record<string, any>;
+      const _purgeLayerVolumes = () => {
+        for (const labelmapId of new Set(_staleLayerIds)) {
+          const explicitId = _oldLayers[labelmapId]?.geometryVolumeId;
+          if (explicitId && cache.getVolume(explicitId)) {
+            cache.removeVolumeLoadObject(explicitId);
+          }
+          const defaultKey = `${labelmapId}-geometry`;
+          if (cache.getVolume(defaultKey)) {
+            cache.removeVolumeLoadObject(defaultKey);
+          }
+        }
+      };
+
       const { labelmapRepresentation } = buildMultiBlockLabelmapRepresentation({
         segmentationId,
         derivedImageIds: flattenBlocks(nextBlocks),
@@ -2366,6 +2432,16 @@ const commandsModule = ({
           },
         },
       ]);
+
+      // MUST run before the reconcile below. Segment numbers are REUSED (getRefineNew assigns
+      // minAvailableNumber), so deleting segment 2 and creating a new one lands on the same
+      // `-private-2` labelmapId; cornerstone's getOrCreateLabelmapVolume would then hand back the
+      // deleted segment's cached volume. Neither releaseSegmentBlock's image eviction nor
+      // cornerstone's unmount path purges the VOLUME cache — only remountSegmentationRepresentations
+      // did, and we deliberately take the lighter reconcile path here. With z-cropped blocks a
+      // resurrected volume no longer even has the right depth, so this became a wrong-render bug
+      // rather than merely stale pixels.
+      _purgeLayerVolumes();
 
       // Removing a block is a LAYER-SET change, so cornerstone's reconcile can unmount just that
       // layer — no need to tear down and rebuild every other block's volume (that full remount is
@@ -3450,12 +3526,31 @@ const commandsModule = ({
             );
           }
 
+          // THE working range this refine needs, clamped to the series and widened to
+          // MIN_BLOCK_SLICES. Computed ONCE, here, and used for BOTH the containment test below and
+          // the allocation further down — they must agree.
+          //
+          // Testing containment against the raw server geometry instead was a trap: if the server
+          // ever returned _segZ1 > _imgLen0 (or _segZ0 < 0), allocation would truncate the block to
+          // the series, so the block could never satisfy blockContains(_prevBlock, _segZ0, _segZ1) —
+          // and the segment would reallocate and remount on EVERY subsequent refine, forever, with
+          // no error and no visual symptom. Comparing like with like removes that failure mode.
+          //
+          // The MIN_BLOCK_SLICES widening is centred, so a mask that shrinks to a SINGLE slice
+          // sitting on a block's first slice widens one below it and misses containment by one.
+          // That costs one reallocation and then converges — the replacement block is cut from this
+          // same range, so the next refine fits. Bounded, unlike the unclamped comparison above.
+          // Without crop geometry the mask extent is unknown, so fall back to the full series.
+          const [_bw0, _bw1] = _hasCropGeom
+            ? clampRange(_segZ0, _segZ1, _imgLen0, MIN_BLOCK_SLICES)
+            : [0, _imgLen0];
+
           // Reuse requires the existing block to still COVER the new mask. nnInteractive returns the
           // full current mask each refine, so a mask that grew past the block's z-range needs a
           // bigger block — which changes imageIds, so that refine takes the normal remount path.
           // A block is never shrunk: staying at the high-water mark avoids realloc churn when a mask
           // oscillates across a slice boundary.
-          const _fitsBlock = !!_prevBlock && blockContains(_prevBlock, _segZ0, _segZ1);
+          const _fitsBlock = !!_prevBlock && blockContains(_prevBlock, _bw0, _bw1);
           const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
             && _fitsBlock) ? _blockIdxForSeg : -1;
 
@@ -3465,6 +3560,9 @@ const commandsModule = ({
           // _prevBlock's own images/volume through it — and _newBlock.z0 is paired with
           // _prevBlock.imageIds. A fresh block sets it to that block's own crop-aligned start instead.
           let _newBlockZ0 = 0;
+          // The source slices backing the block being written, in working order. Set on both paths
+          // below and stored on _newBlock; see LabelmapBlock.referencedImageIds.
+          let _newBlockRefIds: string[] | undefined;
           const _tCreateStart = performance.now();
           let derivedImages_new: any[];
           let _clearIdxs: number[] = [];
@@ -3472,6 +3570,8 @@ const commandsModule = ({
             // Reuse the block as-is: NO image reads/writes here (that is the ~2.5s getScalarData tax).
             // The crop goes into the volume below; the images are synced lazily via _pendingImageSync.
             _newBlockZ0 = _prevBlock!.z0;
+            // Same block, same slices: carry the recorded pairing forward untouched.
+            _newBlockRefIds = _prevBlock!.referencedImageIds;
             derivedImages_new = _prevBlock!.imageIds.map(id => cache.getImage(id));
             const _ps = (existingSegments[segmentNumber] as any)?.cachedStats;
             const _pd = _ps?.dirtySlices as number[] | undefined;
@@ -3517,18 +3617,22 @@ const commandsModule = ({
             // resident heap is what drives the GC pauses. Cornerstone sizes the MPR volume from the
             // block's own images (dimensions[2] = imageIds.length) and takes its origin from their
             // positions, so a shorter block renders at the correct place.
-            // Without crop geometry the mask extent is unknown, so fall back to the full series.
-            const [_bw0, _bw1] = _hasCropGeom
-              ? clampRange(_segZ0, _segZ1, _imgLen0, MIN_BLOCK_SLICES)
-              : [0, _imgLen0];
+            // [_bw0, _bw1] was computed ABOVE, so the range allocation uses and the range
+            // containment was tested against are one and the same value.
+            //
             // imageIds are in DISPLAY order; a flipped series mirrors the working range onto them
             // and the result needs reversing to come back in working order. This replaces the old
             // blanket `if (flipped) derivedImages_new.reverse()`, which assumed a full-length block.
             const _src = sourceRangeForWorking(_bw0, _bw1, _imgLen0, flipped);
+            // The block's SOURCE slices. Recorded on the block below so the labelmap -> series
+            // pairing never has to be re-derived from the (LRU-purgeable) image cache.
+            _newBlockRefIds = imageIds.slice(_src.start, _src.end);
             derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(
-              imageIds.slice(_src.start, _src.end)
+              _newBlockRefIds
             );
             if (_src.reverse) {
+              // Both lists flip together: they must stay index-aligned in working order.
+              _newBlockRefIds = _newBlockRefIds.slice().reverse();
               derivedImages_new.reverse();
             }
             _newBlockZ0 = _bw0;
@@ -3662,6 +3766,7 @@ const commandsModule = ({
             imageIds: _reuseIdx >= 0
               ? _prevBlock!.imageIds.slice()
               : derivedImages_new.map((img: any) => img.imageId),
+            referencedImageIds: _newBlockRefIds,
           };
           _nextBlocks = _isRefine
             ? replaceBlockAt(_prevBlocks, _blockIdxForSeg, _newBlock)

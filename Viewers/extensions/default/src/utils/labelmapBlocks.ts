@@ -25,6 +25,16 @@ export type LabelmapBlock = {
   z0: number;
   /** Derived labelmap image ids, in working order. */
   imageIds: string[];
+  /**
+   * The block's SOURCE (series) slices, in WORKING order and index-aligned with `imageIds`.
+   *
+   * Cornerstone pairs labelmap image k with referencedImageIds[k] strictly by index, so this is the
+   * ground truth for where the block sits in the series. It is carried on the block because the only
+   * other source — each cached labelmap image's own `referencedImageId` — disappears if those images
+   * are LRU-purged, and the whole-series list is NOT a safe substitute for a z-cropped block (it
+   * would pair block slice 0 with display slice 0 and render the mask at the wrong depth).
+   */
+  referencedImageIds?: string[];
 };
 
 /**
@@ -48,6 +58,9 @@ export function describeBlocks(labelmapData: any, sourceCount: number): Labelmap
       segmentIndex: b.segmentIndex,
       z0: b.z0 ?? 0,
       imageIds: b.imageIds ?? [],
+      // Carried through when the persisted block has it. Left undefined otherwise (a pre-sparse
+      // representation), where the block spans the series and the whole-series list is correct.
+      referencedImageIds: b.referencedImageIds,
     }));
   }
   const all: string[] = labelmapData.allImageIds ?? labelmapData.imageIds ?? [];
