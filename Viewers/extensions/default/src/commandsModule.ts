@@ -37,6 +37,7 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
+import { LabelmapBlock, describeBlocks } from './utils/labelmapBlocks';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
@@ -200,45 +201,6 @@ const commandsModule = ({
       }
     }, 400);
     _statsDebounceTimers.set(key, timer);
-  }
-
-  /**
-   * A labelmap block: the slices of ONE segment's mask.
-   *
-   * Blocks used to be uniform — every segment allocated a full-volume block (N slices, ~84MB) even
-   * though its mask typically covers ~40 of 321 slices (~95% zeros). That fixed size is what drives
-   * the resident memory and therefore the GC pauses. A block is now described explicitly so it can
-   * cover only [z0, z0+imageIds.length) — cornerstone builds the MPR volume from the block's own
-   * images (dimensions = imageIds.length, origin = first image's position), so a z-cropped block
-   * still renders at the correct place.
-   */
-  type LabelmapBlock = { segmentIndex: number; z0: number; imageIds: string[] };
-
-  /**
-   * Describe an existing representation as explicit blocks.
-   * Handles the legacy uniform layout (flat allImageIds in N-sized chunks, optionally with the
-   * blockSegments map) so representations built before sparse blocks keep working.
-   */
-  function describeBlocks(labelmapData: any, sourceCount: number): LabelmapBlock[] {
-    if (!labelmapData) return [];
-    if (Array.isArray(labelmapData.blocks) && labelmapData.blocks.length) {
-      return labelmapData.blocks.map((b: any) => ({
-        segmentIndex: b.segmentIndex,
-        z0: b.z0 ?? 0,
-        imageIds: b.imageIds ?? [],
-      }));
-    }
-    const all: string[] = labelmapData.allImageIds ?? labelmapData.imageIds ?? [];
-    if (!sourceCount || all.length < sourceCount) return [];
-    const count = Math.floor(all.length / sourceCount);
-    const segs: number[] = (labelmapData.blockSegments?.length === count)
-      ? labelmapData.blockSegments
-      : Array.from({ length: count }, (_, b) => b + 1);
-    return Array.from({ length: count }, (_, b) => ({
-      segmentIndex: segs[b],
-      z0: 0,
-      imageIds: all.slice(b * sourceCount, (b + 1) * sourceCount),
-    }));
   }
 
   function buildMultiBlockLabelmapRepresentation({
