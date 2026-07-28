@@ -13,11 +13,13 @@ name: Weekly security fix
 #   * No major version bumps, ever. `npm audit fix` semantics without --force,
 #     so only semver-compatible fixes are taken. Advisories needing a major are
 #     listed in the PR as remaining, for a human to handle deliberately.
-#   * @cornerstonejs/* is EXCLUDED outright. Viewers/backup/esm/ holds ~21
+#   * @cornerstonejs/* is never allowed to move. Viewers/backup/esm/ holds ~21
 #     hand-patched copies of cornerstone internals that the Dockerfile copies
 #     over the installed package; a version bump silently invalidates those
 #     patches and the symptom is broken RENDERING at runtime, not a build
-#     error. Cornerstone upgrades stay manual and deliberate.
+#     error. Cornerstone upgrades stay manual and deliberate. Enforced by a
+#     post-fix guard on the RESOLVED lockfile versions, because
+#     yarn-audit-fix --exclude needs yarn >= 3.3.0 and this repo is on 1.22.22.
 #   * Python is never auto-patched. monai-label/requirements.txt pins
 #     torch==2.8.0 and nninteractive==2.5.1, where the pin IS the bug fix.
 #   * If the lockfile does not resolve after the fix, the job fails and no PR
@@ -42,10 +44,6 @@ permissions:
 concurrency:
   group: weekly-security-fix
   cancel-in-progress: false
-
-env:
-  # Packages this workflow must never move. Glob syntax, per yarn-audit-fix --exclude.
-  EXCLUDED_PACKAGES: '@cornerstonejs/**'
 
 jobs:
   security-fix:
@@ -79,9 +77,18 @@ jobs:
           echo "Before:"; cat /tmp/summary-before.json
 
           # Record the cornerstone versions we are contractually not allowed to move.
-          git ls-files '*package.json' | grep -v node_modules \
-            | xargs grep -h '"@cornerstonejs/' | sort -u > /tmp/cornerstone-before.txt || true
-          echo "Pinned cornerstone entries:"; cat /tmp/cornerstone-before.txt
+          # The RESOLVED versions in yarn.lock are what actually get installed and therefore
+          # what the ESM overrides are patched against - a package.json range like ^5.0.13 can
+          # silently resolve to a different 5.x, so comparing ranges alone would miss a move.
+          ../.github/scripts/cornerstone-versions.sh > /tmp/cornerstone-before.txt
+          echo "Pinned cornerstone versions:"; cat /tmp/cornerstone-before.txt
+
+      # yarn-audit-fix verifies the package structure before it runs and fails with
+      # "not found: node_modules" without an install. --frozen-lockfile also proves the
+      # CURRENT lockfile is valid, so a later failure is attributable to the fix.
+      - name: Install dependencies
+        working-directory: Viewers
+        run: yarn install --frozen-lockfile --ignore-engines --network-timeout 600000
 
       - name: Apply minimal security fixes
         id: fix
@@ -91,10 +98,10 @@ jobs:
           # yarn-audit-fix bridges `npm audit fix` onto a yarn v1 lockfile.
           # No --force: semver-compatible fixes only, so an advisory that would
           # need a breaking change is skipped rather than forced.
-          # --exclude keeps cornerstone out of the fix set entirely.
-          npx --yes yarn-audit-fix@10 \
-            --exclude "$EXCLUDED_PACKAGES" \
-            2>&1 | tee /tmp/fix.log
+          # NOTE: no --exclude here. That flag requires yarn >= 3.3.0 and this project is
+          # pinned to yarn 1.22.22, so cornerstone is protected by the guard step below
+          # rather than by the tool. Same policy, enforced after the fact.
+          npx --yes yarn-audit-fix@10 2>&1 | tee /tmp/fix.log
 
           if git diff --quiet -- yarn.lock '*package.json'; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -106,16 +113,17 @@ jobs:
         if: steps.fix.outputs.changed == 'false'
         run: echo "No security fixes available this week. No PR opened."
 
-      # Safety net. --exclude should already prevent this; if cornerstone moved
-      # anyway, a transitive constraint forced it, and policy says drop the fix
-      # rather than take the upgrade. Abort without opening a PR.
+      # THE cornerstone guard -- not a redundant safety net. yarn-audit-fix --exclude needs
+      # yarn >= 3.3.0 and this repo is on 1.22.22, so this comparison of RESOLVED lockfile
+      # versions is the only thing enforcing the policy. If cornerstone moved, a transitive
+      # constraint forced it, and policy says drop the fix rather than take the upgrade:
+      # revert and abort without opening a PR.
       - name: Enforce the cornerstone exclusion
         if: steps.fix.outputs.changed == 'true'
         id: guard
         working-directory: Viewers
         run: |
-          git ls-files '*package.json' | grep -v node_modules \
-            | xargs grep -h '"@cornerstonejs/' | sort -u > /tmp/cornerstone-after.txt || true
+          ../.github/scripts/cornerstone-versions.sh > /tmp/cornerstone-after.txt
 
           if ! diff -q /tmp/cornerstone-before.txt /tmp/cornerstone-after.txt > /dev/null; then
             echo "::error::A fix could not be applied without moving @cornerstonejs/*."
@@ -178,7 +186,7 @@ jobs:
             echo
             echo '> **Semver-compatible fixes only.** Advisories that would need a major version bump'
             echo '> are deliberately left open and listed below — this workflow never forces a'
-            echo '> breaking upgrade. `@cornerstonejs/*` is excluded entirely.'
+            echo '> breaking upgrade. `@cornerstonejs/*` is never allowed to move.'
             echo
             echo '### Fix log'
             echo
@@ -234,7 +242,7 @@ jobs:
             fix(deps): apply minimal security fixes
 
             Smallest semver-compatible bumps that clear the open advisories.
-            No major bumps; @cornerstonejs/* excluded; Python untouched.
+            No major bumps; @cornerstonejs/* verified unmoved; Python untouched.
             Automated by .github/workflows/weekly-security-fix.yml.
           labels: security, dependencies
           delete-branch: true
