@@ -16,10 +16,22 @@
 # indented. Output is sorted so it can be diffed directly.
 set -euo pipefail
 
-LOCKFILE="${1:-Viewers/yarn.lock}"
+# Accept an explicit path. Falling back, try both the repo root and Viewers/ -- the workflow
+# invokes this with `working-directory: Viewers`, so a default of "Viewers/yarn.lock" would
+# resolve to Viewers/Viewers/yarn.lock and fail.
+LOCKFILE="${1:-}"
 
-if [ ! -f "$LOCKFILE" ]; then
-  echo "cornerstone-versions.sh: no lockfile at $LOCKFILE" >&2
+if [ -z "$LOCKFILE" ]; then
+  for candidate in yarn.lock Viewers/yarn.lock ../Viewers/yarn.lock; do
+    if [ -f "$candidate" ]; then
+      LOCKFILE="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$LOCKFILE" ] || [ ! -f "$LOCKFILE" ]; then
+  echo "cornerstone-versions.sh: no yarn.lock found (looked for '${1:-yarn.lock, Viewers/yarn.lock, ../Viewers/yarn.lock}' from $(pwd))" >&2
   exit 1
 fi
 
