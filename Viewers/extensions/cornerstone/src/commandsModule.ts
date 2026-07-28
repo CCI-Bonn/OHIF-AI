@@ -1421,6 +1421,9 @@ function commandsModule({
      */
     downloadSegmentationCommand: ({ segmentationId }) => {
       const { segmentationService } = servicesManager.services;
+      // Land any deferred in-place labelmap write so the export reflects the latest refine
+      // (MPR in-place refines update the volume immediately and the images lazily).
+      try { commandsManager.runCommand('materializeSegmentationWrites', { segmentationId }); } catch { /* optional */ }
       segmentationService.downloadSegmentation(segmentationId);
     },
 
@@ -1430,6 +1433,8 @@ function commandsModule({
      */
     storeSegmentationCommand: async ({ segmentationId }) => {
       const { segmentationService, viewportGridService } = servicesManager.services;
+      // Land any deferred in-place labelmap write before serialising (see downloadSegmentation).
+      try { commandsManager.runCommand('materializeSegmentationWrites', { segmentationId }); } catch { /* optional */ }
 
       const displaySetInstanceUIDs = await createReportAsync({
         servicesManager,
@@ -1484,9 +1489,15 @@ function commandsModule({
      * @param props.segmentationId - The ID of the segmentation
      * @param props.segmentIndex - The index of the segment to delete
      */
-    deleteSegmentCommand: ({ segmentationId, segmentIndex }) => {
+    deleteSegmentCommand: async ({ segmentationId, segmentIndex }) => {
       const { segmentationService } = servicesManager.services;
       segmentationService.removeSegment(segmentationId, segmentIndex);
+      // removeSegment only zeroes the segment's pixel values; in the multi-block labelmap scheme the
+      // segment also owns a ~84MB block of derived images that would otherwise stay in the cache
+      // forever. Release it so memory is actually reclaimed on delete.
+      try {
+        await commandsManager.runCommand('releaseSegmentBlock', { segmentationId, segmentIndex });
+      } catch { /* optional: segmentations without a dedicated block */ }
     },
 
     /**
