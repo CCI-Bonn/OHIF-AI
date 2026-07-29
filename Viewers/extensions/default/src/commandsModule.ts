@@ -863,7 +863,6 @@ const commandsModule = ({
       await activeVp.setImageIdIndex(currentImageIdIndex);
     }
 
-
     eventTarget.dispatchEvent(
       new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, {
         detail: { segmentationId },
@@ -3322,9 +3321,6 @@ const commandsModule = ({
 
       let data = MonaiLabelClient.constructFormData(params, null);
 
-      
-      const beforePost = Date.now();
-
       // Create the axios promise
       const segmentationPromise = axios.post(url, data, {
         responseType: 'arraybuffer',
@@ -3356,8 +3352,6 @@ const commandsModule = ({
         // Process the response
         const response = await segmentationPromise;
         if (response.status === 200) {
-            const afterPost = Date.now();
-            const networkRoundTripMs = afterPost - beforePost;
             const ct = response.headers["content-type"] as string;
             const { meta, seg } = await parseMultipart(response.data, ct, { allowEmptySeg: true });
             // Server-side session was evicted/timed out. Reclaim, re-init, and
@@ -3390,30 +3384,6 @@ const commandsModule = ({
             if (!seg.length) {
               throw new Error('seg part not found');
             }
-            const afterParse = Date.now();
-
-            // --- server-side timing breakdown ---
-            const sRequestTs     = metaNum(meta as Record<string,unknown>, 'server_request_ts');
-            const sBeginTs       = metaNum(meta as Record<string,unknown>, 'server_begin_ts');
-            const sEndTs         = metaNum(meta as Record<string,unknown>, 'server_end_ts');
-            const sLoad          = metaNum(meta as Record<string,unknown>, 'server_load_elapsed');
-            const sImgConvert    = metaNum(meta as Record<string,unknown>, 'server_img_convert_elapsed');
-            const sPromptPrep    = metaNum(meta as Record<string,unknown>, 'server_prompt_prep_elapsed');
-            const sModelCore     = metaNum(meta as Record<string,unknown>, 'nninter_core_elapsed');
-            const sResult        = metaNum(meta as Record<string,unknown>, 'server_result_elapsed');
-            const sTotal         = metaNum(meta as Record<string,unknown>, 'nninter_elapsed');
-            const sFirstTs       = metaNum(meta as Record<string,unknown>, 'nninter_first_interaction_ts');
-
-            // Four-leg split (all server timestamps share the same host clock as the container):
-            //   leg1: POST in flight          = server_request_ts - beforePost (client clock vs server clock; same host → accurate)
-            //   leg2: MONAI pre-processing    = server_begin_ts - server_request_ts (DICOM download from Orthanc, entirely server-side)
-            //   leg3: our infer()             = server_end_ts - server_begin_ts (same clock, exact)
-            //   leg4: response in flight      = afterPost - server_end_ts (same host → accurate)
-            const postInFlightMs    = (sRequestTs != null) ? sRequestTs * 1000 - beforePost                     : undefined;
-            const monaiPrepMs       = (sRequestTs != null && sBeginTs != null) ? (sBeginTs - sRequestTs) * 1000 : undefined;
-            const serverProcessMs   = (sBeginTs   != null && sEndTs   != null) ? (sEndTs   - sBeginTs)   * 1000 : undefined;
-            const responseInFlightMs= (sEndTs     != null)                     ? afterPost - sEndTs * 1000      : undefined;
-
 
             const flipped = meta.flipped.toLowerCase() === "true"
             const nninter_elapsed = meta.nninter_elapsed
@@ -3592,7 +3562,6 @@ const commandsModule = ({
           // The source slices backing the block being written, in working order. Set on both paths
           // below and stored on _newBlock; see LabelmapBlock.referencedImageIds.
           let _newBlockRefIds: string[] | undefined;
-          const _tCreateStart = performance.now();
           let derivedImages_new: any[];
           let _clearIdxs: number[] = [];
           if (_reuseIdx >= 0) {
@@ -3783,7 +3752,6 @@ const commandsModule = ({
               }
             }
           }
-
 
           // The refined segment's block is REPLACED in the list (keeping its position, so no other
           // segment is renumbered); a new segment APPENDS one. This used to be done by slicing the
