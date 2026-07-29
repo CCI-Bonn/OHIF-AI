@@ -3575,11 +3575,13 @@ const commandsModule = ({
           // stays well inside it, a runaway does not. Measured against [_aw0, _aw1) — the range a
           // FRESH block would take — never the mask's own [_bw0, _bw1), because comparing against
           // the mask would reclaim exactly the headroom the grid deliberately reserved.
-          const _shrinkBlock =
+          // Named for what it MEASURES, not for the decision it feeds: it is true whenever the
+          // previous block is oversized, including on paths that would reallocate anyway.
+          const _blockOversized =
             !!_prevBlock &&
             shouldShrinkBlock(_prevBlock.imageIds.length, _aw1 - _aw0, BLOCK_SHRINK_FACTOR);
           const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
-            && _fitsBlock && !_shrinkBlock) ? _blockIdxForSeg : -1;
+            && _fitsBlock && !_blockOversized) ? _blockIdxForSeg : -1;
 
           // Working-order offset of the block being written.
           // INVARIANT: on the REUSE path this MUST equal _prevBlock.z0, because _clearIdxs, the
