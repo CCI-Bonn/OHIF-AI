@@ -55,6 +55,49 @@ export const MIN_BLOCK_SLICES = 2;
 export const BLOCK_GRID_SLICES = 32;
 
 /**
+ * How many times larger than a fresh allocation a block may be before it is worth reallocating.
+ * See shouldShrinkBlock.
+ */
+export const BLOCK_SHRINK_FACTOR = 2;
+
+/**
+ * Should an existing block be reallocated purely because it is far larger than the mask now
+ * needs? Blocks are deliberately sticky -- a mask that grows slightly must keep fitting the
+ * block it already has, or every refine reallocates and remounts. But a single runaway
+ * inference can inflate a block to the whole series, and without this it would stay that way
+ * for the rest of the session.
+ *
+ * The factor is hysteresis: a block may be up to `factor`x the ideal size before it is worth
+ * paying a remount to reclaim. Strict `>` means exactly `factor`x does NOT trigger.
+ *
+ * `snappedLength` is the length a FRESH allocation would take (the grid-snapped range), not the
+ * mask's own extent -- comparing against the mask would shrink a block the grid deliberately
+ * over-reserved. Containment is a SEPARATE question and must still be tested on its own range.
+ */
+export function shouldShrinkBlock(
+  blockLength: number,
+  snappedLength: number,
+  factor: number
+): boolean {
+  // No usable target size: cannot judge oversize, so never shrink.
+  if (!(snappedLength > 0)) {
+    return false;
+  }
+  // An unusable factor degrades to the old "never shrink" rule rather than shrinking on
+  // every refine (factor 0 would make every block grossly oversized).
+  if (!Number.isFinite(factor) || factor <= 0) {
+    return false;
+  }
+  // A block that is not even bigger than the fresh allocation is never "oversized", whatever the
+  // factor says. This only bites for factor < 1, but reallocating a block that is already too
+  // SMALL under the banner of shrinking it would be nonsense; growth is the caller's other test.
+  if (blockLength <= snappedLength) {
+    return false;
+  }
+  return blockLength > snappedLength * factor;
+}
+
+/**
  * Snap a working range outward onto a fixed grid, so a slowly-growing mask keeps fitting the
  * block it already has instead of reallocating (and remounting, and orphaning an MPR volume)
  * on every refine. Lower bound rounds DOWN to a multiple of `grid`, upper bound rounds UP.

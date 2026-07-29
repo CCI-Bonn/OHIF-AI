@@ -37,7 +37,7 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
-import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES } from './utils/labelmapBlocks';
+import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, shouldShrinkBlock, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES, BLOCK_SHRINK_FACTOR } from './utils/labelmapBlocks';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
@@ -3565,11 +3565,21 @@ const commandsModule = ({
           // Reuse requires the existing block to still COVER the new mask. nnInteractive returns the
           // full current mask each refine, so a mask that grew past the block's z-range needs a
           // bigger block — which changes imageIds, so that refine takes the normal remount path.
-          // A block is never shrunk: staying at the high-water mark avoids realloc churn when a mask
-          // oscillates across a slice boundary.
           const _fitsBlock = !!_prevBlock && blockContains(_prevBlock, _bw0, _bw1);
+          // ...and, since a block would otherwise never shrink, that it is not GROSSLY oversized.
+          // Staying at the high-water mark is what absorbs a mask oscillating across a slice
+          // boundary, but a single runaway inference (a mis-click that segments air) can inflate a
+          // block to the whole series in one step — observed 96 -> 321 slices — and the segment
+          // then held ~84 MB for the rest of the session even once the mask was small again.
+          // BLOCK_SHRINK_FACTOR is the hysteresis that separates the two: ordinary oscillation
+          // stays well inside it, a runaway does not. Measured against [_aw0, _aw1) — the range a
+          // FRESH block would take — never the mask's own [_bw0, _bw1), because comparing against
+          // the mask would reclaim exactly the headroom the grid deliberately reserved.
+          const _shrinkBlock =
+            !!_prevBlock &&
+            shouldShrinkBlock(_prevBlock.imageIds.length, _aw1 - _aw0, BLOCK_SHRINK_FACTOR);
           const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
-            && _fitsBlock) ? _blockIdxForSeg : -1;
+            && _fitsBlock && !_shrinkBlock) ? _blockIdxForSeg : -1;
 
           // Working-order offset of the block being written.
           // INVARIANT: on the REUSE path this MUST equal _prevBlock.z0, because _clearIdxs, the
