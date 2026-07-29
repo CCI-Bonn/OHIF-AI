@@ -221,7 +221,13 @@ const commandsModule = ({
     blocks?: LabelmapBlock[];
   }) {
     const N = imageIds.length;
-    const blockCount = N > 0 ? Math.floor(derivedImageIds.length / N) : 1;
+    // Only meaningful for the LEGACY uniform layout (every block one image per series slice).
+    // Callers that pass explicit `blocks` ignore it. Math.max(1, ...) because a caller that
+    // supplies no blocks but takes its images from a SPARSE representation (the SAM2 path, whose
+    // derivedImageIds are the flattened sparse blocks) divides a short flat list by the full
+    // series length and gets 0 — which produced an empty blockList, hence empty labelmaps and
+    // segmentBindings, and the representation lost every layer.
+    const blockCount = N > 0 ? Math.max(1, Math.floor(derivedImageIds.length / N)) : 1;
     // EXPLICIT block -> segment map. This used to be positional (block b always held segment b+1),
     // which is why a segment's block could never be removed: dropping a middle block shifted every
     // later block and silently renumbered those segments. Callers now pass the mapping so blocks can
@@ -2091,6 +2097,48 @@ const commandsModule = ({
         return;
       }
 
+      // segImageIds is this segment's BLOCK: z-cropped and z-offset, so it is NOT the series.
+      // Three spaces meet in the write passes below and must never be conflated:
+      //   working     — index into the full series; the space the server's crop geometry
+      //                 (_segZ0/_segZ1) and cachedStats.segZ0/segZ1 are expressed in;
+      //   display     — index into the source series; the space cachedStats.dirtySlices and
+      //                 z_range are expressed in. Convert with flipIndex(_, _seriesLen, flipped),
+      //                 whose N is ALWAYS the series length, never the block's;
+      //   block-array — index into `merged` / segImageIds, i.e. `working - _blockZ0`.
+      //
+      // The series length must come from allReferencedImageIds: syncLegacyLabelmapData reverts
+      // both `imageIds` and `referencedImageIds` to the PRIMARY LAYER's (block-scoped) value on
+      // every entry into state, so neither of those is the series.
+      const _seriesLen: number =
+        (labelmapState?.allReferencedImageIds ?? labelmapState?.referencedImageIds ?? []).length;
+      const _undoBlocks = describeBlocks(labelmapState, _seriesLen);
+      const _undoBlockIdx = blockIndexForSegment(_undoBlocks, segmentNumber);
+      // Fall back to z0 = 0 ONLY for the legacy uniform layout, where the layer genuinely spans
+      // the whole series. Guessing 0 for a cropped block would clear and rewrite the wrong slices.
+      const _resolvedZ0: number | null =
+        _undoBlockIdx >= 0
+          ? _undoBlocks[_undoBlockIdx].z0
+          : _seriesLen > 0 && segImageIds.length === _seriesLen
+            ? 0
+            : null;
+      if (_resolvedZ0 === null) {
+        // Refuse BEFORE the request so the server's interaction stack and the on-screen mask stay
+        // in agreement — a server-side undo we cannot apply locally is worse than no undo at all.
+        console.error(
+          `[labelmap] undo: cannot locate segment ${segmentNumber}'s block ` +
+          `(${segImageIds.length} slices) within its ${_seriesLen}-slice series; ` +
+          `refusing to write to unverified slices.`
+        );
+        uiNotificationService.show({
+          title: 'MONAI Label',
+          message: 'Undo - Failed: cannot locate this segment\'s labelmap block.',
+          type: 'error',
+          duration: 5000,
+        });
+        return;
+      }
+      const _blockZ0: number = _resolvedZ0;
+
       let nninterToken = '';
       try {
         nninterToken = await getNninterToken();
@@ -2198,13 +2246,15 @@ const commandsModule = ({
         }
 
         // segImageIds is the stored block order. The running (overlap) inference path already
-        // leaves it in reversed z-order for a flipped series — the same order the crop is
-        // written by index. Do NOT reverse here: doing so double-flips and lands the restored
-        // crop on the mirrored slice. The `flipped ? merged.length-1-x : x` formulas below map
-        // array index <-> display-slice index within this stored order.
+        // leaves it in WORKING order for a flipped series — the same order the crop is written
+        // by index. Do NOT reverse here: doing so double-flips and lands the restored crop on
+        // the mirrored slice. The passes below convert display <-> working with flipIndex over
+        // _seriesLen, then subtract _blockZ0 to reach this array.
         const merged = segImageIds.map(imageId => cache.getImage(imageId));
 
         // Pass 1: clear all voxels of the active segment (use dirtySlices when available).
+        // ALWAYS runs, including the undo-to-empty case (!_hasCropGeom), which has no pass 2 —
+        // getting the indices wrong there removed nothing and reported success anyway.
         const prevStats = (activeSegmentation.segments?.[segmentNumber] as any)?.cachedStats;
         const prevDirty: number[] | undefined = prevStats?.dirtySlices;
         const clearSlice = (arrIdx: number) => {
@@ -2217,19 +2267,31 @@ const commandsModule = ({
         };
         if (prevDirty?.length) {
           for (const origIdx of prevDirty) {
-            clearSlice(flipped ? merged.length - 1 - origIdx : origIdx);
+            // display -> working (series length!) -> this block's array index, bounds-guarded:
+            // a slice recorded for this segment can legitimately fall outside its current block.
+            const w = flipIndex(origIdx, _seriesLen, flipped);
+            const ai = w - _blockZ0;
+            if (ai >= 0 && ai < merged.length) {
+              clearSlice(ai);
+            }
           }
         } else {
+          // No recorded extent: sweep the whole BLOCK. `i` is already a block-array index.
           for (let i = 0; i < merged.length; i++) clearSlice(i);
         }
 
         // Pass 2: write the restored crop (skipped entirely when the object is now empty).
         const z_range: number[] = [];
         if (_hasCropGeom) {
-          for (let i = _segZ0; i < _segZ1; i++) {
-            const sd = merged[i].voxelManager.getScalarData();
-            const c = i - _segZ0;
-            const cropSliceBase = c * _cropY * _cropX;
+          // `w` is a WORKING index into the full series — the space _segZ0/_segZ1 and cropBytes
+          // are expressed in. `ai` is the corresponding index into this block's own images.
+          for (let w = _segZ0; w < _segZ1; w++) {
+            const ai = w - _blockZ0;
+            if (ai < 0 || ai >= merged.length) continue;
+            const vm = merged[ai]?.voxelManager;
+            if (!vm) continue;
+            const sd = vm.getScalarData();
+            const cropSliceBase = (w - _segZ0) * _cropY * _cropX;
             let wrote = false;
             for (let cy = 0; cy < _cropY; cy++) {
               const srcRow = cropSliceBase + cy * _cropX;
@@ -2241,15 +2303,18 @@ const commandsModule = ({
                 }
               }
             }
-            if (wrote) z_range.push(flipped ? merged.length - i - 1 : i);
+            // dirtySlices is read back as DISPLAY indices into the full series.
+            if (wrote) z_range.push(flipIndex(w, _seriesLen, flipped));
           }
         }
 
-        // Keep cachedStats.dirtySlices in sync so the next interaction clears correctly.
+        // Keep cachedStats in sync so the next interaction clears correctly. dirtySlices stays
+        // DISPLAY-into-the-series; segZ0/segZ1 stay WORKING-into-the-series (never block-relative,
+        // and never the block's length — the refine path reads both back in exactly those spaces).
         if ((activeSegmentation.segments?.[segmentNumber] as any)?.cachedStats) {
           (activeSegmentation.segments[segmentNumber] as any).cachedStats.dirtySlices = z_range;
           (activeSegmentation.segments[segmentNumber] as any).cachedStats.segZ0 = _hasCropGeom ? _segZ0 : 0;
-          (activeSegmentation.segments[segmentNumber] as any).cachedStats.segZ1 = _hasCropGeom ? _segZ1 : merged.length;
+          (activeSegmentation.segments[segmentNumber] as any).cachedStats.segZ1 = _hasCropGeom ? _segZ1 : _seriesLen;
         }
 
         // Remove the most-recently-added prompt measurement for this series.
@@ -3770,26 +3835,35 @@ const commandsModule = ({
             ? replaceBlockAt(_prevBlocks, _blockIdxForSeg, _newBlock)
             : appendBlock(
                 // Filter out any pre-existing block for this segment before appending the new one.
-                // This cannot strand a block without evicting it: when getRefineNew() is true,
-                // segmentNumber is assigned minAvailableNumber (see ~line 3120-3130), so it never
-                // collides with an existing block's segmentIndex. And releaseSegmentBlock already
-                // drops blocks on segment delete. The filter is correct defence-in-depth; the
-                // _orphanedImageIds gate below is only reached on the _isRefine path.
+                // A collision is not supposed to happen — when getRefineNew() is true segmentNumber
+                // is assigned minAvailableNumber (see the segment-numbering block at the top of
+                // nninter), and releaseSegmentBlock drops a block on segment delete — but the two
+                // are derived from DIFFERENT sources (the segments map vs the block list) and
+                // releaseSegmentBlock early-returns in several cases, so they can drift. The
+                // eviction gate below is computed from the whole previous block list precisely so
+                // a block dropped here is reclaimed rather than leaked.
                 _prevBlocks.filter(b => b.segmentIndex !== segmentNumber),
                 _newBlock
               );
           _nextBlockSegments = _nextBlocks.map(b => b.segmentIndex);
-          // NEVER evict when reusing: the old block IS derivedImages_new (still live and on screen).
-          // Only a freshly allocated block orphans the previous one. Images the representation held
-          // but could not attribute to any block (_strandedImageIds) are dropped by the rebuild
-          // below, so they are evicted here too rather than left to leak. Belt-and-braces: never
-          // evict an id the block we just wrote is using.
+          // EVICT WHATEVER THE NEXT REPRESENTATION NO LONGER REFERENCES. Stated as a set
+          // difference rather than as a list of the cases that produce orphans: the previous
+          // formulation gated on `_isRefine && _reuseIdx < 0 && _prevBlock`, which silently
+          // assumed the segment-numbering and the block list could never disagree — but the
+          // append path's `.filter()` above can drop another block entirely, and then that
+          // block's images were removed from the representation without ever being freed.
+          //
+          // This is a genuine no-op wherever the old gate was: on the REUSE path _newBlock keeps
+          // _prevBlock's exact imageIds, so every previous id is in _keepIds; and every OTHER
+          // segment's block is carried into _nextBlocks unchanged, so its ids are too. It differs
+          // only where a block really did leave the representation — growth, move and shrink all
+          // mint fresh imageIds and are handled identically, plus the drift case above.
+          // _strandedImageIds (held by the representation, attributable to no block) are dropped
+          // by the rebuild below, so they are freed here rather than left to leak.
           const _keepIds = new Set(flattenBlocks(_nextBlocks));
-          _orphanedImageIds = (
-            _isRefine && _reuseIdx < 0 && _prevBlock
-              ? _prevBlock.imageIds.concat(_strandedImageIds)
-              : _strandedImageIds
-          ).filter(id => !_keepIds.has(id));
+          _orphanedImageIds = flattenBlocks(_prevBlocks)
+            .concat(_strandedImageIds)
+            .filter(id => !_keepIds.has(id));
           if (_orphanedImageIds.length) {
             // A deferred image write queued against the block we are about to evict is dead work:
             // its blockImageIds no longer resolve, and this refine wrote the new block's images
