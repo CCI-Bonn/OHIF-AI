@@ -37,19 +37,13 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
-import { LabelmapBlock, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, shouldShrinkBlock, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES, BLOCK_SHRINK_FACTOR } from './utils/labelmapBlocks';
+import { describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, shouldShrinkBlock, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES, BLOCK_SHRINK_FACTOR } from './utils/labelmapBlocks';
+// Separate: LabelmapBlock is a type, and isolatedModules requires type-only imports be marked so
+// the transpiler can erase them without resolving the module.
+import type { LabelmapBlock } from './utils/labelmapBlocks';
 
 /** Tracks the last series initialized by initNninter to detect study/series changes. */
 let _lastInitSeries: string | undefined = undefined;
-
-/** Safely parse a numeric timing field from multipart response metadata. */
-function metaNum(meta: Record<string, unknown>, key: string): number | undefined {
-  const v = meta[key];
-  if (v === undefined || v === null) return undefined;
-  const n = typeof v === 'number' ? v : parseFloat(String(v));
-  return isFinite(n) ? n : undefined;
-}
-
 
 export type HangingProtocolParams = {
   protocolId?: string;
@@ -209,7 +203,6 @@ const commandsModule = ({
     imageIds,
     currentDisplaySets,
     segments,
-    blockSegments,
     blocks,
   }: {
     segmentationId: string;
@@ -217,7 +210,6 @@ const commandsModule = ({
     imageIds: string[];
     currentDisplaySets: any;
     segments: { [segmentIndex: string]: cstTypes.Segment };
-    blockSegments?: number[];
     blocks?: LabelmapBlock[];
   }) {
     const N = imageIds.length;
@@ -228,21 +220,14 @@ const commandsModule = ({
     // series length and gets 0 — which produced an empty blockList, hence empty labelmaps and
     // segmentBindings, and the representation lost every layer.
     const blockCount = N > 0 ? Math.max(1, Math.floor(derivedImageIds.length / N)) : 1;
-    // EXPLICIT block -> segment map. This used to be positional (block b always held segment b+1),
-    // which is why a segment's block could never be removed: dropping a middle block shifted every
-    // later block and silently renumbered those segments. Callers now pass the mapping so blocks can
-    // be added/removed independently of segment numbering; we fall back to the old positional rule
-    // for representations built before this existed.
-    const blockSeg: number[] = (blockSegments && blockSegments.length === blockCount)
-      ? blockSegments.slice()
-      : Array.from({ length: blockCount }, (_, b) => b + 1);
-
-    // Explicit blocks (possibly VARIABLE length — a z-cropped block covers only its mask's slices).
-    // Without them we fall back to the legacy uniform layout: N-sized chunks of derivedImageIds.
+    // Explicit blocks (possibly VARIABLE length — a z-cropped block covers only its mask's slices)
+    // carry their own block -> segment mapping, so a block can be added or removed without
+    // renumbering the segments after it. Without them we fall back to the legacy uniform layout:
+    // N-sized chunks of derivedImageIds under the old positional rule (block b holds segment b+1).
     const blockList: LabelmapBlock[] = (blocks && blocks.length)
       ? blocks
       : Array.from({ length: blockCount }, (_, b) => ({
-          segmentIndex: blockSeg[b],
+          segmentIndex: b + 1,
           z0: 0,
           imageIds: derivedImageIds.slice(b * N, (b + 1) * N),
         }));
@@ -327,8 +312,10 @@ const commandsModule = ({
       labelmapRepresentation: {
         imageIds: flatImageIds,
         allImageIds: flatImageIds,
-        // Persisted so later refines/deletes know which segment each block holds, and (for sparse
-        // blocks) which slices it covers.
+        // `blocks` is what every reader uses; `blockSegments` is written for describeBlocks' LEGACY
+        // fallback, which reads it (labelmapBlocks.ts, the `labelmapData.blockSegments` branch) when
+        // a representation persisted by an earlier build has no `blocks` array. Nothing consumes it
+        // as an INPUT here any more — dropping it would only break those older representations.
         blockSegments: blockList.map(b => b.segmentIndex),
         blocks: blockList,
         referencedVolumeId: currentDisplaySets.displaySetInstanceUID,
@@ -363,14 +350,12 @@ const commandsModule = ({
         segImageIds: [] as string[],
         existingSegments: {} as { [segmentIndex: string]: cstTypes.Segment },
         existing: false,
-        blockSegments: null as number[] | null,
         blocks: [] as LabelmapBlock[],
       };
     }
 
     let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
     let segImageIds: string[] = [];
-    let blockSegments: number[] | null = null;
     let blocks: LabelmapBlock[] = [];
     let existing = false;
     let segmentationId = freshActiveSegmentation.segmentationId;
@@ -391,8 +376,6 @@ const commandsModule = ({
         freshActiveSegmentation.representationData?.Labelmap?.allImageIds ??
         freshActiveSegmentation.representationData?.Labelmap?.imageIds ??
         [];
-      blockSegments =
-        (freshActiveSegmentation.representationData?.Labelmap as any)?.blockSegments ?? null;
       blocks = describeBlocks(
         freshActiveSegmentation.representationData?.Labelmap,
         currentDisplaySets?.imageIds?.length ?? 0
@@ -406,7 +389,6 @@ const commandsModule = ({
       segImageIds,
       existingSegments,
       existing,
-      blockSegments,
       blocks,
     };
   }
@@ -894,7 +876,6 @@ const commandsModule = ({
     currentImageIdIndex,
     z_range,
     mprInPlaceDone = false,
-    blockSegments,
     blocks,
   }: {
     activeViewportId: string;
@@ -908,7 +889,6 @@ const commandsModule = ({
     existing: boolean;
     activeSegmentation: any;
     mprInPlaceDone?: boolean;
-    blockSegments?: number[] | null;
     blocks?: LabelmapBlock[] | null;
     currentImageIdIndex?: number;
     z_range: number[];
@@ -928,7 +908,6 @@ const commandsModule = ({
       imageIds,
       currentDisplaySets,
       segments,
-      blockSegments: blockSegments ?? undefined,
       blocks: blocks ?? undefined,
     });
     const mergedSegments = mergeSegmentsForUpdate(segmentationId, segments);
@@ -1767,6 +1746,10 @@ const commandsModule = ({
           let merged_derivedImages = [];
           let z_range = [];
           if(overlap){
+          // unreachable: `overlap` is a const `false` in this command, so this branch never runs.
+          // Mirror of the dead branch in nninter. Kept only as the historical multi-layer variant;
+          // do NOT read it as a live path — its `Math.floor(i / imgLength)` block arithmetic
+          // assumes every block spans the whole series, which is no longer true.
           let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
           console.log(`Just after createAndCacheDerivedLabelmapImages: ${(Date.now() - start)/1000} Seconds`);
           let derivedImages = [];
@@ -2160,7 +2143,6 @@ const commandsModule = ({
       };
       const data = MonaiLabelClient.constructFormData(params, null);
 
-      const beforePost = Date.now();
       const undoPromise = axios.post(url, data, {
         responseType: 'arraybuffer',
         headers: { accept: 'application/octet-stream' },
@@ -2179,7 +2161,6 @@ const commandsModule = ({
 
       try {
         const response = await undoPromise;
-        const afterPost = Date.now();
         if (response.status !== 200) {
           return;
         }
@@ -2203,20 +2184,6 @@ const commandsModule = ({
           });
           return;
         }
-        const afterParse = Date.now();
-
-        // --- round-trip timing breakdown (mirrors the normal nninter path) ---
-        const networkRoundTripMs = afterPost - beforePost;
-        const sRequestTs = metaNum(meta as Record<string, unknown>, 'server_request_ts');
-        const sBeginTs   = metaNum(meta as Record<string, unknown>, 'server_begin_ts');
-        const sEndTs     = metaNum(meta as Record<string, unknown>, 'server_end_ts');
-        const sUndoCore  = metaNum(meta as Record<string, unknown>, 'nninter_core_elapsed');
-        const sResult    = metaNum(meta as Record<string, unknown>, 'server_result_elapsed');
-        const postInFlightMs     = (sRequestTs != null) ? sRequestTs * 1000 - beforePost : undefined;
-        const monaiPrepMs        = (sRequestTs != null && sBeginTs != null) ? (sBeginTs - sRequestTs) * 1000 : undefined;
-        const serverProcessMs    = (sBeginTs != null && sEndTs != null) ? (sEndTs - sBeginTs) * 1000 : undefined;
-        const responseInFlightMs = (sEndTs != null) ? afterPost - sEndTs * 1000 : undefined;
-
         const undone = String((meta as any).undone).toLowerCase() === 'true';
         if (!undone) {
           uiNotificationService.show({
@@ -2410,14 +2377,16 @@ const commandsModule = ({
     /**
      * Release the labelmap block owned by a deleted segment.
      *
-     * Each segment owns a full-volume block of derived labelmap images (~84MB). Deleting a segment
-     * goes through cornerstone's generic removeSegment, which only zeroes the segment's pixel VALUES
-     * — it knows nothing about our multi-block scheme, so the block's imageIds stayed in the
-     * representation and its images stayed in the cache forever (cacheMB never dropped after a
-     * delete). This rebuilds the representation without that block and evicts its images.
+     * Each segment owns a block of derived labelmap images covering the slices its mask touches.
+     * Deleting a segment goes through cornerstone's generic removeSegment, which only zeroes the
+     * segment's pixel VALUES — it knows nothing about our multi-block scheme, so the block's
+     * imageIds stayed in the representation and its images stayed in the cache forever (cacheMB
+     * never dropped after a delete). This rebuilds the representation without that block and
+     * evicts its images.
      *
-     * Safe for middle segments now that block -> segment is an explicit map: dropping a block no
-     * longer renumbers the segments after it (which is why this could not be done before).
+     * Safe for middle segments now that the block list carries an explicit block -> segment
+     * mapping: dropping a block no longer renumbers the segments after it (which is why this
+     * could not be done before).
      */
     async releaseSegmentBlock({ segmentationId, segmentIndex }: { segmentationId: string; segmentIndex: number }) {
       const seg = csToolsSegmentation.state.getSegmentation(segmentationId);
@@ -2461,9 +2430,10 @@ const commandsModule = ({
       const _staleLayerIds = [..._oldOwners.keys(), ..._newOwners.keys()].filter(
         id => _oldOwners.get(id) !== _newOwners.get(id)
       );
-      // Same purge remountSegmentationRepresentations does (~:753-763): the explicit
-      // geometryVolumeId the layer store stamped on the layer, plus the `${labelmapId}-geometry`
-      // key it defaults to. Read from the OLD labelmaps, before updateSegmentations replaces them.
+      // Same purge remountSegmentationRepresentations does in its stale-MPR-volume loop: the
+      // explicit geometryVolumeId the layer store stamped on the layer, plus the
+      // `${labelmapId}-geometry` key it defaults to. Read from the OLD labelmaps, before
+      // updateSegmentations replaces them.
       const _oldLayers = (lm.labelmaps ?? {}) as Record<string, any>;
       const _purgeLayerVolumes = () => {
         for (const labelmapId of new Set(_staleLayerIds)) {
@@ -2514,7 +2484,7 @@ const commandsModule = ({
       // Let the reconcile settle before the images backing the dropped layer are freed below.
       await new Promise(resolve => requestAnimationFrame(() => resolve(null)));
 
-      // Nothing references these now — reclaim the block (~84MB).
+      // Nothing references these now — reclaim the block's images.
       for (const id of removed) {
         try { cache.removeImageLoadObject(id, { force: true }); } catch { /* already gone */ }
       }
@@ -3507,12 +3477,12 @@ const commandsModule = ({
 
           let merged_derivedImages = [];
           let z_range = [];
-          // Old block's imageIds when this is a refine — evicted from the cornerstone cache
-          // AFTER the representation swap below, so the ~84MB fresh block minted each refine
-          // doesn't accumulate (leak was ~+84MB/refine, inflating MPR remount + GC pauses).
+          // Images the NEXT representation no longer references — evicted from the cornerstone
+          // cache after the representation swap below, so blocks superseded by a reallocation
+          // don't accumulate. (Before blocks were z-cropped this was a whole fresh ~84MB block
+          // every refine; reuse and cropping have shrunk it, but a reallocation still orphans one.)
           let _orphanedImageIds: string[] = [];
-          // Block -> segment map for the representation we are about to write.
-          let _nextBlockSegments: number[] | null = null;
+          // The block list for the representation we are about to write.
           let _nextBlocks: LabelmapBlock[] | null = null;
           // Set when the refined crop was written straight into the on-screen MPR labelmap volume,
           // which lets us skip the remount (the remount is what orphans a volume every refine).
@@ -3845,7 +3815,6 @@ const commandsModule = ({
                 _prevBlocks.filter(b => b.segmentIndex !== segmentNumber),
                 _newBlock
               );
-          _nextBlockSegments = _nextBlocks.map(b => b.segmentIndex);
           // EVICT WHATEVER THE NEXT REPRESENTATION NO LONGER REFERENCES. Stated as a set
           // difference rather than as a list of the cases that produce orphans: the previous
           // formulation gated on `_isRefine && _reuseIdx < 0 && _prevBlock`, which silently
@@ -3872,6 +3841,11 @@ const commandsModule = ({
           }
           merged_derivedImages = flattenBlocks(_nextBlocks).map(id => cache.getImage(id));
         } else {
+          // unreachable: `overlap` is a const `true` in this command, so nothing below runs.
+          // Kept only as the historical single-layer variant. Do NOT read it as a live path or
+          // copy from it — it indexes `merged_derivedImages` (a flattened MULTI-block list) with
+          // full-series working indices and flips with that list's length rather than the series
+          // length, both of which are wrong now that blocks are z-cropped and z-offset.
           if (segImageIds.length == 0){
             const _tCreate2 = Date.now();
             let derivedImages_new = await imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
@@ -4036,7 +4010,6 @@ const commandsModule = ({
             currentImageIdIndex,
             z_range,
             mprInPlaceDone: _mprInPlaceDone,
-            blockSegments: _nextBlockSegments,
             blocks: _nextBlocks,
           });
           // Evict the orphaned old block now that the representation swap + volume rebuild are
