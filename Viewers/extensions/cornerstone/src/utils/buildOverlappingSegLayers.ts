@@ -211,6 +211,50 @@ export async function buildOverlappingSegLayers({
       primaryImageIds = blockImageIds;
     }
     allImageIds.push(...blockImageIds);
+
+    // TEMPORARY (diagnostic, strip before merge): settles whether a SEG block's images are stored
+    // in DISPLAY order (index-aligned with sourceImageIds) or WORKING order (reversed for a
+    // z-descending series). LabelmapBlock.z0 is defined as a WORKING offset, so emitting a real z0
+    // for reloaded SEGs is only safe once we know which of the two this producer actually produces.
+    // `order` is measured, not assumed: it is the direction of the block's own referencedImageIds
+    // through the source series.
+    {
+      const srcIndexById = new Map<string, number>();
+      sourceImageIds.forEach((id, i) => srcIndexById.set(id, i));
+      const firstSrc = srcIndexById.get(String(refIds[0]));
+      const lastSrc = srcIndexById.get(String(refIds[refIds.length - 1]));
+      const order =
+        firstSrc == null || lastSrc == null
+          ? 'unknown'
+          : firstSrc < lastSrc
+            ? 'ascending(display)'
+            : 'descending(working-if-flipped)';
+      // Extent this segment WOULD get if cropped, in the block's own index space.
+      let lo = -1;
+      let hi = -1;
+      for (let z = 0; z < blockImages.length; z++) {
+        const sd = blockImages[z]?.voxelManager?.getScalarData?.();
+        if (sd && (sd as ArrayLike<number>).length) {
+          let hit = false;
+          for (let i = 0; i < (sd as ArrayLike<number>).length; i++) {
+            if ((sd as ArrayLike<number>)[i] === segmentIndex) {
+              hit = true;
+              break;
+            }
+          }
+          if (hit) {
+            if (lo < 0) lo = z;
+            hi = z;
+          }
+        }
+      }
+      console.log(
+        `[seg-reload] seg=${segmentIndex} len=${blockImages.length}/${sliceCount} ` +
+        `srcIdx first=${firstSrc} last=${lastSrc} order=${order} ` +
+        `extent=[${lo}..${hi}] (${lo < 0 ? 0 : hi - lo + 1} slices) ` +
+        `source=${blocksBySegment.has(segmentIndex) ? 'layer-or-split' : 'empty-fabricated'}`
+      );
+    }
   }
 
   return {
