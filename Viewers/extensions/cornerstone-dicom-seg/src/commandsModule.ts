@@ -93,13 +93,26 @@ const commandsModule = ({
     generateSegmentation: async ({ segmentationId, options = {} }) => {
       const segmentation = cornerstoneToolsSegmentation.state.getSegmentation(segmentationId);
 
-      const { imageIds, labelmaps } = segmentation.representationData.Labelmap;
+      const lm = segmentation.representationData.Labelmap;
+      const { imageIds, labelmaps } = lm;
 
-      // Primary block images — used for CT slice ordering and referencedImageIds
-      const segImages = imageIds.map(imageId => cache.getImage(imageId));
+      // Series geometry must come from allReferencedImageIds — the SOURCE slice list for the whole
+      // series, set by every MULTI-BLOCK producer and immune to syncLegacyLabelmapData because the
+      // adapter does not name it. (Single-block non-AI representations don't set it and take the
+      // referencedImageIds branch below, which is safe: their primary layer spans the whole series.)
+      // Labelmap.imageIds AND referencedImageIds are both reverted by that adapter to
+      // the PRIMARY LAYER's value on every entry into state, and that value is deliberately
+      // block-scoped via refIdsFor, making both fields unreliable for series geometry once blocks
+      // are z-cropped. Fall back to referencedImageIds (pre-Task-4.6 segmentations) then imageIds.
+      const sourceImageIds: string[] = (
+        lm.allReferencedImageIds?.length ? lm.allReferencedImageIds
+        : lm.referencedImageIds?.length ? lm.referencedImageIds
+        : imageIds
+      ) as string[];
 
-      // Collect all referenced image IDs (maintaining array structure to match segImages)
-      const referencedImageIds = segImages.map(image => image?.referencedImageId);
+      // Indexed by SOURCE slice, so every layer lands on the right CT slice regardless of which
+      // slices its own block covers.
+      const referencedImageIds = sourceImageIds;
 
       // Load all referenced images that exist but may not be in cache yet
       // This is necessary because lazy loading may not have loaded all slices yet
@@ -121,15 +134,15 @@ const commandsModule = ({
         })
       );
 
-      // Now get all referenced images from cache, maintaining the same order as segImages
-      const referencedImages = segImages.map(image => {
-        if (!image?.referencedImageId) {
-          return null;
-        }
-        return cache.getImage(image.referencedImageId);
-      });
+      const referencedImages = sourceImageIds.map(id => cache.getImage(id));
 
-      const N = imageIds.length;
+      const N = sourceImageIds.length;
+
+      // Map a labelmap image's referencedImageId -> its index in the source series. Mapping by
+      // IDENTITY rather than by position is what makes this correct for a z-cropped block (which
+      // starts at its own z0) and for a flipped series (whose block is stored in reverse).
+      const sourceIndexById = new Map<string, number>();
+      sourceImageIds.forEach((id, i) => sourceIndexById.set(id, i));
       const isMultiBlock = labelmaps && Object.keys(labelmaps).length > 1;
 
       // Compute sort permutation matching the dcmjs SEGImageNormalizer (descending by scan-axis
@@ -250,19 +263,24 @@ const commandsModule = ({
         for (const [, layer] of Object.entries(labelmaps as Record<string, any>)) {
           const layerLabelmaps2D: any[] = new Array(N);
 
-          for (let z = 0; z < N; z++) {
-            const primaryImage = segImages[z];
-            if (!primaryImage || !layer.imageIds?.[z]) continue;
-            const { rows, columns } = primaryImage;
-            const layerImage = cache.getImage(layer.imageIds[z]);
+          for (const layerImageId of (layer.imageIds ?? [])) {
+            const layerImage = cache.getImage(layerImageId);
             if (!layerImage) continue;
+            const origIdx = sourceIndexById.get((layerImage as any).referencedImageId);
+            if (origIdx === undefined) continue;
+            const { rows, columns } = layerImage;
             const pixelData = layerImage.getPixelData();
             const segmentsOnLabelmap = new Set<number>();
             for (let i = 0; i < pixelData.length; i++) {
               if (pixelData[i] !== 0) segmentsOnLabelmap.add(pixelData[i]);
             }
             if (segmentsOnLabelmap.size > 0) {
-              layerLabelmaps2D[z] = { segmentsOnLabelmap: Array.from(segmentsOnLabelmap), pixelData, rows, columns };
+              layerLabelmaps2D[origIdx] = {
+                segmentsOnLabelmap: Array.from(segmentsOnLabelmap),
+                pixelData,
+                rows,
+                columns,
+              };
             }
           }
 
@@ -286,17 +304,25 @@ const commandsModule = ({
         generatedSegmentation = generateSegmentation(referencedImages, labelmaps3DArray, metaData, options);
       } else {
         const labelmaps2D: any[] = new Array(N);
+        const primaryLayer = Object.values(labelmaps as Record<string, any>)[0];
 
-        for (let z = 0; z < N; z++) {
-          const primaryImage = segImages[z];
-          if (!primaryImage) continue;
-          const { rows, columns } = primaryImage;
-          const pixelData = primaryImage.getPixelData();
+        for (const layerImageId of (primaryLayer?.imageIds ?? imageIds)) {
+          const layerImage = cache.getImage(layerImageId);
+          if (!layerImage) continue;
+          const origIdx = sourceIndexById.get((layerImage as any).referencedImageId);
+          if (origIdx === undefined) continue;
+          const { rows, columns } = layerImage;
+          const pixelData = layerImage.getPixelData();
           const segmentsOnLabelmap = new Set<number>();
           for (let i = 0; i < pixelData.length; i++) {
             if (pixelData[i] !== 0) segmentsOnLabelmap.add(pixelData[i]);
           }
-          labelmaps2D[z] = { segmentsOnLabelmap: Array.from(segmentsOnLabelmap), pixelData, rows, columns };
+          labelmaps2D[origIdx] = {
+            segmentsOnLabelmap: Array.from(segmentsOnLabelmap),
+            pixelData,
+            rows,
+            columns,
+          };
         }
 
         const allSegments = Array.from(

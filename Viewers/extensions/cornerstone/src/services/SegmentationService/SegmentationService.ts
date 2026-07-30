@@ -548,6 +548,7 @@ class SegmentationService extends PubSubService {
               imageIds: overlappingLayers.primaryImageIds,
               allImageIds: overlappingLayers.allImageIds,
               referencedImageIds: imageIds as string[],
+              allReferencedImageIds: imageIds as string[],
               labelmaps: overlappingLayers.labelmaps,
               segmentBindings: overlappingLayers.segmentBindings,
               primaryLabelmapId: overlappingLayers.primaryLabelmapId,
@@ -557,6 +558,7 @@ class SegmentationService extends PubSubService {
               imageIds: derivedImageIds,
               // referencedVolumeId: this._getVolumeIdForDisplaySet(referencedDisplaySet),
               referencedImageIds: imageIds as string[],
+              allReferencedImageIds: imageIds as string[],
             },
       },
       config: {
