@@ -44,12 +44,15 @@ export async function buildOverlappingSegLayers({
   segmentationId,
   labelMapImages,
   sourceImageIds,
+  sortedMatchesDisplay = null,
   segmentIndices = [],
   createDerivedImages,
 }: {
   segmentationId: string;
   labelMapImages: SegLayerImage[][];
   sourceImageIds: string[];
+  /** TEMPORARY (diagnostic): whether cornerstone's sorted volume order matches display order. */
+  sortedMatchesDisplay?: boolean | null;
   segmentIndices?: number[];
   createDerivedImages: (sourceImageIds: string[]) => Promise<SegLayerImage[]> | SegLayerImage[];
 }): Promise<OverlappingSegLayerResult | null> {
@@ -249,7 +252,8 @@ export async function buildOverlappingSegLayers({
         }
       }
       console.log(
-        `[seg-reload] seg=${segmentIndex} len=${blockImages.length}/${sliceCount} ` +
+        `[seg-reload] sortedMatchesDisplay=${sortedMatchesDisplay} ` +
+        `seg=${segmentIndex} len=${blockImages.length}/${sliceCount} ` +
         `srcIdx first=${firstSrc} last=${lastSrc} order=${order} ` +
         `extent=[${lo}..${hi}] (${lo < 0 ? 0 : hi - lo + 1} slices) ` +
         `source=${blocksBySegment.has(segmentIndex) ? 'layer-or-split' : 'empty-fabricated'}`

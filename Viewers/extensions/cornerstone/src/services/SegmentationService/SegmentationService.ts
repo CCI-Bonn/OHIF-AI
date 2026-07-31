@@ -446,10 +446,40 @@ class SegmentationService extends PubSubService {
     // refine flow's block-index assumptions hold for reloaded SEGs. Covers both
     // multi-layer (overlapping) SEGs and a single layer packing multiple segments;
     // only a single layer holding exactly segment 1 keeps the legacy path.
+    // TEMPORARY (diagnostic, strip before merge): does cornerstone's SORTED volume order match the
+    // source series' display order? That is the fact deciding whether a SEG block's array index
+    // equals its volume z index. sortImageIdsAndGetSpacing orders by DESCENDING distance along the
+    // scan axis, so display order matches iff the series' own positions already descend. Measured
+    // here rather than taken from the server's `flipped` flag, whose semantics we'd be guessing at.
+    let _sortedMatchesDisplay: boolean | null = null;
+    try {
+      const _ids = imageIds as string[];
+      const _pm0 = metaData.get('imagePlaneModule', _ids[0]);
+      const _pmN = metaData.get('imagePlaneModule', _ids[_ids.length - 1]);
+      const _row = _pm0?.rowCosines;
+      const _col = _pm0?.columnCosines;
+      if (_row && _col && _pm0?.imagePositionPatient && _pmN?.imagePositionPatient) {
+        const _axis = [
+          _row[1] * _col[2] - _row[2] * _col[1],
+          _row[2] * _col[0] - _row[0] * _col[2],
+          _row[0] * _col[1] - _row[1] * _col[0],
+        ];
+        const _p0 = _pm0.imagePositionPatient;
+        const _pN = _pmN.imagePositionPatient;
+        const _d =
+          (_pN[0] - _p0[0]) * _axis[0] + (_pN[1] - _p0[1]) * _axis[1] + (_pN[2] - _p0[2]) * _axis[2];
+        // Sort is descending, so display order already matches when the last slice sits BEHIND the first.
+        _sortedMatchesDisplay = _d < 0;
+      }
+    } catch {
+      /* diagnostic only */
+    }
+
     const overlappingLayers = await buildOverlappingSegLayers({
       segmentationId,
       labelMapImages,
       sourceImageIds: imageIds as string[],
+      sortedMatchesDisplay: _sortedMatchesDisplay,
       segmentIndices: (segDisplaySet.segMetadata?.data ?? [])
         .map(data => Number(data?.SegmentNumber))
         .filter(index => Number.isFinite(index) && index > 0),
