@@ -1,3 +1,6 @@
+import type { LabelmapBlock } from '../../../default/src/utils/labelmapBlocks';
+import { segmentBlockRange } from '../../../default/src/utils/labelmapBlocks';
+
 /**
  * Normalizes a DICOM-SEG display set into the canonical per-segment multi-block
  * labelmap representation used by AI segmentations: block b holds only segment
@@ -38,6 +41,7 @@ interface OverlappingSegLayerResult {
   primaryImageIds: string[];
   allImageIds: string[];
   firstSegmentedSliceImageId: string | null;
+  blocks: LabelmapBlock[];
 }
 
 export async function buildOverlappingSegLayers({
@@ -51,7 +55,7 @@ export async function buildOverlappingSegLayers({
   segmentationId: string;
   labelMapImages: SegLayerImage[][];
   sourceImageIds: string[];
-  /** TEMPORARY (diagnostic): whether cornerstone's sorted volume order matches display order. */
+  /** Whether cornerstone's sorted volume order matches display order; null means unknown. */
   sortedMatchesDisplay?: boolean | null;
   segmentIndices?: number[];
   createDerivedImages: (sourceImageIds: string[]) => Promise<SegLayerImage[]> | SegLayerImage[];
@@ -222,6 +226,7 @@ export async function buildOverlappingSegLayers({
   const labelmaps: Record<string, object> = {};
   const segmentBindings: Record<number, { labelmapId: string; labelValue: number }> = {};
   const allImageIds: string[] = [];
+  const blocks: LabelmapBlock[] = [];
   const primaryLabelmapId = `${segmentationId}-storage-0`;
   let primaryImageIds: string[] = [];
 
@@ -241,21 +246,44 @@ export async function buildOverlappingSegLayers({
         ? (refIds as string[])
         : sourceImageIds;
 
+    // Ordering only, for now: take the whole series but normalise to WORKING order, so the array
+    // index of a block equals its cornerstone volume z index. Cropping comes next; keeping the two
+    // changes apart means a rendering regression points at one or the other, not both.
+    //
+    // Only `range.reverse` is consumed here. `range.sliceStart`/`sliceEnd` describe the CROPPED
+    // range and are deliberately ignored until Task 4 — the blocks below stay full length.
+    const ext = segmentExtents.get(segmentIndex) ?? { lo: -1, hi: -1 };
+    const range = segmentBlockRange(ext.lo, ext.hi, sliceCount, sortedMatchesDisplay);
+    const orderedImageIds = range.reverse ? blockImageIds.slice().reverse() : blockImageIds;
+    const orderedRefIds = range.reverse
+      ? (referencedImageIds as string[]).slice().reverse()
+      : (referencedImageIds as string[]);
+
     const labelmapId =
       segmentIndex === 1 ? primaryLabelmapId : `${segmentationId}-private-${segmentIndex}`;
     labelmaps[labelmapId] = {
       labelmapId,
       type: 'stack',
-      imageIds: blockImageIds,
-      referencedImageIds,
+      imageIds: orderedImageIds,
+      referencedImageIds: orderedRefIds,
       labelToSegmentIndex: {},
     };
     segmentBindings[segmentIndex] = { labelmapId, labelValue: segmentIndex };
 
+    blocks.push({
+      segmentIndex,
+      // A full-length block starts at working 0 whichever way it is ordered: segmentBlockRange
+      // would give z0 = sourceCount - sourceCount = 0 when reversed, and 0 when not. Task 4 crops
+      // the block and takes z0 from `range` directly.
+      z0: 0,
+      imageIds: orderedImageIds,
+      referencedImageIds: orderedRefIds,
+    });
+
     if (segmentIndex === 1) {
-      primaryImageIds = blockImageIds;
+      primaryImageIds = orderedImageIds;
     }
-    allImageIds.push(...blockImageIds);
+    allImageIds.push(...orderedImageIds);
 
     // TEMPORARY (diagnostic, strip before merge): settles whether a SEG block's images are stored
     // in DISPLAY order (index-aligned with sourceImageIds) or WORKING order (reversed for a
@@ -311,6 +339,7 @@ export async function buildOverlappingSegLayers({
     primaryLabelmapId,
     primaryImageIds,
     allImageIds,
+    blocks,
     firstSegmentedSliceImageId,
   };
 }

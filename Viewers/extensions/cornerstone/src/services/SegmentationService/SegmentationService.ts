@@ -446,11 +446,12 @@ class SegmentationService extends PubSubService {
     // refine flow's block-index assumptions hold for reloaded SEGs. Covers both
     // multi-layer (overlapping) SEGs and a single layer packing multiple segments;
     // only a single layer holding exactly segment 1 keeps the legacy path.
-    // TEMPORARY (diagnostic, strip before merge): does cornerstone's SORTED volume order match the
-    // source series' display order? That is the fact deciding whether a SEG block's array index
-    // equals its volume z index. sortImageIdsAndGetSpacing orders by DESCENDING distance along the
-    // scan axis, so display order matches iff the series' own positions already descend. Measured
-    // here rather than taken from the server's `flipped` flag, whose semantics we'd be guessing at.
+    // Does cornerstone's SORTED volume order match the source series' display order? This decides
+    // whether a SEG block's array index equals its volume z index. sortImageIdsAndGetSpacing orders
+    // by DESCENDING distance along the scan axis, so display order matches iff the series' own
+    // positions already descend. Measured here rather than taken from the server's `flipped` flag,
+    // whose semantics differ. null (metadata unavailable) means "unknown" and forces the
+    // full-length, unreversed fallback in segmentBlockRange.
     let _sortedMatchesDisplay: boolean | null = null;
     try {
       const _ids = imageIds as string[];
@@ -582,6 +583,7 @@ class SegmentationService extends PubSubService {
               labelmaps: overlappingLayers.labelmaps,
               segmentBindings: overlappingLayers.segmentBindings,
               primaryLabelmapId: overlappingLayers.primaryLabelmapId,
+              blocks: overlappingLayers.blocks,
               sourceRepresentationName: 'binaryLabelmap',
             } as unknown as cstTypes.LabelmapSegmentationData)
           : {
