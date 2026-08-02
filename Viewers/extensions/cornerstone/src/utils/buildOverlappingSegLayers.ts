@@ -103,6 +103,30 @@ export async function buildOverlappingSegLayers({
     layerSliceHasSegment.push(sliceHasSegmentFlags);
   }
 
+  // Per-segment display-space extent, inclusive. lo = -1 means the segment has no voxels at all.
+  // Derived from scans that already happen: a single-segment layer's slice flags ARE that segment's
+  // extent, and packed layers get theirs from the voxel loop that is already running.
+  const segmentExtents = new Map<number, { lo: number; hi: number }>();
+  const noteSlice = (segmentIndex: number, z: number) => {
+    const e = segmentExtents.get(segmentIndex);
+    if (!e) {
+      segmentExtents.set(segmentIndex, { lo: z, hi: z });
+      return;
+    }
+    if (z < e.lo) e.lo = z;
+    if (z > e.hi) e.hi = z;
+  };
+
+  for (let layerIndex = 0; layerIndex < labelMapImages.length; layerIndex++) {
+    const layerSegments = layerSegmentSets[layerIndex];
+    if (layerSegments.size !== 1) continue;
+    const [only] = layerSegments;
+    const flags = layerSliceHasSegment[layerIndex];
+    for (let z = 0; z < flags.length; z++) {
+      if (flags[z]) noteSlice(only, z);
+    }
+  }
+
   const maxSegmentIndex = Math.max(
     0,
     ...segmentIndices.filter(index => Number.isFinite(index) && index > 0),
@@ -165,6 +189,7 @@ export async function buildOverlappingSegLayers({
             const target = targetByValue[value];
             if (target) {
               (target as number[])[i] = value;
+              noteSlice(value, z);
             }
           }
         }
@@ -174,6 +199,14 @@ export async function buildOverlappingSegLayers({
           }
         }
       }
+    }
+  }
+
+  // Segments declared in metadata but absent from pixels get an explicit empty extent, so the
+  // block-assembly loop below has one uniform source of truth to consult.
+  for (let segmentIndex = 1; segmentIndex <= maxSegmentIndex; segmentIndex++) {
+    if (!segmentExtents.has(segmentIndex)) {
+      segmentExtents.set(segmentIndex, { lo: -1, hi: -1 });
     }
   }
 
@@ -256,6 +289,8 @@ export async function buildOverlappingSegLayers({
         `seg=${segmentIndex} len=${blockImages.length}/${sliceCount} ` +
         `srcIdx first=${firstSrc} last=${lastSrc} order=${order} ` +
         `extent=[${lo}..${hi}] (${lo < 0 ? 0 : hi - lo + 1} slices) ` +
+        `cheap=[${segmentExtents.get(segmentIndex)?.lo}..${segmentExtents.get(segmentIndex)?.hi}]` +
+        `${segmentExtents.get(segmentIndex)?.lo === lo && segmentExtents.get(segmentIndex)?.hi === hi ? '' : ' *** EXTENT MISMATCH ***'} ` +
         `source=${blocksBySegment.has(segmentIndex) ? 'layer-or-split' : 'empty-fabricated'}`
       );
     }
