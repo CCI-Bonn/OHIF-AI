@@ -57,6 +57,7 @@ export async function buildOverlappingSegLayers({
   createDerivedImages: (sourceImageIds: string[]) => Promise<SegLayerImage[]> | SegLayerImage[];
 }): Promise<OverlappingSegLayerResult | null> {
   if (!labelMapImages?.length) {
+    console.log('[seg-reload] SKIPPED: no labelMapImages (legacy flat path)');
     return null;
   }
 
@@ -64,6 +65,7 @@ export async function buildOverlappingSegLayers({
   if (labelMapImages.some(layerImages => layerImages.length !== sliceCount)) {
     // Unexpected adapter output — fall back to the legacy flat path rather than
     // build blocks with a broken image->slice mapping.
+    console.log('[seg-reload] SKIPPED: a layer length != sliceCount (legacy flat path)');
     return null;
   }
 
@@ -133,6 +135,7 @@ export async function buildOverlappingSegLayers({
     ...layerSegmentSets.flatMap(set => Array.from(set))
   );
   if (maxSegmentIndex === 0) {
+    console.log('[seg-reload] SKIPPED: maxSegmentIndex === 0 (legacy flat path)');
     return null;
   }
 
@@ -143,6 +146,12 @@ export async function buildOverlappingSegLayers({
   // shared block makes refines stack on top of the old mask (segment >= 2) or
   // wipe the other segments (segment 1).
   if (labelMapImages.length === 1 && maxSegmentIndex <= 1) {
+    // NOTE: a single-segment SEG never reaches the block-building code below, so it gets NO
+    // sparse blocks from this work — it uses the legacy full-length flat representation.
+    console.log(
+      `[seg-reload] SKIPPED: single layer holding only segment 1 (legacy flat path, ` +
+      `${sliceCount} slices, NOT cropped)`
+    );
     return null;
   }
 
