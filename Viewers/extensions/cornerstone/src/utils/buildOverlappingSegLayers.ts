@@ -400,9 +400,10 @@ export async function buildOverlappingSegLayers({
     if (se && be && be.lo >= 0 && (se.lo < be.lo || se.hi > be.hi)) {
       console.error(
         `SEG reload: segment ${segmentIndex} has voxels in source slices [${se.lo}..${se.hi}] ` +
-        `but the assembled block covers only [${be.lo}..${be.hi}] — slices outside that range ` +
-        `were dropped. Cause: segment appears in multiple layers; only the first layer's voxels ` +
-        `are kept.`
+        `but only [${be.lo}..${be.hi}] was kept — the z-extent of the layer that OWNS this ` +
+        `segment. Slices outside that range were dropped. Cause: segment appears in multiple ` +
+        `layers; only the first layer's voxels are kept. (The allocated block is the grid-snapped ` +
+        `form of the owning extent and so is usually wider; enlarging it would not recover them.)`
       );
     }
   }

@@ -459,15 +459,25 @@ const commandsModule = ({
   /** Apply (and clear) deferred image writes so the block's images match what MPR already shows. */
   function materializePendingImageSync(segmentationId?: string) {
     const keys = segmentationId ? [segmentationId] : Array.from(_pendingImageSync.keys());
-    // TEMPORARY (diagnostic, strip before merge): a deferred refine write is queued under the
-    // segmentationId that produced it and looked up by the id the caller passes. A mismatch finds
-    // nothing and returns in silence -- the refine stays only in the MPR volume, so it renders
-    // correctly and is then absent from any DICOM-SEG export, which reads the stack images.
+    // PERMANENT guard (one of the three data-loss reports that are deliberately kept -- do not
+    // strip it as leftover diagnostics). A deferred refine write is queued under the segmentationId
+    // that produced it and looked up by the id the caller passes. A mismatch finds nothing and
+    // returns in silence -- the refine stays only in the MPR volume, so it renders correctly and is
+    // then absent from any DICOM-SEG export, which reads the stack images. Nothing else in the
+    // system can observe that, which is why the report has to live here.
+    //
+    // The condition is deliberately loose -- "asked for X, and the queue is not empty" -- because
+    // the queue keys are the only evidence available at this point. It therefore also trips when a
+    // DIFFERENT segmentation legitimately has writes pending, which is not data loss. The MESSAGE
+    // is scoped accordingly: it states what is true (nothing queued for X, and these other ids are
+    // queued) and leaves the conclusion to whoever reads it, rather than asserting loss.
     if (segmentationId && !_pendingImageSync.get(segmentationId)?.size && _pendingImageSync.size) {
       console.error(
-        `Deferred segmentation writes were NOT applied: asked for "${segmentationId}", but the ` +
-        `pending queue holds [${Array.from(_pendingImageSync.keys()).join(', ')}]. ` +
-        `Those refines exist in the rendered volume only and will be missing from an export.`
+        `Deferred segmentation writes: nothing was queued for "${segmentationId}", so nothing was ` +
+        `applied for it. The pending queue holds [${Array.from(_pendingImageSync.keys()).join(', ')}]. ` +
+        `If one of those is the segmentation that was meant to be materialised, its refines exist ` +
+        `in the rendered volume only and will be missing from an export; if they are genuinely ` +
+        `other segmentations still awaiting their own drain, nothing is lost.`
       );
     }
     for (const segId of keys) {
@@ -1871,6 +1881,67 @@ const commandsModule = ({
             }
             merged_derivedImages = derivedImages_new
           } else {
+            // REFUSE TO WRITE INTO A SPARSE (multi-block, z-cropped) REPRESENTATION.
+            //
+            // The loop below is FLAT: it walks `segImageIds` — the concatenation of EVERY block —
+            // and indexes it with FULL-SERIES slice numbers, because the server's buffer holds one
+            // mask slice per series slice. That is only well defined while every block spans the
+            // whole series, which was true until blocks became z-cropped. It is no longer true for
+            // a reloaded DICOM-SEG, whose blocks cover only the slices their mask touches.
+            //
+            // With a z-cropped block the same loop silently corrupts three ways:
+            //   1. image k of a block starting at z0 is display slice z0 + k, so the mask lands at
+            //      the wrong depth;
+            //   2. once i runs past the first block's length it keeps going into the NEXT segments'
+            //      blocks and stamps `segmentNumber` into them;
+            //   3. the `!getRefineNew()` clear pass below zeroes `segmentNumber` across that same
+            //      flat list first, so the original is destroyed before the bad write.
+            // None of it is visible on screen: generateSegmentation scans raw pixelData for
+            // non-zero values and maps them by referencedImageId, so the strays reach the export.
+            //
+            // Making this handler block-aware is a separate piece of work (nnInteractive's path
+            // already is). Until then it declines rather than corrupts. Falling through to the
+            // fresh full-series allocation above is NOT an option: that path emits a single
+            // full-series block holding only this segment, and buildMultiBlockLabelmapRepresentation
+            // would then bind EVERY segment to it — dropping the other segments' blocks from the
+            // representation entirely. That trades one silent corruption for another.
+            //
+            // `existingBlocks` is the describeBlocks result captured when the existing segmentation
+            // was matched, reused here so the layout is read exactly once.
+            const _srcLen = imageIds.length;
+            const _multiBlockExisting =
+              _srcLen > 0 &&
+              // MORE THAN ONE BLOCK is enough on its own. The flat write is only ever well-defined
+              // for a SINGLE full-series block: with two or more, indices past the first block run
+              // into the next segment's images, and the clear pass zeroes this segment's value
+              // across all of them first. Blocks can be full length even after the sparse rework --
+              // when the ordering is unknown, when the series is shorter than one grid cell, or
+              // when a segment genuinely spans everything -- so a length test alone misses this.
+              (existingBlocks.length > 1 ||
+                existingBlocks.some(b => b.imageIds.length !== _srcLen) ||
+                // No block list at all (a legacy representation describeBlocks could not divide):
+                // unusable iff the flat list is not a single full-series layer.
+                (existingBlocks.length === 0 && segImageIds.length !== _srcLen));
+            if (_multiBlockExisting) {
+              console.error(
+                `[sam2] refusing to write: segmentation "${segmentationId}" stores each segment in ` +
+                `its own labelmap block (${existingBlocks.length} block(s), lengths ` +
+                `[${existingBlocks.map(b => b.imageIds.length).join(', ')}] against a ` +
+                `${_srcLen}-slice series). This handler writes the flat image list using ` +
+                `full-series indices, which would offset the mask and overwrite other segments.`
+              );
+              uiNotificationService.show({
+                title: 'SAM2',
+                message:
+                  'SAM2 cannot edit this segmentation: it stores each segment in its own labelmap ' +
+                  'block, which SAM2 does not yet understand. Segmentations created by ' +
+                  'nnInteractive or loaded from a DICOM-SEG are stored this way. Start a new ' +
+                  'segmentation to use SAM2.',
+                type: 'error',
+                duration: 6000,
+              });
+              return;
+            }
             merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
             if(flipped){
               merged_derivedImages.reverse();
