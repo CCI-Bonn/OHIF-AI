@@ -287,6 +287,29 @@ const commandsModule = ({
           const layerSegments = Array.from(
             new Set(layerLabelmaps2D.filter(Boolean).flatMap((l: any) => l.segmentsOnLabelmap))
           );
+
+          // TEMPORARY (diagnostic, strip before merge): what the EXPORT actually sees per layer.
+          // Established by measurement that the refine updates the block correctly, so if a refined
+          // segment reverts on export the loss is here: either the block's images do not hold the
+          // refined pixels, or they do and the referencedImageId identity mapping drops them.
+          // These two counts separate those cases.
+          {
+            let cached = 0;
+            let unmapped = 0;
+            for (const id of (layer.imageIds ?? [])) {
+              const img = cache.getImage(id);
+              if (!img) continue;
+              cached++;
+              if (sourceIndexById.get((img as any).referencedImageId) === undefined) unmapped++;
+            }
+            console.log(
+              `[export] layer segs=[${layerSegments.join(',')}] ` +
+              `imageIds=${(layer.imageIds ?? []).length} cached=${cached} unmapped=${unmapped} ` +
+              `slicesWithPixels=${layerLabelmaps2D.filter(Boolean).length}` +
+              `${layerSegments.length === 0 ? '  *** LAYER CONTRIBUTES NOTHING -- SKIPPED ***' : ''}`
+            );
+          }
+
           if (layerSegments.length === 0) continue;
 
           const layerMetadata: any[] = [];
