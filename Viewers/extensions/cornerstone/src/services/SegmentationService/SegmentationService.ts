@@ -447,11 +447,21 @@ class SegmentationService extends PubSubService {
     // multi-layer (overlapping) SEGs and a single layer packing multiple segments;
     // only a single layer holding exactly segment 1 keeps the legacy path.
     // Does cornerstone's SORTED volume order match the source series' display order? This decides
-    // whether a SEG block's array index equals its volume z index. sortImageIdsAndGetSpacing orders
-    // by DESCENDING distance along the scan axis, so display order matches iff the series' own
-    // positions already descend. Measured here rather than taken from the server's `flipped` flag,
-    // whose semantics differ. null (metadata unavailable) means "unknown" and forces the
-    // full-length, unreversed fallback in segmentBlockRange.
+    // whether a SEG block's array index equals its volume z index.
+    //
+    // Derivation, from sortImageIdsAndGetSpacing (two negations that cancel):
+    //   1. its distance metric is an INVERTED subtraction — getDistance(id) = (ref - pos)·axis,
+    //      where `ref` is the position of imageIds[0], NOT (pos - ref)·axis;
+    //   2. it then sorts DESCENDING by that value.
+    // Descending in (ref - pos)·axis is ASCENDING in pos·axis. So cornerstone's sorted (working)
+    // order always runs from lowest to highest projection onto the scan axis, whatever the source
+    // series order was. Display order therefore matches sorted order exactly when the
+    // display-ordered series is itself ASCENDING in pos·axis, i.e. when the last slice projects
+    // FURTHER ALONG the axis than the first: (p_last - p_first)·axis > 0.
+    //
+    // Measured here rather than taken from the server's `flipped` flag, whose semantics differ.
+    // null (metadata unavailable) means "unknown" and forces the full-length, unreversed fallback
+    // in segmentBlockRange.
     let _sortedMatchesDisplay: boolean | null = null;
     try {
       const _ids = imageIds as string[];
@@ -469,8 +479,9 @@ class SegmentationService extends PubSubService {
         const _pN = _pmN.imagePositionPatient;
         const _d =
           (_pN[0] - _p0[0]) * _axis[0] + (_pN[1] - _p0[1]) * _axis[1] + (_pN[2] - _p0[2]) * _axis[2];
-        // Sort is descending, so display order already matches when the last slice sits BEHIND the first.
-        _sortedMatchesDisplay = _d < 0;
+        // Sorted order is ascending in pos·axis (see derivation above), so display order already
+        // matches it when the series' own last slice sits FURTHER ALONG the axis than its first.
+        _sortedMatchesDisplay = _d > 0;
       }
     } catch {
       /* diagnostic only */
