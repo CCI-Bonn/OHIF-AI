@@ -1717,6 +1717,10 @@ const commandsModule = ({
           let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
             
           let segImageIds = [];
+          // The existing representation's block list, so it can be handed back to
+          // postSegmentationProcessing rather than re-derived by length division. See the
+          // `_sam2Blocks` note at the call site.
+          let existingBlocks: LabelmapBlock[] = [];
 
           let existing = false;
           // Find existing segmentation with matching seriesInstanceUid
@@ -1739,6 +1743,10 @@ const commandsModule = ({
               // allImageIds preserves all blocks; imageIds is reverted to block1 by syncLegacyLabelmapData
               segImageIds = activeSegmentation.representationData.Labelmap.allImageIds
                 ?? activeSegmentation.representationData.Labelmap.imageIds;
+              existingBlocks = describeBlocks(
+                activeSegmentation.representationData.Labelmap,
+                imageIds.length
+              );
               existing = true;
             }
           }
@@ -1885,6 +1893,29 @@ const commandsModule = ({
             }
           };
 
+          // Hand the EXISTING block list back rather than letting buildMultiBlockLabelmapRepresentation
+          // re-derive it as `derivedImageIds.length / imageIds.length`. That division is only exact
+          // when every block spans the whole series. Blocks are z-cropped now (a reloaded SEG's
+          // 9022 slices become ~1504), so the division would cut the flat list into a couple of
+          // bogus full-length layers straddling segment boundaries, drop the real segmentIndex ->
+          // labelmapId mapping, and leave most segments unbound.
+          //
+          // This does NOT make sam2() sparse — its write loop still treats the flat list as one
+          // series, which is a separate pre-existing limitation. It only stops it from DESTROYING a
+          // block list that already exists.
+          //
+          // Guard: only pass blocks that flatten back to exactly the images being submitted. The
+          // two are the same array by construction (merged_derivedImages comes from segImageIds,
+          // and any `flipped` reverse is undone before this point), so a mismatch means something
+          // upstream reshaped the list — in which case fall back to today's length-division
+          // behaviour rather than register a representation whose blocks disagree with its images.
+          const _flatExisting = flattenBlocks(existingBlocks);
+          const _sam2Blocks =
+            _flatExisting.length === derivedImageIds.length &&
+            _flatExisting.every((id, i) => id === derivedImageIds[i])
+              ? existingBlocks
+              : undefined;
+
           // Post-segmentation processing: update representations, handle viewports, trigger events
           await postSegmentationProcessing({
             activeViewportId,
@@ -1899,6 +1930,7 @@ const commandsModule = ({
             activeSegmentation,
             currentImageIdIndex,
             z_range,
+            blocks: _sam2Blocks,
           });
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
