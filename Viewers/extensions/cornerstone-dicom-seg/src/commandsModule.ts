@@ -287,7 +287,6 @@ const commandsModule = ({
           const layerSegments = Array.from(
             new Set(layerLabelmaps2D.filter(Boolean).flatMap((l: any) => l.segmentsOnLabelmap))
           );
-
           if (layerSegments.length === 0) continue;
 
           const layerMetadata: any[] = [];

@@ -459,15 +459,25 @@ const commandsModule = ({
   /** Apply (and clear) deferred image writes so the block's images match what MPR already shows. */
   function materializePendingImageSync(segmentationId?: string) {
     const keys = segmentationId ? [segmentationId] : Array.from(_pendingImageSync.keys());
-    // TEMPORARY (diagnostic, strip before merge): a deferred refine write is queued under the
-    // segmentationId that produced it and looked up by the id the caller passes. A mismatch finds
-    // nothing and returns in silence -- the refine stays only in the MPR volume, so it renders
-    // correctly and is then absent from any DICOM-SEG export, which reads the stack images.
+    // PERMANENT guard (one of the three data-loss reports that are deliberately kept -- do not
+    // strip it as leftover diagnostics). A deferred refine write is queued under the segmentationId
+    // that produced it and looked up by the id the caller passes. A mismatch finds nothing and
+    // returns in silence -- the refine stays only in the MPR volume, so it renders correctly and is
+    // then absent from any DICOM-SEG export, which reads the stack images. Nothing else in the
+    // system can observe that, which is why the report has to live here.
+    //
+    // The condition is deliberately loose -- "asked for X, and the queue is not empty" -- because
+    // the queue keys are the only evidence available at this point. It therefore also trips when a
+    // DIFFERENT segmentation legitimately has writes pending, which is not data loss. The MESSAGE
+    // is scoped accordingly: it states what is true (nothing queued for X, and these other ids are
+    // queued) and leaves the conclusion to whoever reads it, rather than asserting loss.
     if (segmentationId && !_pendingImageSync.get(segmentationId)?.size && _pendingImageSync.size) {
       console.error(
-        `Deferred segmentation writes were NOT applied: asked for "${segmentationId}", but the ` +
-        `pending queue holds [${Array.from(_pendingImageSync.keys()).join(', ')}]. ` +
-        `Those refines exist in the rendered volume only and will be missing from an export.`
+        `Deferred segmentation writes: nothing was queued for "${segmentationId}", so nothing was ` +
+        `applied for it. The pending queue holds [${Array.from(_pendingImageSync.keys()).join(', ')}]. ` +
+        `If one of those is the segmentation that was meant to be materialised, its refines exist ` +
+        `in the rendered volume only and will be missing from an export; if they are genuinely ` +
+        `other segmentations still awaiting their own drain, nothing is lost.`
       );
     }
     for (const segId of keys) {
