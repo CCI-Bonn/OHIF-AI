@@ -455,7 +455,10 @@ class SegmentationService extends PubSubService {
     //   2. it then sorts DESCENDING by that value.
     // Descending in (ref - pos)·axis is ASCENDING in pos·axis. So cornerstone's sorted (working)
     // order always runs from lowest to highest projection onto the scan axis, whatever the source
-    // series order was. Display order therefore matches sorted order exactly when the
+    // series order was. (Exact for the full sort; the wadouri branch only reverses on a
+    // first-vs-middle probe, so it lands ascending for any MONOTONIC series -- which is also the
+    // assumption `_d` itself makes by sampling only the first and last slice.)
+    // Display order therefore matches sorted order exactly when the
     // display-ordered series is itself ASCENDING in pos·axis, i.e. when the last slice projects
     // FURTHER ALONG the axis than the first: (p_last - p_first)·axis > 0.
     //

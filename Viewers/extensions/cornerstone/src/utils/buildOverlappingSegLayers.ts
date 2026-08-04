@@ -389,8 +389,12 @@ export async function buildOverlappingSegLayers({
     // to no block, so its mask renders cut off in z.
     // This fires for all three orderings — single+single, packed-then-single, single-then-packed —
     // because both the packed Pass A guard and the single-segment pre-pass now apply the same
-    // first-layer ownership rule. (It still cannot see voxels lost INSIDE the owning layer's
-    // z-range, which no extent comparison can; nothing in the assembly drops those.)
+    // first-layer ownership rule.
+    //
+    // LIMIT worth knowing: an extent comparison can only see loss that CHANGES the z-range. If a
+    // later layer's copy of the segment falls entirely INSIDE the owner's z-range, its voxels are
+    // dropped by the same ownership rule and this check stays silent. So a clean run means no
+    // segment lost slices at its ends -- not that no voxels were lost at all.
     const se = sourceExtents.get(segmentIndex);
     const be = segmentExtents.get(segmentIndex);
     if (se && be && be.lo >= 0 && (se.lo < be.lo || se.hi > be.hi)) {
