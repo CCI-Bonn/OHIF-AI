@@ -459,6 +459,17 @@ const commandsModule = ({
   /** Apply (and clear) deferred image writes so the block's images match what MPR already shows. */
   function materializePendingImageSync(segmentationId?: string) {
     const keys = segmentationId ? [segmentationId] : Array.from(_pendingImageSync.keys());
+    // TEMPORARY (diagnostic, strip before merge): a deferred refine write is queued under the
+    // segmentationId that produced it and looked up by the id the caller passes. A mismatch finds
+    // nothing and returns in silence -- the refine stays only in the MPR volume, so it renders
+    // correctly and is then absent from any DICOM-SEG export, which reads the stack images.
+    if (segmentationId && !_pendingImageSync.get(segmentationId)?.size && _pendingImageSync.size) {
+      console.error(
+        `Deferred segmentation writes were NOT applied: asked for "${segmentationId}", but the ` +
+        `pending queue holds [${Array.from(_pendingImageSync.keys()).join(', ')}]. ` +
+        `Those refines exist in the rendered volume only and will be missing from an export.`
+      );
+    }
     for (const segId of keys) {
       const bySegment = _pendingImageSync.get(segId);
       if (!bySegment?.size) continue;
@@ -504,6 +515,10 @@ const commandsModule = ({
           );
         }
       }
+      console.log(
+        `[refine] materialized deferred writes for "${segId}" ` +
+        `(segments ${Array.from(bySegment.keys()).join(',')})`
+      );
       _pendingImageSync.delete(segId);
     }
   }
