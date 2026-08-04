@@ -393,6 +393,19 @@ export async function buildOverlappingSegLayers({
     }
   }
 
+  // TEMPORARY (diagnostic, strip before merge): the actual saving, computed from the blocks we built.
+  // Pure arithmetic -- this file takes no cornerstone dependency, so it cannot read the image cache.
+  {
+    const allocated = blocks.reduce((n, b) => n + b.imageIds.length, 0);
+    const wouldHaveBeen = blocks.length * sliceCount;
+    const mb = (n: number) => ((n * 512 * 512) / 1e6).toFixed(0);
+    console.log(
+      `[seg-reload] TOTAL: ${blocks.length} blocks, ${allocated}/${wouldHaveBeen} slices ` +
+      `(~${mb(allocated)}MB vs ~${mb(wouldHaveBeen)}MB, ` +
+      `${(100 * (1 - allocated / wouldHaveBeen)).toFixed(0)}% saved)`
+    );
+  }
+
   return {
     labelmaps,
     segmentBindings,
