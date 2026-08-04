@@ -515,10 +515,6 @@ const commandsModule = ({
           );
         }
       }
-      console.log(
-        `[refine] materialized deferred writes for "${segId}" ` +
-        `(segments ${Array.from(bySegment.keys()).join(',')})`
-      );
       _pendingImageSync.delete(segId);
     }
   }
@@ -3651,22 +3647,6 @@ const commandsModule = ({
             shouldShrinkBlock(_prevBlock.imageIds.length, _aw1 - _aw0, BLOCK_SHRINK_FACTOR);
           const _reuseIdx = (_hasCropGeom && !toolboxState.getRefineNew() && _nMpr > 0 && _nStack === 0
             && _fitsBlock && !_blockOversized) ? _blockIdxForSeg : -1;
-
-          // TEMPORARY (diagnostic, strip before merge): which block this refine chose, and why.
-          // The [nninter-client] probes were stripped when the sparse-block work merged, leaving
-          // this decision unobservable -- and a refine that silently targets the wrong block, or is
-          // treated as a NEW segment because its index is not in the block list, looks identical
-          // from outside to a refine that did nothing.
-          console.log(
-            `[refine] seg=${segmentNumber} blockIdx=${_blockIdxForSeg} ` +
-            `prevBlock=${_prevBlock ? `${_prevBlock.imageIds.length}@${_prevBlock.z0}` : 'NONE'} ` +
-            `blocks=[${_prevBlocks.map(b => b.segmentIndex).join(',')}] ` +
-            `mask=[${_segZ0}..${_segZ1}) clamped=[${_bw0}..${_bw1}) snapped=[${_aw0}..${_aw1}) ` +
-            `hasCrop=${_hasCropGeom} refineNew=${toolboxState.getRefineNew()} ` +
-            `mpr=${_nMpr} stack=${_nStack} fits=${_fitsBlock} oversized=${_blockOversized} ` +
-            `=> reuse=${_reuseIdx}` +
-            `${_blockIdxForSeg < 0 ? '  *** SEGMENT HAS NO BLOCK -- WILL BE TREATED AS NEW ***' : ''}`
-          );
 
           // Working-order offset of the block being written.
           // INVARIANT: on the REUSE path this MUST equal _prevBlock.z0, because _clearIdxs, the
