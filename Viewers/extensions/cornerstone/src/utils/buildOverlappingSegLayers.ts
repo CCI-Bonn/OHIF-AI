@@ -61,7 +61,6 @@ export async function buildOverlappingSegLayers({
   createDerivedImages: (sourceImageIds: string[]) => Promise<SegLayerImage[]> | SegLayerImage[];
 }): Promise<OverlappingSegLayerResult | null> {
   if (!labelMapImages?.length) {
-    console.log('[seg-reload] SKIPPED: no labelMapImages (legacy flat path)');
     return null;
   }
 
@@ -69,16 +68,16 @@ export async function buildOverlappingSegLayers({
   if (labelMapImages.some(layerImages => layerImages.length !== sliceCount)) {
     // Unexpected adapter output — fall back to the legacy flat path rather than
     // build blocks with a broken image->slice mapping.
-    console.log('[seg-reload] SKIPPED: a layer length != sliceCount (legacy flat path)');
     return null;
   }
 
   // Scan each layer once: which segments it holds, and the first segmented slice
   // in adapter (layer-major) order — parity with the legacy hydration loop.
-  // TEMPORARY (diagnostic, strip before merge): each segment's TRUE extent across ALL layers,
-  // recorded before any blocksBySegment ownership guard. Comparing this against the assembled
-  // block's extent detects DROPPED VOXELS -- which the extent/cheap check cannot, because both of
-  // those measure the block we built, so they agree even when the block is missing data.
+  //
+  // sourceExtents records each segment's TRUE extent across ALL layers, before any
+  // blocksBySegment ownership guard. This is kept permanently: it is the only way to
+  // detect DROPPED VOXELS — any check that measures the assembled block agrees with it
+  // even when the block is missing data, because the block is what was built.
   const sourceExtents = new Map<number, { lo: number; hi: number }>();
   const noteSourceSlice = (segmentIndex: number, z: number) => {
     const e = sourceExtents.get(segmentIndex);
@@ -155,7 +154,6 @@ export async function buildOverlappingSegLayers({
     ...layerSegmentSets.flatMap(set => Array.from(set))
   );
   if (maxSegmentIndex === 0) {
-    console.log('[seg-reload] SKIPPED: maxSegmentIndex === 0 (legacy flat path)');
     return null;
   }
 
@@ -168,10 +166,6 @@ export async function buildOverlappingSegLayers({
   if (labelMapImages.length === 1 && maxSegmentIndex <= 1) {
     // NOTE: a single-segment SEG never reaches the block-building code below, so it gets NO
     // sparse blocks from this work — it uses the legacy full-length flat representation.
-    console.log(
-      `[seg-reload] SKIPPED: single layer holding only segment 1 (legacy flat path, ` +
-      `${sliceCount} slices, NOT cropped)`
-    );
     return null;
   }
 
@@ -356,77 +350,22 @@ export async function buildOverlappingSegLayers({
     }
     allImageIds.push(...orderedImageIds);
 
-    // TEMPORARY (diagnostic, strip before merge): settles whether a SEG block's images are stored
-    // in DISPLAY order (index-aligned with sourceImageIds) or WORKING order (reversed for a
-    // z-descending series). LabelmapBlock.z0 is defined as a WORKING offset, so emitting a real z0
-    // for reloaded SEGs is only safe once we know which of the two this producer actually produces.
-    // `order` is measured, not assumed: it is the direction of the block's own referencedImageIds
-    // through the source series.
-    {
-      const srcIndexById = new Map<string, number>();
-      sourceImageIds.forEach((id, i) => srcIndexById.set(id, i));
-      const firstSrc = srcIndexById.get(String(refIds[0]));
-      const lastSrc = srcIndexById.get(String(refIds[refIds.length - 1]));
-      const order =
-        firstSrc == null || lastSrc == null
-          ? 'unknown'
-          : firstSrc < lastSrc
-            ? 'ascending(display)'
-            : 'descending(working-if-flipped)';
-      // Measured extent, scanned in the block's own index space. `blockImages` is always in DISPLAY
-      // order here (only the ordered* arrays above are reversed), and the block starts at display
-      // index range.sliceStart, so adding that offset puts it back in the same space as `cheap`
-      // below — which is what makes the mismatch check meaningful now that blocks are cropped.
-      let lo = -1;
-      let hi = -1;
-      for (let z = 0; z < blockImages.length; z++) {
-        const sd = blockImages[z]?.voxelManager?.getScalarData?.();
-        if (sd && (sd as ArrayLike<number>).length) {
-          let hit = false;
-          for (let i = 0; i < (sd as ArrayLike<number>).length; i++) {
-            if ((sd as ArrayLike<number>)[i] === segmentIndex) {
-              hit = true;
-              break;
-            }
-          }
-          if (hit) {
-            if (lo < 0) lo = z;
-            hi = z;
-          }
-        }
-      }
-      const dLo = lo < 0 ? -1 : lo + range.sliceStart;
-      const dHi = hi < 0 ? -1 : hi + range.sliceStart;
-      console.log(
-        `[seg-reload] sortedMatchesDisplay=${sortedMatchesDisplay} ` +
-        `seg=${segmentIndex} len=${blockImages.length}/${sliceCount} z0=${range.z0} ` +
-        `srcIdx first=${firstSrc} last=${lastSrc} order=${order} ` +
-        `extent=[${dLo}..${dHi}] (${lo < 0 ? 0 : hi - lo + 1} slices) ` +
-        `src=[${sourceExtents.get(segmentIndex)?.lo ?? -1}..${sourceExtents.get(segmentIndex)?.hi ?? -1}]` +
-        `${(() => {
-          const se = sourceExtents.get(segmentIndex);
-          const be = segmentExtents.get(segmentIndex);
-          if (!se || !be || be.lo < 0) return '';
-          return se.lo < be.lo || se.hi > be.hi ? ' *** VOXELS DROPPED ***' : '';
-        })()} ` +
-        `cheap=[${segmentExtents.get(segmentIndex)?.lo}..${segmentExtents.get(segmentIndex)?.hi}]` +
-        `${segmentExtents.get(segmentIndex)?.lo === dLo && segmentExtents.get(segmentIndex)?.hi === dHi ? '' : ' *** EXTENT MISMATCH ***'} ` +
-        `source=${blocksBySegment.has(segmentIndex) ? 'layer-or-split' : 'empty-fabricated'}`
+    // Permanent data-loss check: kept while everything around it was removed because it is the only
+    // check that can detect dropped voxels. Any check that measures the assembled block agrees with
+    // it even when the block is missing data — sourceExtents is recorded before the blocksBySegment
+    // ownership guard, so it captures what the source contained, not what was kept.
+    // A segment present in multiple layers has its voxels from the second layer written to no block
+    // (the ownership guard skips them), so its mask renders cut off in z.
+    const se = sourceExtents.get(segmentIndex);
+    const be = segmentExtents.get(segmentIndex);
+    if (se && be && be.lo >= 0 && (se.lo < be.lo || se.hi > be.hi)) {
+      console.error(
+        `SEG reload: segment ${segmentIndex} has voxels in source slices [${se.lo}..${se.hi}] ` +
+        `but the assembled block covers only [${be.lo}..${be.hi}] — slices outside that range ` +
+        `were dropped. Cause: segment appears in multiple layers; only the first layer's voxels ` +
+        `are kept.`
       );
     }
-  }
-
-  // TEMPORARY (diagnostic, strip before merge): the actual saving, computed from the blocks we built.
-  // Pure arithmetic -- this file takes no cornerstone dependency, so it cannot read the image cache.
-  {
-    const allocated = blocks.reduce((n, b) => n + b.imageIds.length, 0);
-    const wouldHaveBeen = blocks.length * sliceCount;
-    const mb = (n: number) => ((n * 512 * 512) / 1e6).toFixed(0);
-    console.log(
-      `[seg-reload] TOTAL: ${blocks.length} blocks, ${allocated}/${wouldHaveBeen} slices ` +
-      `(~${mb(allocated)}MB vs ~${mb(wouldHaveBeen)}MB, ` +
-      `${(100 * (1 - allocated / wouldHaveBeen)).toFixed(0)}% saved)`
-    );
   }
 
   return {
