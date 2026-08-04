@@ -1909,16 +1909,23 @@ const commandsModule = ({
             // `existingBlocks` is the describeBlocks result captured when the existing segmentation
             // was matched, reused here so the layout is read exactly once.
             const _srcLen = imageIds.length;
-            const _sparseExisting =
+            const _multiBlockExisting =
               _srcLen > 0 &&
-              (existingBlocks.some(b => b.imageIds.length !== _srcLen) ||
+              // MORE THAN ONE BLOCK is enough on its own. The flat write is only ever well-defined
+              // for a SINGLE full-series block: with two or more, indices past the first block run
+              // into the next segment's images, and the clear pass zeroes this segment's value
+              // across all of them first. Blocks can be full length even after the sparse rework --
+              // when the ordering is unknown, when the series is shorter than one grid cell, or
+              // when a segment genuinely spans everything -- so a length test alone misses this.
+              (existingBlocks.length > 1 ||
+                existingBlocks.some(b => b.imageIds.length !== _srcLen) ||
                 // No block list at all (a legacy representation describeBlocks could not divide):
-                // sparse iff the flat list is not a whole number of full-series layers.
-                (existingBlocks.length === 0 && segImageIds.length % _srcLen !== 0));
-            if (_sparseExisting) {
+                // unusable iff the flat list is not a single full-series layer.
+                (existingBlocks.length === 0 && segImageIds.length !== _srcLen));
+            if (_multiBlockExisting) {
               console.error(
-                `[sam2] refusing to write: segmentation "${segmentationId}" has per-segment ` +
-                `labelmap blocks (${existingBlocks.length} block(s), lengths ` +
+                `[sam2] refusing to write: segmentation "${segmentationId}" stores each segment in ` +
+                `its own labelmap block (${existingBlocks.length} block(s), lengths ` +
                 `[${existingBlocks.map(b => b.imageIds.length).join(', ')}] against a ` +
                 `${_srcLen}-slice series). This handler writes the flat image list using ` +
                 `full-series indices, which would offset the mask and overwrite other segments.`
@@ -1926,9 +1933,10 @@ const commandsModule = ({
               uiNotificationService.show({
                 title: 'SAM2',
                 message:
-                  'SAM2 cannot refine this segmentation: it was loaded from a DICOM-SEG and stores ' +
-                  'each segment in its own labelmap block. Use nnInteractive for this series, or ' +
-                  'start a new segmentation.',
+                  'SAM2 cannot edit this segmentation: it stores each segment in its own labelmap ' +
+                  'block, which SAM2 does not yet understand. Segmentations created by ' +
+                  'nnInteractive or loaded from a DICOM-SEG are stored this way. Start a new ' +
+                  'segmentation to use SAM2.',
                 type: 'error',
                 duration: 6000,
               });
