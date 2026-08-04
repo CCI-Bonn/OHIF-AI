@@ -471,11 +471,18 @@ const commandsModule = ({
           const sd = vm.getScalarData();
           for (let j = 0; j < sd.length; j++) if (sd[j] === p.segmentNumber) sd[j] = 0;
         }
+        // A deferred refine write that lands outside its block, or on an image no longer cached,
+        // used to be dropped by a bare `continue`. That is invisible on screen -- the MPR volume is
+        // written separately and immediately -- but the stack images are what DICOM-SEG export
+        // reads, so the refine silently fails to persist and the segment exports cut off at the
+        // block boundary. Count both and report, so the failure is attributable instead of mute.
+        let _skippedOutOfRange = 0;
+        let _skippedUncached = 0;
         for (let z = p.segZ0; z < p.segZ1; z++) {
           const arrIdx = z - p.z0;
-          if (arrIdx < 0 || arrIdx >= p.blockImageIds.length) continue;
+          if (arrIdx < 0 || arrIdx >= p.blockImageIds.length) { _skippedOutOfRange++; continue; }
           const vm = cache.getImage(p.blockImageIds[arrIdx])?.voxelManager as csTypes.IVoxelManager<number>;
-          if (!vm) continue;
+          if (!vm) { _skippedUncached++; continue; }
           const sd = vm.getScalarData();
           const cropSliceBase = (z - p.segZ0) * p.cropY * p.cropX;
           for (let cy = 0; cy < p.cropY; cy++) {
@@ -485,6 +492,16 @@ const commandsModule = ({
               if (p.cropBytes[srcRow + cx] === 1) sd[dstRow + cx] = p.segmentNumber;
             }
           }
+        }
+        if (_skippedOutOfRange || _skippedUncached) {
+          console.error(
+            `Segmentation write lost for segment ${p.segmentNumber}: ` +
+            `${_skippedOutOfRange} slice(s) fell outside its block ` +
+            `(write range [${p.segZ0}..${p.segZ1}), block z0=${p.z0} len=${p.blockImageIds.length}), ` +
+            `${_skippedUncached} slice(s) had no cached image. ` +
+            `Those pixels are in the rendered volume but NOT in the stack images, so they will be ` +
+            `missing from a DICOM-SEG export and the segment will appear cut off.`
+          );
         }
       }
       _pendingImageSync.delete(segId);
