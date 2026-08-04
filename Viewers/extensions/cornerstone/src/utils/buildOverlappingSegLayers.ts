@@ -163,6 +163,11 @@ export async function buildOverlappingSegLayers({
   // packed layers are split into fresh per-segment blocks; declared-but-empty
   // segments get an empty block to preserve block index === segmentIndex - 1.
   const blocksBySegment = new Map<number, SegLayerImage[]>();
+  // Display-space slice offset of each split block, i.e. the block's own `sliceStart`. The split
+  // pass writes by ABSOLUTE slice index z, so it needs this to translate z into a block index.
+  // Presence in this map also marks a block as "already allocated cropped", which the assembly
+  // loop below uses to tell it apart from a full-length reused layer that still needs slicing.
+  const splitBlockOffsets = new Map<number, number>();
   for (let layerIndex = 0; layerIndex < labelMapImages.length; layerIndex++) {
     const layerSegments = layerSegmentSets[layerIndex];
     if (layerSegments.size === 1) {
@@ -173,15 +178,51 @@ export async function buildOverlappingSegLayers({
       continue;
     }
     if (layerSegments.size > 1) {
-      const splitBlocks = new Map<number, SegLayerImage[]>();
-      for (const segmentIndex of layerSegments) {
-        if (!blocksBySegment.has(segmentIndex)) {
-          const blockImages = await createDerivedImages(sourceImageIds);
-          splitBlocks.set(segmentIndex, blockImages);
-          blocksBySegment.set(segmentIndex, blockImages);
+      const sliceHasSegment = layerSliceHasSegment[layerIndex];
+
+      // A packed layer's per-segment extents are not known before this point: a single-segment
+      // layer's slice flags ARE its segment's extent, but a packed layer's flags say only that
+      // SOME segment is present. So the voxels must be read twice — once to size the blocks, once
+      // to fill them. Merging the two would allocate against an empty extent map, silently giving
+      // every packed segment a MIN_BLOCK_SLICES block and dropping most of its mask.
+      // Packed layers are the minority of SEG reloads; correctness beats the saved scan.
+
+      // PASS A — extents only. Must complete before allocation: block size depends on it.
+      for (let z = 0; z < sliceCount; z++) {
+        if (!sliceHasSegment[z]) {
+          continue;
+        }
+        const sourceData = labelMapImages[layerIndex][z].voxelManager?.getScalarData();
+        if (!sourceData) {
+          continue;
+        }
+        for (let i = 0; i < sourceData.length; i++) {
+          const value = sourceData[i] as number;
+          // The `has` guard mirrors Pass B's skip: a segment already owned by an earlier layer
+          // keeps that layer's block, so this layer's voxels must not widen its extent.
+          if (value !== 0 && !blocksBySegment.has(value)) {
+            noteSlice(value, z);
+          }
         }
       }
-      const sliceHasSegment = layerSliceHasSegment[layerIndex];
+
+      // PASS B — allocate each segment's block over its own cropped range.
+      const splitBlocks = new Map<number, SegLayerImage[]>();
+      for (const segmentIndex of layerSegments) {
+        if (blocksBySegment.has(segmentIndex)) {
+          continue;
+        }
+        const sExt = segmentExtents.get(segmentIndex) ?? { lo: -1, hi: -1 };
+        const sRange = segmentBlockRange(sExt.lo, sExt.hi, sliceCount, sortedMatchesDisplay);
+        const blockImages = await createDerivedImages(
+          sourceImageIds.slice(sRange.sliceStart, sRange.sliceEnd)
+        );
+        splitBlocks.set(segmentIndex, blockImages);
+        blocksBySegment.set(segmentIndex, blockImages);
+        splitBlockOffsets.set(segmentIndex, sRange.sliceStart);
+      }
+
+      // PASS C — copy voxels, indexing each block through its own offset.
       for (let z = 0; z < sliceCount; z++) {
         // All-zero source slice: nothing to copy, target blocks stay zeroed.
         if (!sliceHasSegment[z]) {
@@ -191,10 +232,15 @@ export async function buildOverlappingSegLayers({
         if (!sourceData) {
           continue;
         }
-        // Dense value-indexed lookup — cheaper than a Map.get per nonzero voxel.
+        // Dense value-indexed lookup — cheaper than a Map.get per nonzero voxel. A segment whose
+        // block does not cover this slice is left undefined, so its voxels here are skipped.
         const targetByValue: (ArrayLike<number> | undefined)[] = new Array(maxSegmentIndex + 1);
         for (const [segmentIndex, blockImages] of splitBlocks) {
-          targetByValue[segmentIndex] = blockImages[z].voxelManager?.getScalarData();
+          const ai = z - (splitBlockOffsets.get(segmentIndex) ?? 0);
+          targetByValue[segmentIndex] =
+            ai >= 0 && ai < blockImages.length
+              ? blockImages[ai].voxelManager?.getScalarData()
+              : undefined;
         }
         for (let i = 0; i < sourceData.length; i++) {
           const value = sourceData[i] as number;
@@ -202,13 +248,13 @@ export async function buildOverlappingSegLayers({
             const target = targetByValue[value];
             if (target) {
               (target as number[])[i] = value;
-              noteSlice(value, z);
             }
           }
         }
         for (const [segmentIndex, blockImages] of splitBlocks) {
-          if (targetByValue[segmentIndex]) {
-            blockImages[z].voxelManager?.setScalarData?.(targetByValue[segmentIndex]);
+          const ai = z - (splitBlockOffsets.get(segmentIndex) ?? 0);
+          if (ai >= 0 && ai < blockImages.length && targetByValue[segmentIndex]) {
+            blockImages[ai].voxelManager?.setScalarData?.(targetByValue[segmentIndex]);
           }
         }
       }
@@ -231,29 +277,41 @@ export async function buildOverlappingSegLayers({
   let primaryImageIds: string[] = [];
 
   for (let segmentIndex = 1; segmentIndex <= maxSegmentIndex; segmentIndex++) {
+    // The block's z-crop. Computed from the same inputs the split pass used, so a split block's
+    // range here is by construction the one it was allocated at.
+    const ext = segmentExtents.get(segmentIndex) ?? { lo: -1, hi: -1 };
+    const range = segmentBlockRange(ext.lo, ext.hi, sliceCount, sortedMatchesDisplay);
+
     let blockImages = blocksBySegment.get(segmentIndex);
     if (!blockImages) {
-      blockImages = await createDerivedImages(sourceImageIds);
+      // Declared-but-empty segment: the smallest legal block, not a full-series slab of zeros.
+      blockImages = await createDerivedImages(
+        sourceImageIds.slice(range.sliceStart, range.sliceEnd)
+      );
+    } else if (splitBlockOffsets.has(segmentIndex)) {
+      // Already allocated at the cropped size by the split loop — take as-is.
+    } else {
+      // Reused decoded layer: it is full length, so slice it down. Never reallocate or reverse in
+      // place — these images belong to the display set (segDisplaySet.images is built from them).
+      // The out-of-range images stay in cache for that reason, so this frees no image memory; the
+      // win is the per-block MPR volume, which is built from exactly these ids.
+      blockImages = blockImages.slice(range.sliceStart, range.sliceEnd);
     }
     const blockImageIds = blockImages.map(image => image.imageId);
 
     // Cornerstone maps labelmap image k -> referencedImageIds[k] by index, so derive
-    // the reference list from each block image's own referencedImageId (order-safe);
-    // fall back to the source ordering if any is missing.
+    // the reference list from each block image's own referencedImageId (order-safe); fall back to
+    // the block's OWN display slice range if any is missing. The whole-series list is not a legal
+    // substitute for a cropped block — it would pair block slice 0 with display slice 0 and render
+    // the mask at the wrong depth. Both the length test and the fallback are therefore per-block.
     const refIds = blockImages.map(image => image.referencedImageId);
     const referencedImageIds =
-      refIds.length === sliceCount && refIds.every(Boolean)
+      refIds.length === blockImages.length && refIds.every(Boolean)
         ? (refIds as string[])
-        : sourceImageIds;
+        : sourceImageIds.slice(range.sliceStart, range.sliceEnd);
 
-    // Ordering only, for now: take the whole series but normalise to WORKING order, so the array
-    // index of a block equals its cornerstone volume z index. Cropping comes next; keeping the two
-    // changes apart means a rendering regression points at one or the other, not both.
-    //
-    // Only `range.reverse` is consumed here. `range.sliceStart`/`sliceEnd` describe the CROPPED
-    // range and are deliberately ignored until Task 4 — the blocks below stay full length.
-    const ext = segmentExtents.get(segmentIndex) ?? { lo: -1, hi: -1 };
-    const range = segmentBlockRange(ext.lo, ext.hi, sliceCount, sortedMatchesDisplay);
+    // Normalise the cropped block to WORKING order, so its array index equals the cornerstone
+    // volume z index. imageIds and referencedImageIds reverse together to stay index-aligned.
     const orderedImageIds = range.reverse ? blockImageIds.slice().reverse() : blockImageIds;
     const orderedRefIds = range.reverse
       ? (referencedImageIds as string[]).slice().reverse()
@@ -272,10 +330,7 @@ export async function buildOverlappingSegLayers({
 
     blocks.push({
       segmentIndex,
-      // A full-length block starts at working 0 whichever way it is ordered: segmentBlockRange
-      // would give z0 = sourceCount - sourceCount = 0 when reversed, and 0 when not. Task 4 crops
-      // the block and takes z0 from `range` directly.
-      z0: 0,
+      z0: range.z0,
       imageIds: orderedImageIds,
       referencedImageIds: orderedRefIds,
     });
@@ -302,7 +357,10 @@ export async function buildOverlappingSegLayers({
           : firstSrc < lastSrc
             ? 'ascending(display)'
             : 'descending(working-if-flipped)';
-      // Extent this segment WOULD get if cropped, in the block's own index space.
+      // Measured extent, scanned in the block's own index space. `blockImages` is always in DISPLAY
+      // order here (only the ordered* arrays above are reversed), and the block starts at display
+      // index range.sliceStart, so adding that offset puts it back in the same space as `cheap`
+      // below — which is what makes the mismatch check meaningful now that blocks are cropped.
       let lo = -1;
       let hi = -1;
       for (let z = 0; z < blockImages.length; z++) {
@@ -321,13 +379,15 @@ export async function buildOverlappingSegLayers({
           }
         }
       }
+      const dLo = lo < 0 ? -1 : lo + range.sliceStart;
+      const dHi = hi < 0 ? -1 : hi + range.sliceStart;
       console.log(
         `[seg-reload] sortedMatchesDisplay=${sortedMatchesDisplay} ` +
-        `seg=${segmentIndex} len=${blockImages.length}/${sliceCount} ` +
+        `seg=${segmentIndex} len=${blockImages.length}/${sliceCount} z0=${range.z0} ` +
         `srcIdx first=${firstSrc} last=${lastSrc} order=${order} ` +
-        `extent=[${lo}..${hi}] (${lo < 0 ? 0 : hi - lo + 1} slices) ` +
+        `extent=[${dLo}..${dHi}] (${lo < 0 ? 0 : hi - lo + 1} slices) ` +
         `cheap=[${segmentExtents.get(segmentIndex)?.lo}..${segmentExtents.get(segmentIndex)?.hi}]` +
-        `${segmentExtents.get(segmentIndex)?.lo === lo && segmentExtents.get(segmentIndex)?.hi === hi ? '' : ' *** EXTENT MISMATCH ***'} ` +
+        `${segmentExtents.get(segmentIndex)?.lo === dLo && segmentExtents.get(segmentIndex)?.hi === dHi ? '' : ' *** EXTENT MISMATCH ***'} ` +
         `source=${blocksBySegment.has(segmentIndex) ? 'layer-or-split' : 'empty-fabricated'}`
       );
     }
