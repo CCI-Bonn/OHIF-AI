@@ -4,8 +4,10 @@ import { segmentBlockRange } from '../../../default/src/utils/labelmapBlocks';
 /**
  * Normalizes a DICOM-SEG display set into the canonical per-segment multi-block
  * labelmap representation used by AI segmentations: block b holds only segment
- * b+1's voxels (N images per block, pixel value = segment index), blocks ordered
- * by segment. Applies to multi-layer SEGs (overlapping segments) and to
+ * b+1's voxels (pixel value = segment index), blocks ordered by segment. Blocks are
+ * z-cropped to the segment's own extent, so a block is generally SHORTER than the
+ * series and its length varies per segment; `LabelmapBlock.referencedImageIds` is
+ * what says where it sits. Applies to multi-layer SEGs (overlapping segments) and to
  * single-layer SEGs whose one layer packs multiple segments (or a segment
  * numbered != 1); only a single layer holding exactly segment 1 keeps the
  * legacy flat representation.
@@ -19,10 +21,12 @@ import { segmentBlockRange } from '../../../default/src/utils/labelmapBlocks';
  * volume per block, and refine/undo/export see the exact structure
  * buildMultiBlockLabelmapRepresentation produces.
  *
- * Layers that already hold a single segment are reused as that segment's block;
- * only packed layers allocate new derived images (via createDerivedImages). Segments
- * declared in metadata but empty in pixels get an empty block so block indices stay
- * aligned with segment indices.
+ * Layers that already hold a single segment supply that segment's block, but as a SLICED
+ * copy — the decoded layer is full length, so it is cut down to the segment's z-range
+ * (the layer's own images are left untouched; segDisplaySet.images is built from them).
+ * Only packed layers allocate new derived images (via createDerivedImages). Segments
+ * declared in metadata but empty in pixels get a minimum-size empty block so block
+ * indices stay aligned with segment indices.
  */
 
 interface SegLayerImage {
@@ -124,7 +128,21 @@ export async function buildOverlappingSegLayers({
     layerSliceHasSegment.push(sliceHasSegmentFlags);
   }
 
-  // Per-segment display-space extent, inclusive. lo = -1 means the segment has no voxels at all.
+  // OWNERSHIP: the FIRST layer (in layer order) that contains a segment is the one whose voxels are
+  // kept — the assembly loop below claims a segment into blocksBySegment on first sight and every
+  // later layer skips it, whether it is single-segment or packed. Extent recording must follow the
+  // same rule, or segmentExtents describes a layer whose voxels were never written to any block.
+  const ownerLayerForSegment = new Map<number, number>();
+  for (let layerIndex = 0; layerIndex < layerSegmentSets.length; layerIndex++) {
+    for (const segmentIndex of layerSegmentSets[layerIndex]) {
+      if (!ownerLayerForSegment.has(segmentIndex)) {
+        ownerLayerForSegment.set(segmentIndex, layerIndex);
+      }
+    }
+  }
+
+  // Per-segment display-space extent, inclusive, of the OWNING layer only — i.e. the extent of the
+  // voxels that are actually kept. lo = -1 means the segment has no voxels at all.
   // Derived from scans that already happen: a single-segment layer's slice flags ARE that segment's
   // extent, and packed layers get theirs from the voxel loop that is already running.
   const segmentExtents = new Map<number, { lo: number; hi: number }>();
@@ -142,6 +160,11 @@ export async function buildOverlappingSegLayers({
     const layerSegments = layerSegmentSets[layerIndex];
     if (layerSegments.size !== 1) continue;
     const [only] = layerSegments;
+    // Same ownership rule Pass A applies to packed layers: an earlier layer already owns this
+    // segment, so this layer's voxels go to no block and must not widen its extent. Without this,
+    // a segment split across two layers had segmentExtents silently cover BOTH — which both
+    // over-sized the owning block and made the data-loss check below unable to see the loss.
+    if (ownerLayerForSegment.get(only) !== layerIndex) continue;
     const flags = layerSliceHasSegment[layerIndex];
     for (let z = 0; z < flags.length; z++) {
       if (flags[z]) noteSlice(only, z);
@@ -209,7 +232,9 @@ export async function buildOverlappingSegLayers({
         for (let i = 0; i < sourceData.length; i++) {
           const value = sourceData[i] as number;
           // The `has` guard mirrors Pass B's skip: a segment already owned by an earlier layer
-          // keeps that layer's block, so this layer's voxels must not widen its extent.
+          // keeps that layer's block, so this layer's voxels must not widen its extent. Equivalent
+          // to the pre-pass's ownerLayerForSegment test — blocksBySegment holds exactly the
+          // segments claimed by layers before this one.
           if (value !== 0 && !blocksBySegment.has(value)) {
             noteSlice(value, z);
           }
@@ -313,7 +338,12 @@ export async function buildOverlappingSegLayers({
     // the reference list from each block image's own referencedImageId (order-safe); fall back to
     // the block's OWN display slice range if any is missing. The whole-series list is not a legal
     // substitute for a cropped block — it would pair block slice 0 with display slice 0 and render
-    // the mask at the wrong depth. Both the length test and the fallback are therefore per-block.
+    // the mask at the wrong depth, so the fallback is per-block.
+    //
+    // Only `refIds.every(Boolean)` does any work here: `refIds` is `blockImages.map(...)` on the
+    // line above, so the length comparison against `blockImages` is a tautology. It is kept purely
+    // to mirror `refIdsFor` in the AI path (commandsModule), where the two arrays have independent
+    // origins and the length test is real — do not read it as a per-block length check.
     const refIds = blockImages.map(image => image.referencedImageId);
     const referencedImageIds =
       refIds.length === blockImages.length && refIds.every(Boolean)
@@ -352,10 +382,15 @@ export async function buildOverlappingSegLayers({
 
     // Permanent data-loss check: kept while everything around it was removed because it is the only
     // check that can detect dropped voxels. Any check that measures the assembled block agrees with
-    // it even when the block is missing data — sourceExtents is recorded before the blocksBySegment
-    // ownership guard, so it captures what the source contained, not what was kept.
-    // A segment present in multiple layers has its voxels from the second layer written to no block
-    // (the ownership guard skips them), so its mask renders cut off in z.
+    // it even when the block is missing data — sourceExtents is recorded before ANY ownership
+    // guard, so it captures what the source contained, while segmentExtents records only the
+    // OWNING layer, i.e. what was kept. The two diverge exactly when voxels are lost.
+    // A segment present in multiple layers has its voxels from every layer after the first written
+    // to no block, so its mask renders cut off in z.
+    // This fires for all three orderings — single+single, packed-then-single, single-then-packed —
+    // because both the packed Pass A guard and the single-segment pre-pass now apply the same
+    // first-layer ownership rule. (It still cannot see voxels lost INSIDE the owning layer's
+    // z-range, which no extent comparison can; nothing in the assembly drops those.)
     const se = sourceExtents.get(segmentIndex);
     const be = segmentExtents.get(segmentIndex);
     if (se && be && be.lo >= 0 && (se.lo < be.lo || se.hi > be.hi)) {

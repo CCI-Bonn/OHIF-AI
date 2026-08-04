@@ -589,6 +589,11 @@ class SegmentationService extends PubSubService {
               // AI multi-block scheme, where allImageIds.length > imageIds.length).
               imageIds: overlappingLayers.primaryImageIds,
               allImageIds: overlappingLayers.allImageIds,
+              // DEAD as written: syncLegacyLabelmapData overwrites both this and `imageIds` above
+              // with the PRIMARY LAYER's own values on every entry into state, so no reader ever
+              // sees the whole-series list here. Kept only to mirror the AI producer's shape
+              // (commandsModule, buildMultiBlockLabelmapRepresentation) — `allReferencedImageIds`
+              // is the field readers must use, and it is named so the adapter leaves it alone.
               referencedImageIds: imageIds as string[],
               allReferencedImageIds: imageIds as string[],
               labelmaps: overlappingLayers.labelmaps,
