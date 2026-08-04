@@ -1871,6 +1871,59 @@ const commandsModule = ({
             }
             merged_derivedImages = derivedImages_new
           } else {
+            // REFUSE TO WRITE INTO A SPARSE (multi-block, z-cropped) REPRESENTATION.
+            //
+            // The loop below is FLAT: it walks `segImageIds` — the concatenation of EVERY block —
+            // and indexes it with FULL-SERIES slice numbers, because the server's buffer holds one
+            // mask slice per series slice. That is only well defined while every block spans the
+            // whole series, which was true until blocks became z-cropped. It is no longer true for
+            // a reloaded DICOM-SEG, whose blocks cover only the slices their mask touches.
+            //
+            // With a z-cropped block the same loop silently corrupts three ways:
+            //   1. image k of a block starting at z0 is display slice z0 + k, so the mask lands at
+            //      the wrong depth;
+            //   2. once i runs past the first block's length it keeps going into the NEXT segments'
+            //      blocks and stamps `segmentNumber` into them;
+            //   3. the `!getRefineNew()` clear pass below zeroes `segmentNumber` across that same
+            //      flat list first, so the original is destroyed before the bad write.
+            // None of it is visible on screen: generateSegmentation scans raw pixelData for
+            // non-zero values and maps them by referencedImageId, so the strays reach the export.
+            //
+            // Making this handler block-aware is a separate piece of work (nnInteractive's path
+            // already is). Until then it declines rather than corrupts. Falling through to the
+            // fresh full-series allocation above is NOT an option: that path emits a single
+            // full-series block holding only this segment, and buildMultiBlockLabelmapRepresentation
+            // would then bind EVERY segment to it — dropping the other segments' blocks from the
+            // representation entirely. That trades one silent corruption for another.
+            //
+            // `existingBlocks` is the describeBlocks result captured when the existing segmentation
+            // was matched, reused here so the layout is read exactly once.
+            const _srcLen = imageIds.length;
+            const _sparseExisting =
+              _srcLen > 0 &&
+              (existingBlocks.some(b => b.imageIds.length !== _srcLen) ||
+                // No block list at all (a legacy representation describeBlocks could not divide):
+                // sparse iff the flat list is not a whole number of full-series layers.
+                (existingBlocks.length === 0 && segImageIds.length % _srcLen !== 0));
+            if (_sparseExisting) {
+              console.error(
+                `[sam2] refusing to write: segmentation "${segmentationId}" has per-segment ` +
+                `labelmap blocks (${existingBlocks.length} block(s), lengths ` +
+                `[${existingBlocks.map(b => b.imageIds.length).join(', ')}] against a ` +
+                `${_srcLen}-slice series). This handler writes the flat image list using ` +
+                `full-series indices, which would offset the mask and overwrite other segments.`
+              );
+              uiNotificationService.show({
+                title: 'SAM2',
+                message:
+                  'SAM2 cannot refine this segmentation: it was loaded from a DICOM-SEG and stores ' +
+                  'each segment in its own labelmap block. Use nnInteractive for this series, or ' +
+                  'start a new segmentation.',
+                type: 'error',
+                duration: 6000,
+              });
+              return;
+            }
             merged_derivedImages = segImageIds.map(imageId => cache.getImage(imageId));
             if(flipped){
               merged_derivedImages.reverse();
