@@ -75,6 +75,21 @@ export async function buildOverlappingSegLayers({
 
   // Scan each layer once: which segments it holds, and the first segmented slice
   // in adapter (layer-major) order — parity with the legacy hydration loop.
+  // TEMPORARY (diagnostic, strip before merge): each segment's TRUE extent across ALL layers,
+  // recorded before any blocksBySegment ownership guard. Comparing this against the assembled
+  // block's extent detects DROPPED VOXELS -- which the extent/cheap check cannot, because both of
+  // those measure the block we built, so they agree even when the block is missing data.
+  const sourceExtents = new Map<number, { lo: number; hi: number }>();
+  const noteSourceSlice = (segmentIndex: number, z: number) => {
+    const e = sourceExtents.get(segmentIndex);
+    if (!e) {
+      sourceExtents.set(segmentIndex, { lo: z, hi: z });
+      return;
+    }
+    if (z < e.lo) e.lo = z;
+    if (z > e.hi) e.hi = z;
+  };
+
   const layerSegmentSets: Set<number>[] = [];
   let firstSegmentedSliceImageId: string | null = null;
   // Per layer, per slice: whether the slice holds any segment voxels. Lets the
@@ -98,6 +113,7 @@ export async function buildOverlappingSegLayers({
         if (value !== 0) {
           layerSegments.add(value);
           sliceHasSegment = true;
+          noteSourceSlice(value, z);
         }
       }
       sliceHasSegmentFlags[z] = sliceHasSegment;
@@ -386,6 +402,13 @@ export async function buildOverlappingSegLayers({
         `seg=${segmentIndex} len=${blockImages.length}/${sliceCount} z0=${range.z0} ` +
         `srcIdx first=${firstSrc} last=${lastSrc} order=${order} ` +
         `extent=[${dLo}..${dHi}] (${lo < 0 ? 0 : hi - lo + 1} slices) ` +
+        `src=[${sourceExtents.get(segmentIndex)?.lo ?? -1}..${sourceExtents.get(segmentIndex)?.hi ?? -1}]` +
+        `${(() => {
+          const se = sourceExtents.get(segmentIndex);
+          const be = segmentExtents.get(segmentIndex);
+          if (!se || !be || be.lo < 0) return '';
+          return se.lo < be.lo || se.hi > be.hi ? ' *** VOXELS DROPPED ***' : '';
+        })()} ` +
         `cheap=[${segmentExtents.get(segmentIndex)?.lo}..${segmentExtents.get(segmentIndex)?.hi}]` +
         `${segmentExtents.get(segmentIndex)?.lo === dLo && segmentExtents.get(segmentIndex)?.hi === dHi ? '' : ' *** EXTENT MISMATCH ***'} ` +
         `source=${blocksBySegment.has(segmentIndex) ? 'layer-or-split' : 'empty-fabricated'}`
