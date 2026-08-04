@@ -446,10 +446,55 @@ class SegmentationService extends PubSubService {
     // refine flow's block-index assumptions hold for reloaded SEGs. Covers both
     // multi-layer (overlapping) SEGs and a single layer packing multiple segments;
     // only a single layer holding exactly segment 1 keeps the legacy path.
+    // Does cornerstone's SORTED volume order match the source series' display order? This decides
+    // whether a SEG block's array index equals its volume z index.
+    //
+    // Derivation, from sortImageIdsAndGetSpacing (two negations that cancel):
+    //   1. its distance metric is an INVERTED subtraction — getDistance(id) = (ref - pos)·axis,
+    //      where `ref` is the position of imageIds[0], NOT (pos - ref)·axis;
+    //   2. it then sorts DESCENDING by that value.
+    // Descending in (ref - pos)·axis is ASCENDING in pos·axis. So cornerstone's sorted (working)
+    // order always runs from lowest to highest projection onto the scan axis, whatever the source
+    // series order was. (Exact for the full sort; the wadouri branch only reverses on a
+    // first-vs-middle probe, so it lands ascending for any MONOTONIC series -- which is also the
+    // assumption `_d` itself makes by sampling only the first and last slice.)
+    // Display order therefore matches sorted order exactly when the
+    // display-ordered series is itself ASCENDING in pos·axis, i.e. when the last slice projects
+    // FURTHER ALONG the axis than the first: (p_last - p_first)·axis > 0.
+    //
+    // Measured here rather than taken from the server's `flipped` flag, whose semantics differ.
+    // null (metadata unavailable) means "unknown" and forces the full-length, unreversed fallback
+    // in segmentBlockRange.
+    let _sortedMatchesDisplay: boolean | null = null;
+    try {
+      const _ids = imageIds as string[];
+      const _pm0 = metaData.get('imagePlaneModule', _ids[0]);
+      const _pmN = metaData.get('imagePlaneModule', _ids[_ids.length - 1]);
+      const _row = _pm0?.rowCosines;
+      const _col = _pm0?.columnCosines;
+      if (_row && _col && _pm0?.imagePositionPatient && _pmN?.imagePositionPatient) {
+        const _axis = [
+          _row[1] * _col[2] - _row[2] * _col[1],
+          _row[2] * _col[0] - _row[0] * _col[2],
+          _row[0] * _col[1] - _row[1] * _col[0],
+        ];
+        const _p0 = _pm0.imagePositionPatient;
+        const _pN = _pmN.imagePositionPatient;
+        const _d =
+          (_pN[0] - _p0[0]) * _axis[0] + (_pN[1] - _p0[1]) * _axis[1] + (_pN[2] - _p0[2]) * _axis[2];
+        // Sorted order is ascending in pos·axis (see derivation above), so display order already
+        // matches it when the series' own last slice sits FURTHER ALONG the axis than its first.
+        _sortedMatchesDisplay = _d > 0;
+      }
+    } catch {
+      /* diagnostic only */
+    }
+
     const overlappingLayers = await buildOverlappingSegLayers({
       segmentationId,
       labelMapImages,
       sourceImageIds: imageIds as string[],
+      sortedMatchesDisplay: _sortedMatchesDisplay,
       segmentIndices: (segDisplaySet.segMetadata?.data ?? [])
         .map(data => Number(data?.SegmentNumber))
         .filter(index => Number.isFinite(index) && index > 0),
@@ -547,11 +592,17 @@ class SegmentationService extends PubSubService {
               // AI multi-block scheme, where allImageIds.length > imageIds.length).
               imageIds: overlappingLayers.primaryImageIds,
               allImageIds: overlappingLayers.allImageIds,
+              // DEAD as written: syncLegacyLabelmapData overwrites both this and `imageIds` above
+              // with the PRIMARY LAYER's own values on every entry into state, so no reader ever
+              // sees the whole-series list here. Kept only to mirror the AI producer's shape
+              // (commandsModule, buildMultiBlockLabelmapRepresentation) — `allReferencedImageIds`
+              // is the field readers must use, and it is named so the adapter leaves it alone.
               referencedImageIds: imageIds as string[],
               allReferencedImageIds: imageIds as string[],
               labelmaps: overlappingLayers.labelmaps,
               segmentBindings: overlappingLayers.segmentBindings,
               primaryLabelmapId: overlappingLayers.primaryLabelmapId,
+              blocks: overlappingLayers.blocks,
               sourceRepresentationName: 'binaryLabelmap',
             } as unknown as cstTypes.LabelmapSegmentationData)
           : {

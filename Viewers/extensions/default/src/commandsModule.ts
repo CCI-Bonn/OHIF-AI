@@ -459,6 +459,17 @@ const commandsModule = ({
   /** Apply (and clear) deferred image writes so the block's images match what MPR already shows. */
   function materializePendingImageSync(segmentationId?: string) {
     const keys = segmentationId ? [segmentationId] : Array.from(_pendingImageSync.keys());
+    // TEMPORARY (diagnostic, strip before merge): a deferred refine write is queued under the
+    // segmentationId that produced it and looked up by the id the caller passes. A mismatch finds
+    // nothing and returns in silence -- the refine stays only in the MPR volume, so it renders
+    // correctly and is then absent from any DICOM-SEG export, which reads the stack images.
+    if (segmentationId && !_pendingImageSync.get(segmentationId)?.size && _pendingImageSync.size) {
+      console.error(
+        `Deferred segmentation writes were NOT applied: asked for "${segmentationId}", but the ` +
+        `pending queue holds [${Array.from(_pendingImageSync.keys()).join(', ')}]. ` +
+        `Those refines exist in the rendered volume only and will be missing from an export.`
+      );
+    }
     for (const segId of keys) {
       const bySegment = _pendingImageSync.get(segId);
       if (!bySegment?.size) continue;
@@ -471,11 +482,18 @@ const commandsModule = ({
           const sd = vm.getScalarData();
           for (let j = 0; j < sd.length; j++) if (sd[j] === p.segmentNumber) sd[j] = 0;
         }
+        // A deferred refine write that lands outside its block, or on an image no longer cached,
+        // used to be dropped by a bare `continue`. That is invisible on screen -- the MPR volume is
+        // written separately and immediately -- but the stack images are what DICOM-SEG export
+        // reads, so the refine silently fails to persist and the segment exports cut off at the
+        // block boundary. Count both and report, so the failure is attributable instead of mute.
+        let _skippedOutOfRange = 0;
+        let _skippedUncached = 0;
         for (let z = p.segZ0; z < p.segZ1; z++) {
           const arrIdx = z - p.z0;
-          if (arrIdx < 0 || arrIdx >= p.blockImageIds.length) continue;
+          if (arrIdx < 0 || arrIdx >= p.blockImageIds.length) { _skippedOutOfRange++; continue; }
           const vm = cache.getImage(p.blockImageIds[arrIdx])?.voxelManager as csTypes.IVoxelManager<number>;
-          if (!vm) continue;
+          if (!vm) { _skippedUncached++; continue; }
           const sd = vm.getScalarData();
           const cropSliceBase = (z - p.segZ0) * p.cropY * p.cropX;
           for (let cy = 0; cy < p.cropY; cy++) {
@@ -485,6 +503,16 @@ const commandsModule = ({
               if (p.cropBytes[srcRow + cx] === 1) sd[dstRow + cx] = p.segmentNumber;
             }
           }
+        }
+        if (_skippedOutOfRange || _skippedUncached) {
+          console.error(
+            `Segmentation write lost for segment ${p.segmentNumber}: ` +
+            `${_skippedOutOfRange} slice(s) fell outside its block ` +
+            `(write range [${p.segZ0}..${p.segZ1}), block z0=${p.z0} len=${p.blockImageIds.length}), ` +
+            `${_skippedUncached} slice(s) had no cached image. ` +
+            `Those pixels are in the rendered volume but NOT in the stack images, so they will be ` +
+            `missing from a DICOM-SEG export and the segment will appear cut off.`
+          );
         }
       }
       _pendingImageSync.delete(segId);
@@ -1717,6 +1745,10 @@ const commandsModule = ({
           let existingSegments: { [segmentIndex: string]: cstTypes.Segment } = {};
             
           let segImageIds = [];
+          // The existing representation's block list, so it can be handed back to
+          // postSegmentationProcessing rather than re-derived by length division. See the
+          // `_sam2Blocks` note at the call site.
+          let existingBlocks: LabelmapBlock[] = [];
 
           let existing = false;
           // Find existing segmentation with matching seriesInstanceUid
@@ -1739,6 +1771,10 @@ const commandsModule = ({
               // allImageIds preserves all blocks; imageIds is reverted to block1 by syncLegacyLabelmapData
               segImageIds = activeSegmentation.representationData.Labelmap.allImageIds
                 ?? activeSegmentation.representationData.Labelmap.imageIds;
+              existingBlocks = describeBlocks(
+                activeSegmentation.representationData.Labelmap,
+                imageIds.length
+              );
               existing = true;
             }
           }
@@ -1885,6 +1921,29 @@ const commandsModule = ({
             }
           };
 
+          // Hand the EXISTING block list back rather than letting buildMultiBlockLabelmapRepresentation
+          // re-derive it as `derivedImageIds.length / imageIds.length`. That division is only exact
+          // when every block spans the whole series. Blocks are z-cropped now (a reloaded SEG's
+          // 9022 slices become ~1504), so the division would cut the flat list into a couple of
+          // bogus full-length layers straddling segment boundaries, drop the real segmentIndex ->
+          // labelmapId mapping, and leave most segments unbound.
+          //
+          // This does NOT make sam2() sparse — its write loop still treats the flat list as one
+          // series, which is a separate pre-existing limitation. It only stops it from DESTROYING a
+          // block list that already exists.
+          //
+          // Guard: only pass blocks that flatten back to exactly the images being submitted. The
+          // two are the same array by construction (merged_derivedImages comes from segImageIds,
+          // and any `flipped` reverse is undone before this point), so a mismatch means something
+          // upstream reshaped the list — in which case fall back to today's length-division
+          // behaviour rather than register a representation whose blocks disagree with its images.
+          const _flatExisting = flattenBlocks(existingBlocks);
+          const _sam2Blocks =
+            _flatExisting.length === derivedImageIds.length &&
+            _flatExisting.every((id, i) => id === derivedImageIds[i])
+              ? existingBlocks
+              : undefined;
+
           // Post-segmentation processing: update representations, handle viewports, trigger events
           await postSegmentationProcessing({
             activeViewportId,
@@ -1899,6 +1958,7 @@ const commandsModule = ({
             activeSegmentation,
             currentImageIdIndex,
             z_range,
+            blocks: _sam2Blocks,
           });
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);

@@ -259,3 +259,50 @@ export function appendBlock(blocks: LabelmapBlock[], block: LabelmapBlock): Labe
 export function withoutBlockAt(blocks: LabelmapBlock[], index: number): LabelmapBlock[] {
   return blocks.filter((_, i) => i !== index);
 }
+
+/**
+ * Where a SEG-reload segment's block should sit, given the segment's extent in DISPLAY space.
+ *
+ * The SEG producer builds blocks indexed by source-series position (display order) and never
+ * reverses. `LabelmapBlock.z0` is a WORKING offset — the cornerstone volume's z index — and those
+ * two spaces diverge exactly when cornerstone's sort is the reverse of display order. This function
+ * is the single place that reconciles them, so no caller has to reason about it.
+ *
+ * `lo`/`hi` are inclusive display indices, or `lo < 0` for a segment with no voxels at all (which
+ * still needs a small block, because block index must stay aligned with segment index).
+ *
+ * Returns a half-open DISPLAY slice range to take from the source, whether to reverse those slices,
+ * and the resulting WORKING offset.
+ */
+export function segmentBlockRange(
+  lo: number,
+  hi: number,
+  sourceCount: number,
+  sortedMatchesDisplay: boolean | null
+): { z0: number; sliceStart: number; sliceEnd: number; reverse: boolean } {
+  // Ordering unknown (metadata unavailable): fall back to today's behaviour — a full-length,
+  // unreversed block. Cropping without knowing the ordering could place the mask at the wrong depth.
+  if (sortedMatchesDisplay === null || sortedMatchesDisplay === undefined) {
+    return { z0: 0, sliceStart: 0, sliceEnd: sourceCount, reverse: false };
+  }
+
+  // An empty segment still needs a block so block index stays aligned with segment index, but it
+  // needs the smallest legal one rather than a full-series slab of zeros. On the measured data this
+  // single case is the dominant waste: four such blocks cost ~728MB on one 694-slice study.
+  const hasExtent = lo >= 0 && hi >= lo;
+  const [c0, c1] = hasExtent
+    ? clampRange(lo, hi + 1, sourceCount, MIN_BLOCK_SLICES)
+    : clampRange(0, MIN_BLOCK_SLICES, sourceCount, MIN_BLOCK_SLICES);
+
+  const [sliceStart, sliceEnd] = hasExtent
+    ? snapRangeToGrid(c0, c1, sourceCount, BLOCK_GRID_SLICES)
+    : [c0, c1];
+
+  // Display -> working. When the sorted volume order is the reverse of display order, the block's
+  // array index 0 must be the slice with the LOWEST volume z, which is the one at display index
+  // sliceEnd - 1. Hence reverse the taken slices, and mirror the offset.
+  const reverse = sortedMatchesDisplay === false;
+  const z0 = reverse ? sourceCount - sliceEnd : sliceStart;
+
+  return { z0, sliceStart, sliceEnd, reverse };
+}
