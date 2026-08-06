@@ -56,6 +56,9 @@ RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/seg
 
 RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/VoxelManager.js
 
+# Sparse-array merge dropped slices when reloading an overlapping DICOM-SEG (see the file's comment)
+RUN rm -rf /usr/src/app/node_modules/@cornerstonejs/adapters/dist/esm/adapters/Cornerstone3D/Segmentation/compactMergeSegData.js
+
 RUN rm -rf /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
 RUN rm -rf /usr/src/app/node_modules/@kitware/vtk.js/Filters/General/ImageMarchingSquares.js
@@ -91,6 +94,7 @@ COPY ./backup/esm/getOrCreateImageVolume.js /usr/src/app/node_modules/@cornersto
 COPY ./backup/esm/utilsForWorker.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/utilsForWorker.js
 COPY ./backup/esm/getStatistics.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getStatistics.js
 COPY ./backup/esm/VoxelManager.js /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/VoxelManager.js
+COPY ./backup/esm/compactMergeSegData.js /usr/src/app/node_modules/@cornerstonejs/adapters/dist/esm/adapters/Cornerstone3D/Segmentation/compactMergeSegData.js
 COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
 COPY ./backup/vtkjs/ImageMarchingSquares.js /usr/src/app/node_modules/@kitware/vtk.js/Filters/General/ImageMarchingSquares.js
