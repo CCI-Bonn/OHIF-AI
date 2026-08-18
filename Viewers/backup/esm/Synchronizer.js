@@ -62,10 +62,16 @@ class Synchronizer {
             return;
         }
         const eventSource = this._eventSource === 'element' ? viewport.element : eventTarget;
-        eventSource.addEventListener(this._eventName, this._onEvent.bind(this));
+        // OHIF-AI LEAK FIX: `this._onEvent.bind(this)` created a NEW function object on every
+        // call, so removeEventListener could never match it. Worse, removeSource() below removed
+        // `this._eventHandler` — a DIFFERENT function entirely (the synchronizer's callback,
+        // not this internal dispatcher). `_onEvent` is already an instance arrow function
+        // (see constructor), so it is stable and the bind was redundant as well as harmful.
+        // MEASURED: +5 SEGMENTATION_REPRESENTATION_MODIFIED listeners per MPR cycle.
+        eventSource.addEventListener(this._eventName, this._onEvent);
         this._auxiliaryEvents.forEach(({ name, source = 'element' }) => {
             const target = source === 'element' ? viewport.element : eventTarget;
-            target.addEventListener(name, this._onEvent.bind(this));
+            target.addEventListener(name, this._onEvent);
         });
         this._updateDisableHandlers();
         this._sourceViewports.push(viewportInfo);
@@ -98,6 +104,23 @@ class Synchronizer {
             eventTarget.removeEventListener(Enums.Events.ELEMENT_DISABLED, this._disableHandler);
             this._disableHandler = null;
         }
+        // OHIF-AI LEAK FIX (part 2). removeSource() only unregisters this._eventHandler when it
+        // can still find the viewport in _sourceViewports AND getEventSource() resolves — at
+        // teardown either can fail (viewport already spliced, rendering engine gone), leaving the
+        // handler attached to the GLOBAL eventTarget. Measured: SynchronizerManager.destroy() was
+        // confirmed to RUN on mode exit (onModeExit fired, destroy called) yet
+        // SEGMENTATION_REPRESENTATION_MODIFIED listeners did not drop — +5 per MPR cycle,
+        // registration site confirmed as Synchronizer.addSource via captured stack traces.
+        // Remove unconditionally; removeEventListener is a no-op if it was already taken off.
+        try {
+            eventTarget.removeEventListener(this._eventName, this._onEvent);
+            (this._auxiliaryEvents || []).forEach(({ name }) => {
+                eventTarget.removeEventListener(name, this._onEvent);
+            });
+        }
+        catch (error) {
+            /* nothing attached */
+        }
     }
     remove(viewportInfo) {
         this.removeTarget(viewportInfo);
@@ -112,12 +135,15 @@ class Synchronizer {
             ? this.getViewportElement(viewportInfo)
             : eventTarget;
         this._sourceViewports.splice(index, 1);
-        eventSource.removeEventListener(this._eventName, this._eventHandler);
+        // OHIF-AI LEAK FIX: was removing `this._eventHandler`, which is NOT what addSource
+        // registered — addSource attaches `this._onEvent`. Removing the wrong function is a
+        // silent no-op, so every source added here leaked its listener.
+        eventSource?.removeEventListener(this._eventName, this._onEvent);
         this._auxiliaryEvents.forEach(({ name, source }) => {
             const target = source === 'element'
                 ? this.getViewportElement(viewportInfo)
                 : eventTarget;
-            target.removeEventListener(name, this._eventHandler);
+            target?.removeEventListener(name, this._onEvent);
         });
         this._updateDisableHandlers();
     }
