@@ -82,6 +82,11 @@ COPY ./backup/esm/OrientationMarkerTool.js /usr/src/app/node_modules/@cornerston
 # listeners could never be removed. ANNOTATION_* used the same ref on both sides and did not leak.
 COPY ./backup/esm/LabelmapEditWithContour.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/segmentation/
 
+# THE ARCHITECTURAL ONE: destroyToolGroup only spliced the group out of an array and never
+# invoked any tool's onSetToolDisabled, so tools that registered on the global eventTarget
+# never cleaned up — and the listeners kept the tool instances alive.
+COPY ./backup/esm/destroyToolGroup.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/store/ToolGroupManager/
+
 # Add annotation from the given indices plus the detail rendering setup for each prompt type
 COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
