@@ -20,6 +20,34 @@ function _stablePromiseRemovedHandler(element) {
     }
     return handler;
 }
+
+// OHIF-AI LEAK FIX (part 2). Making the handler stable is not enough on its own, because
+// nothing ever calls disable(): OHIF tears viewports down wholesale and never invokes
+// per-viewport teardown, so each new viewport element left its listener behind forever
+// (measured +1 per study open/close cycle even after the stable-handler fix).
+// Self-clean instead of depending on a caller: register ONE global ELEMENT_DISABLED listener
+// (once per module, not per element) and drop the element's prefetch registration when
+// cornerstone disables it. Bounded: exactly one extra listener for the app's lifetime.
+let _elementDisabledCleanupRegistered = false;
+function _ensureElementDisabledCleanup() {
+    if (_elementDisabledCleanupRegistered) {
+        return;
+    }
+    _elementDisabledCleanupRegistered = true;
+    eventTarget.addEventListener(Enums.Events.ELEMENT_DISABLED, (evt) => {
+        const element = evt?.detail?.element;
+        if (!element || !_promiseRemovedHandlers.has(element)) {
+            return;
+        }
+        try {
+            disable(element);
+        }
+        catch (error) {
+            // teardown hygiene must never break element disposal
+            console.debug('stackContextPrefetch self-cleanup failed', error);
+        }
+    });
+}
 let configuration = {
     maxImagesToPrefetch: Infinity,
     minBefore: 2,
@@ -44,6 +72,7 @@ const enable = (element, priority = 0) => {
     prefetch(element, priority);
     element.removeEventListener(Enums.Events.STACK_NEW_IMAGE, onImageUpdated);
     element.addEventListener(Enums.Events.STACK_NEW_IMAGE, onImageUpdated);
+    _ensureElementDisabledCleanup();
     const promiseRemovedHandler = _stablePromiseRemovedHandler(element);
     eventTarget.removeEventListener(Enums.Events.IMAGE_CACHE_IMAGE_REMOVED, promiseRemovedHandler);
     eventTarget.addEventListener(Enums.Events.IMAGE_CACHE_IMAGE_REMOVED, promiseRemovedHandler);
