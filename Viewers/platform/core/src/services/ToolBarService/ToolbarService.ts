@@ -67,12 +67,33 @@ export default class ToolbarService extends PubSubService {
   }
 
   public reset(): void {
-    // this.unsubscriptions.forEach(unsub => unsub());
+    // LEAK FIX: this cleanup used to be commented out, and `_serviceSubscriptions` was a
+    // write-only array (pushed in registerEventForToolbarUpdate, never drained). reset() runs
+    // on every mode enter, and onModeEnter re-registers TOOL_ACTIVATED on the GLOBAL cornerstone
+    // eventTarget — so every study open added another listener that nothing ever removed.
+    // MEASURED: +1 CORNERSTONE_TOOLS_TOOL_ACTIVATED listener per open/close cycle, monotonic,
+    // each a distinct closure. Now safe to run because the addEventListener branch above
+    // returns a real unsubscribe instead of undefined (calling those undefined entries is what
+    // broke this originally).
+    const drain = list => {
+      list.forEach(unsub => {
+        if (typeof unsub === 'function') {
+          try {
+            unsub();
+          } catch (e) {
+            console.warn('ToolbarService: unsubscribe failed', e);
+          }
+        }
+      });
+    };
+    drain(this.unsubscriptions);
+    drain(this._serviceSubscriptions);
     this.state = {
       buttons: {},
       buttonSections: {},
     };
     this.unsubscriptions = [];
+    this._serviceSubscriptions = [];
   }
 
   public onModeEnter(): void {
@@ -105,7 +126,13 @@ export default class ToolbarService extends PubSubService {
       if (service.subscribe) {
         return service.subscribe(event, callback);
       } else if (service.addEventListener) {
-        return service.addEventListener(event, callback);
+        // LEAK FIX: addEventListener returns undefined, unlike subscribe() which returns an
+        // unsubscribe handle. Returning it directly stored `undefined` as the "unsubscription",
+        // so the listener could never be removed — and calling those undefined entries is what
+        // made the cleanup in reset() throw (hence it being commented out). Return a real
+        // closure over the SAME callback reference so removeEventListener can match it.
+        service.addEventListener(event, callback);
+        return () => service.removeEventListener(event, callback);
       }
     });
 

@@ -66,6 +66,12 @@ RUN rm -rf /usr/src/app/node_modules/@kitware/vtk.js/Filters/General/ImageMarchi
 # To change color of negative prompts
 COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/base/
 
+# Listener-leak fix: _updateDisableHandlers built a FRESH closure each call, so its
+# removeEventListener never matched and every synchronizer lifecycle event added another
+# ELEMENT_DISABLED listener to the global eventTarget (measured +3 per study open/close
+# cycle, monotonic, never reclaimed). Also fixes destroy() iterating arrays it splices.
+COPY ./backup/esm/Synchronizer.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/store/SynchronizerManager/
+
 # Add annotation from the given indices plus the detail rendering setup for each prompt type
 COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
