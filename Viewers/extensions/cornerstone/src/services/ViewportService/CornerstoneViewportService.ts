@@ -189,6 +189,22 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
    * @param viewportId - The viewportId to disable
    */
   public disableElement(viewportId: string): void {
+    // LEAK FIX: stackContextPrefetch.enable(element) is called when a stack viewport's
+    // images load (see _setStackViewport), and it registers an IMAGE_CACHE_IMAGE_REMOVED
+    // listener on the GLOBAL cornerstone eventTarget keyed to that element. Nothing in OHIF
+    // ever called the matching disable(), so every viewport teardown left its listener
+    // behind — measured +1 per study open/close cycle, monotonic, never reclaimed.
+    // Must run BEFORE renderingEngine.disableElement(), which destroys the element we need.
+    try {
+      const element = this.renderingEngine?.getViewport(viewportId)?.element;
+      if (element) {
+        csToolsUtils.stackContextPrefetch.disable(element);
+      }
+    } catch (e) {
+      // never let telemetry/teardown hygiene break viewport disposal
+      console.debug('stackContextPrefetch.disable skipped', e);
+    }
+
     this.renderingEngine?.disableElement(viewportId);
 
     // clean up

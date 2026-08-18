@@ -72,6 +72,16 @@ COPY ./backup/esm/AnnotationTool.js /usr/src/app/node_modules/@cornerstonejs/too
 # cycle, monotonic, never reclaimed). Also fixes destroy() iterating arrays it splices.
 COPY ./backup/esm/Synchronizer.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/store/SynchronizerManager/
 
+# Same listener-leak family: both passed a FRESH function to removeEventListener, which can
+# never match, so every enable/subscribe added another global eventTarget listener.
+COPY ./backup/esm/stackContextPrefetch.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/stackPrefetch/
+COPY ./backup/esm/OrientationMarkerTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/
+
+# cleanUpListeners removed with `.bind(this)` (a NEW function) while initializeListeners added
+# the stored *Binded refs — so TOOLGROUP_VIEWPORT_ADDED and SEGMENTATION_REPRESENTATION_MODIFIED
+# listeners could never be removed. ANNOTATION_* used the same ref on both sides and did not leak.
+COPY ./backup/esm/LabelmapEditWithContour.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/segmentation/
+
 # Add annotation from the given indices plus the detail rendering setup for each prompt type
 COPY ./backup/esm/ProbeTool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
 COPY ./backup/esm/RectangleROITool.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/tools/annotation/
