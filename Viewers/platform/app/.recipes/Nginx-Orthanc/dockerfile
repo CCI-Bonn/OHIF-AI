@@ -95,6 +95,11 @@ COPY ./backup/esm/utilsForWorker.js /usr/src/app/node_modules/@cornerstonejs/too
 COPY ./backup/esm/getStatistics.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/utilities/segmentation/getStatistics.js
 COPY ./backup/esm/VoxelManager.js /usr/src/app/node_modules/@cornerstonejs/core/dist/esm/utilities/VoxelManager.js
 COPY ./backup/esm/compactMergeSegData.js /usr/src/app/node_modules/@cornerstonejs/adapters/dist/esm/adapters/Cornerstone3D/Segmentation/compactMergeSegData.js
+
+# Guard cornerstone's POSITIONAL labelmap fallback: it indexes a layer by the viewport's slice
+# index, which is only valid when the layer spans the series 1:1. Sparse (z-cropped) blocks are
+# shorter than the stack, so it rendered a second, misplaced copy of a segment.
+COPY ./backup/esm/labelmapImageReferenceResolver.js /usr/src/app/node_modules/@cornerstonejs/tools/dist/esm/stateManagement/segmentation/labelmapModel/labelmapImageReferenceResolver.js
 COPY ./backup/dcmjs/dcmjs.es.js /usr/src/app/node_modules/dcmjs/build/dcmjs.es.js
 
 COPY ./backup/vtkjs/ImageMarchingSquares.js /usr/src/app/node_modules/@kitware/vtk.js/Filters/General/ImageMarchingSquares.js
