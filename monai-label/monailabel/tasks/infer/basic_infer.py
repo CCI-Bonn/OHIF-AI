@@ -129,16 +129,42 @@ MODEL_NAME = "nnInteractive_v1.0"  # Updated models may be available in the futu
 DOWNLOAD_DIR = "/code/checkpoints"  # Specify the download directory
 
 
+def _nninter_artifacts_present(model_dir):
+    """True when model_dir holds the metadata nnInteractive needs to load a model.
+
+    Checked explicitly because `local_files_only=True` CANNOT be used as a
+    completeness test: huggingface_hub >= 0.36 RETURNS an existing local_dir
+    unchanged when the hub is unreachable ("Returning existing local_dir ... as
+    remote repo cannot be accessed"), even if the snapshot inside it is empty or
+    half-written.
+    """
+    return any(
+        os.path.isfile(os.path.join(model_dir, name))
+        for name in ("inference_info.json", "inference_session_class.json")
+    )
+
+
 def _snapshot_download_cached(**kwargs):
     """snapshot_download that skips the HF Hub network round-trip when the model
     files are already present locally. The weights live in the checkpoints volume,
     so the steady-state case is a cache hit; local_files_only avoids the (~0.5-2s)
-    hub metadata check on every boot. Falls back to a real network fetch on a cold
-    cache (fresh machine)."""
-    try:
-        return snapshot_download(local_files_only=True, **kwargs)
-    except Exception:
-        return snapshot_download(**kwargs)
+    hub metadata check on every boot.
+
+    The offline fast path is taken ONLY when the artifacts are verifiably on disk.
+    Trusting local_files_only alone made an interrupted first download permanent:
+    the aborted fetch leaves an incomplete <local_dir>/<MODEL_NAME>/, every later
+    boot then "succeeded" offline against that directory, the real download was
+    never retried, and the failure surfaced much later as a FileNotFoundError from
+    nnInteractive naming a file nothing had ever tried to fetch.
+    """
+    local_dir = kwargs.get("local_dir")
+    model_dir = os.path.join(local_dir, MODEL_NAME) if local_dir else None
+    if model_dir and _nninter_artifacts_present(model_dir):
+        try:
+            return snapshot_download(local_files_only=True, **kwargs)
+        except Exception:
+            pass  # fall through to a real fetch rather than fail on a stale cache
+    return snapshot_download(**kwargs)
 
 
 download_path = _snapshot_download_cached(
