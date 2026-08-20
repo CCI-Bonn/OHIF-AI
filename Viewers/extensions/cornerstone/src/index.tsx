@@ -135,6 +135,25 @@ const cornerstoneExtension: Types.Extensions.Extension = {
 
     cineService.setIsCineEnabled(false);
 
+    // LEAK FIX: stackContextPrefetch.enable(element) registers an IMAGE_CACHE_IMAGE_REMOVED
+    // listener on the GLOBAL cornerstone eventTarget, one per viewport element, and nothing in
+    // OHIF ever called its disable(). Mode exit tears down wholesale (enabledElementReset below
+    // drops the elements) without invoking any per-viewport teardown, so every study open left
+    // another listener behind — measured +1 per open/close cycle, monotonic, never reclaimed.
+    // Must run BEFORE enabledElementReset(), which is what makes the elements unreachable.
+    try {
+      const { cornerstoneViewportService } = servicesManager.services;
+      const renderingEngine = cornerstoneViewportService?.getRenderingEngine?.();
+      renderingEngine?.getViewports?.().forEach(viewport => {
+        if (viewport?.element) {
+          cornerstoneTools.utilities.stackContextPrefetch.disable(viewport.element);
+        }
+      });
+    } catch (error) {
+      // teardown hygiene must never break mode exit
+      console.debug('stackContextPrefetch.disable on mode exit skipped', error);
+    }
+
     enabledElementReset();
 
     useLutPresentationStore.getState().clearLutPresentationStore();

@@ -167,6 +167,24 @@ export default class SyncGroupService {
     });
   }
 
+  /**
+   * LEAK FIX: this service had a destroy() but no onModeExit, so it was never invoked —
+   * unlike the sibling ToolGroupService, which does `onModeExit() { this.destroy(); }`.
+   * Synchronizers therefore survived every mode exit, and each Synchronizer.addSource()
+   * registers `this._eventHandler` for its configured event on the GLOBAL cornerstone
+   * eventTarget. Only removeSource() takes it back off, and that is reached solely via
+   * destroy(). onModeExit's `clearSynchronizersStore()` clears a zustand store, NOT
+   * cornerstone's SynchronizerManager, so nothing ever unregistered them.
+   *
+   * MEASURED: +5 SEGMENTATION_REPRESENTATION_MODIFIED listeners per study open/close cycle
+   * when MPR is toggled (one per synchronizer source), monotonic and never reclaimed.
+   * Registration site confirmed by capturing stack traces at addEventListener:
+   *   [5x] Synchronizer.addSource <- Synchronizer.add
+   */
+  public onModeExit(): void {
+    this.destroy();
+  }
+
   public destroy(): void {
     SynchronizerManager.destroy();
   }

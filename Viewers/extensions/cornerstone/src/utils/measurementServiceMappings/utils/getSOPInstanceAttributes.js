@@ -38,6 +38,24 @@ export default function getSOPInstanceAttributes(imageId, displaySetService, ann
 function _getUIDFromImageID(imageId) {
   const instance = cornerstone.metaData.get('instance', imageId);
 
+  // `metaData.get` returns undefined when the referenced image's metadata is no longer
+  // registered — e.g. an annotation event fires for a study whose metadata has already been
+  // torn down. Reading through it threw
+  //   "Cannot read properties of undefined (reading 'SOPInstanceUID')"
+  // which MeasurementService catches, logs as "Failed to map", and then RETHROWS from inside
+  // an event dispatch — aborting the remaining listeners for that annotation event.
+  // Returning undefined UIDs is the contract this function already uses for its other
+  // unresolvable case (the no-volumeId branch above), and the caller in SegmentBidirectional
+  // already guards with `if (SOPInstanceUID)`.
+  if (!instance) {
+    return {
+      SOPInstanceUID: undefined,
+      SeriesInstanceUID: undefined,
+      StudyInstanceUID: undefined,
+      frameNumber: 1,
+    };
+  }
+
   return {
     SOPInstanceUID: instance.SOPInstanceUID,
     SeriesInstanceUID: instance.SeriesInstanceUID,
