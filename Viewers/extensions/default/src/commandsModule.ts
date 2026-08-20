@@ -3360,6 +3360,17 @@ const commandsModule = ({
         return;
       }
       const _perfT0 = performance.now();
+      // Per-stage breakdown emitted as extras on the final 'nninter' measure, so one
+      // dump() record answers "which stage is the bottleneck". Collection is a couple
+      // of performance.now() calls per stage; the record itself is dropped by the
+      // no-op measure() when perf is disabled.
+      const _pfStages: Record<string, number> = {};
+      let _pfLast = _perfT0;
+      const _pfStage = (name: string) => {
+        const now = performance.now();
+        _pfStages[name] = Math.round((now - _pfLast) * 10) / 10;
+        _pfLast = now;
+      };
       if (!beginInferenceRunOrQueue()) {
         return;
       }
@@ -3513,6 +3524,7 @@ const commandsModule = ({
         document.dispatchEvent(new Event('measurement-state-changed'));
       }
 
+      _pfStage('prepMs'); // viewport state, segment numbering, prompt collection
       let nninterToken = '';
       try {
         nninterToken = await getNninterToken();
@@ -3521,6 +3533,7 @@ const commandsModule = ({
         // tokenless; the infer call surfaces its own error/expired handling.
         console.warn('nninter session claim failed; proceeding without token', e);
       }
+      _pfStage('tokenMs'); // session-claim round trip (cached claim is ~0)
       let url = `/monai/infer/segmentation?image=${currentDisplaySets.SeriesInstanceUID}&output=dicom_seg`;
       let params = {
         largest_cc: false,
@@ -3576,9 +3589,11 @@ const commandsModule = ({
       try {
         // Process the response
         const response = await segmentationPromise;
+        _pfStage('requestMs'); // upload + server queue/compute + response download
         if (response.status === 200) {
             const ct = response.headers["content-type"] as string;
             const { meta, seg } = await parseMultipart(response.data, ct, { allowEmptySeg: true });
+            _pfStage('parseMs'); // multipart split of the response body
             // Server-side session was evicted/timed out. Reclaim, re-init, and
             // re-run: measurements still hold the full prompt history, and the
             // server replays any prompts it hasn't seen (one GPU prediction).
@@ -3614,6 +3629,13 @@ const commandsModule = ({
 
             const flipped = meta.flipped.toLowerCase() === "true"
             const nninter_elapsed = meta.nninter_elapsed
+            {
+              // Server-reported wall time for its nninter block, in seconds
+              // (basic_infer.py: time.time() - start). requestMs - serverMs is
+              // then the network + proxy + FastAPI overhead. -1 = not reported.
+              const _sv = parseFloat(nninter_elapsed as any);
+              _pfStages.serverMs = Number.isFinite(_sv) ? Math.round(_sv * 1000) : -1;
+            }
             const prompt_info = meta.prompt_info
             const label_name = meta.label_name
             const raw = seg
@@ -3863,6 +3885,7 @@ const commandsModule = ({
             // Fresh block: its own start is the SNAPPED lower bound, matching the images just cut.
             _newBlockZ0 = _aw0;
           }
+          _pfStage('allocMs'); // context refresh + block decision + derived-image creation
 
           if (_reuseIdx >= 0) {
             // Volume-only path: derive z_range straight from the crop bytes (which slices actually
@@ -3979,6 +4002,7 @@ const commandsModule = ({
               }
             }
           }
+          _pfStage('writeMs'); // crop -> labelmap slice writes + in-place MPR volume update
 
           // The refined segment's block is REPLACED in the list (keeping its position, so no other
           // segment is renumbered); a new segment APPENDS one. This used to be done by slicing the
@@ -4205,13 +4229,39 @@ const commandsModule = ({
             mprInPlaceDone: _mprInPlaceDone,
             blocks: _nextBlocks,
           });
+          _pfStage('postProcMs'); // representation swap, remount (when not in-place), render
           // Evict the orphaned old block now that the representation swap + volume rebuild are
           // done and nothing references these imageIds. Caps the ~84MB/refine cache growth that
           // was inflating the MPR remount and causing GC-pause spikes across the other legs.
           for (const _oid of _orphanedImageIds) {
             try { cache.removeImageLoadObject(_oid, { force: true }); } catch { /* already gone */ }
           }
-          perf.measure('nninter', _perfT0);
+          _pfStage('evictMs'); // orphaned-block cache eviction
+          // Browser-level transport split for THIS click's POST (same-origin, so full
+          // timing is exposed; buffer sizing in perfTraceBrowser). connectMs > 0 means a
+          // NEW TCP connection was opened (expected ~0 on a warmed keep-alive pool);
+          // stalledMs = browser queueing before send; ttfbMs = request sent -> first
+          // response byte (≈ upload + RTT + server wall, and serverMs is known);
+          // downloadMs = pure body transfer — the congestion-window probe: shrinking
+          // across a burst = cwnd warming, flat = the idle-restart theory is wrong.
+          try {
+            const _rt = (performance.getEntriesByType('resource') as PerformanceResourceTiming[])
+              .filter(e => e.name.includes('/monai/infer/segmentation') && e.startTime >= _perfT0)
+              .pop();
+            _pfStages.connectMs = _rt ? Math.round((_rt.connectEnd - _rt.connectStart) * 10) / 10 : -1;
+            _pfStages.stalledMs = _rt ? Math.round((_rt.requestStart - _rt.startTime) * 10) / 10 : -1;
+            _pfStages.ttfbMs = _rt ? Math.round((_rt.responseStart - _rt.requestStart) * 10) / 10 : -1;
+            _pfStages.downloadMs = _rt ? Math.round((_rt.responseEnd - _rt.responseStart) * 10) / 10 : -1;
+          } catch {
+            /* resource timing unavailable — breakdown simply omits the transport split */
+          }
+          // inPlace tells the reader which write path a sample took: 1 = block reuse +
+          // in-place MPR volume write (no remount), 0 = fresh block + remount.
+          _pfStages.inPlace = _mprInPlaceDone ? 1 : 0;
+          if (perf.enabled) {
+            console.log('[perf] nninter breakdown (ms):', _pfStages);
+          }
+          perf.measure('nninter', _perfT0, _pfStages);
           perf.snapshot('afterRefine');
           return response;
         }

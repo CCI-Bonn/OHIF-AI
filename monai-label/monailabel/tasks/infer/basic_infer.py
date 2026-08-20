@@ -238,8 +238,56 @@ _artifact_loader = nnInteractiveInferenceSession(
 _NNINTER_ARTIFACTS = _artifact_loader._load_model_artifacts_from_disk(model_path)
 
 
+class _LowPrioSnapshotSession(nnInteractiveInferenceSession):
+    """nnInteractive session with the undo snapshot made cheaper and polite.
+
+    The stock snapshot LZ4-level-5 compresses the FULL interactions tensor
+    (~2.9GB fp16 on a 694-slice study) right after every prediction. Measured
+    from the browser (ttfb - serverMs with connectMs=0): a click landing inside
+    that window stalled ~330ms before any server timer started. Two mitigations:
+
+    - clevel 5 -> 1: the tensor is mostly zeros, so the compressed size is
+      unchanged (0.4MB either way, measured) while the compress drops 271ms ->
+      80ms — the contention window shrinks ~3.4x.
+    - the compress runs on a dedicated thread niced +10, so request handling
+      outranks it whenever they still contend. Self-nice at thread creation
+      needs no capability; raise-then-restore does NOT work here (restoring
+      needs CAP_SYS_NICE, which Docker's default profile drops — setpriority
+      back to 0 raises EPERM even as in-container root). It must be a SEPARATE
+      executor because the session's own 2-worker pool also runs set_image
+      preprocessing, which is latency-critical and must stay at normal
+      priority. blosc2's internal workers spawn lazily from the calling
+      thread and inherit its niceness.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._snapshot_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="nninter_snapshot",
+            initializer=lambda: os.nice(10),
+        )
+
+    def _blosc2_cparams(self, nthreads=None) -> dict:
+        params = super()._blosc2_cparams(nthreads)
+        params["clevel"] = 1
+        return params
+
+    def _snapshot_state(self) -> dict:
+        # Called either synchronously (first interaction) or on the session's own
+        # executor (async post-predict snapshot). Both simply wait here while the
+        # niced thread does the heavy compress — occupancy is unchanged, and the
+        # separate 1-worker executor cannot deadlock with either caller.
+        return self._snapshot_executor.submit(super()._snapshot_state).result()
+
+    def __del__(self):
+        if hasattr(self, "_snapshot_executor"):
+            self._snapshot_executor.shutdown(wait=False)
+        super().__del__()
+
+
 def _new_nninter_session() -> nnInteractiveInferenceSession:
-    s = nnInteractiveInferenceSession(
+    s = _LowPrioSnapshotSession(
         device=torch.device("cuda:0"),
         use_torch_compile=True,
         verbose=True,
@@ -1349,7 +1397,13 @@ class BasicInferTask(InferTask):
             if op == "init":
                 return "/code/predictions/session_expired.nii.gz", expired_json
             return np.zeros((0, 0, 0), dtype=np.uint8), expired_json
+        _t_lock = time.time()
         with entry.lock:
+            _lock_wait = time.time() - _t_lock
+            if _lock_wait > 0.02:
+                # A prior request (or its tail work) still held this session.
+                # Lands in the client's pre-server gap, so make it visible.
+                logger.info(f"[timing] nninter session lock wait: {_lock_wait:.3f}s")
             return self._call_core(request, callbacks, entry=entry)
 
     def _call_core(
@@ -1422,11 +1476,13 @@ class BasicInferTask(InferTask):
             # Zero-copy view + crop-only copy (same pattern as the normal result path).
             pred = session.target_buffer.numpy()  # (Z, Y, X) uint8, VIEW
             pred_full_shape = list(pred.shape)
-            z_nz = np.where(np.any(pred, axis=(1, 2)))[0]
+            # max-reduce on the z-slab, matching the normal result path (see there for why).
+            z_nz = np.where(pred.max(axis=(1, 2)))[0]
             if z_nz.size > 0:
-                y_nz = np.where(np.any(pred, axis=(0, 2)))[0]
-                x_nz = np.where(np.any(pred, axis=(0, 1)))[0]
                 z0, z1 = int(z_nz[0]), int(z_nz[-1]) + 1
+                _slab = pred[z0:z1]
+                y_nz = np.where(_slab.max(axis=(0, 2)))[0]
+                x_nz = np.where(_slab.max(axis=(0, 1)))[0]
                 y0, y1 = int(y_nz[0]), int(y_nz[-1]) + 1
                 x0, x1 = int(x_nz[0]), int(x_nz[-1]) + 1
                 pred = np.ascontiguousarray(pred[z0:z1, y0:y1, x0:x1])  # copy of crop only
@@ -1465,10 +1521,13 @@ class BasicInferTask(InferTask):
         # Resetting here (before image loading) keeps the same semantics as a
         # separate reset call, but saves ~1.4 s of network overhead on slow links.
         if request.get('nninter_reset_first'):
+            _t_reset = time.time()
             for key, lst in used_interactions.items():
                 lst.clear()
             session.reset_interactions()
-            logger.info("Folded reset before inference")
+            # Runs BEFORE the [timing] windows, so its cost lands in the client's
+            # pre-server gap — log the duration here to keep it accounted for.
+            logger.info(f"[timing] folded reset before inference: {time.time() - _t_reset:.3f}s")
 
         req = copy.deepcopy(self._config)
         req.update(request)
@@ -2496,14 +2555,19 @@ class BasicInferTask(InferTask):
             # Reduces wire bytes and compression time proportionally to segmentation size.
             # Client reconstructs full volume using pred_offset + pred_full_shape from meta.
             pred_full_shape = list(pred.shape)
-            # np.any along axes is ~10x faster than np.nonzero on large sparse arrays
-            # because it short-circuits and reduces 182M elements to three 1-D projections.
-            z_any = np.any(pred, axis=(1, 2))
+            # max-reduce, not np.any: numpy's logical reductions on uint8 are byte-wise
+            # while maximum.reduce is SIMD. Together with slab-restricting the Y/X
+            # projections below this took result_retrieve from 74-104ms to 26-35ms on a
+            # 694x512x512 volume (measured in production, 2026-08).
+            z_any = pred.max(axis=(1, 2))
             z_nz  = np.where(z_any)[0]
             if z_nz.size > 0:
-                y_nz = np.where(np.any(pred, axis=(0, 2)))[0]
-                x_nz = np.where(np.any(pred, axis=(0, 1)))[0]
                 z0, z1 = int(z_nz[0]),  int(z_nz[-1])  + 1
+                # Y/X projections only need the z-slab: any nonzero voxel's z lies in
+                # [z0, z1) by construction, so rows outside it contribute nothing.
+                _slab = pred[z0:z1]
+                y_nz = np.where(_slab.max(axis=(0, 2)))[0]
+                x_nz = np.where(_slab.max(axis=(0, 1)))[0]
                 y0, y1 = int(y_nz[0]),  int(y_nz[-1])  + 1
                 x0, x1 = int(x_nz[0]),  int(x_nz[-1])  + 1
                 pred = np.ascontiguousarray(pred[z0:z1, y0:y1, x0:x1])  # copy of crop only

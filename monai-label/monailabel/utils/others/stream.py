@@ -59,10 +59,16 @@ def stream_multipart(meta: dict, seg_payload: Union[BytesLike, "np.ndarray"]) ->
     """
     Sends a multipart/form-data with:
       - part "meta": application/json, Content-Encoding: gzip
-      - part "seg" : application/octet-stream, sent UNCOMPRESSED
-    The seg is a 0/1 mask crop; on a fast (same-host) link the raw transfer is cheap,
-    whereas gzip made the client pay a DecompressionStream gunzip that scaled with mask
-    size (~180-450ms on large masks). Only the tiny meta part is still gzipped.
+      - part "seg" : application/octet-stream, Content-Encoding: gzip (level 1)
+    The seg is a 0/1 mask crop, which gzips ~150x (1.5MB -> ~20KB): on anything slower
+    than a wired LAN the transfer saving (~400ms measured at ~27Mbps effective) dwarfs
+    the client's ~30ms DecompressionStream cost, and on a gigabit link the delta is
+    within noise. Level 1 keeps the server-side compress at a few ms; on a binary mask
+    its ratio is nearly identical to level 6. (An earlier revision sent the seg RAW
+    because client gunzip measured 180-450ms — that number came from a heap suffering
+    since-fixed GC pressure from full-volume labelmap blocks, and raw only won on the
+    gigabit link it was measured over.) The client's per-part gunzipIfNeeded keys off
+    Content-Encoding, so clients parse either encoding.
     """
     boundary = f"monai-{secrets.token_hex(12)}"
     CRLF = b"\r\n"
@@ -81,6 +87,7 @@ def stream_multipart(meta: dict, seg_payload: Union[BytesLike, "np.ndarray"]) ->
         dash_boundary,
         b'Content-Disposition: form-data; name="seg"; filename="seg.bin"',
         b"Content-Type: application/octet-stream",
+        b"Content-Encoding: gzip",
         b"",
     ]) + CRLF
 
@@ -100,10 +107,10 @@ def stream_multipart(meta: dict, seg_payload: Union[BytesLike, "np.ndarray"]) ->
             yield gz
         yield CRLF  # end of meta body
 
-        # seg part — sent UNCOMPRESSED (no Content-Encoding), so the client skips gunzip.
+        # seg part — gzip level 1 (see docstring for the raw-vs-gzip history).
         yield seg_headers
-        for ch in seg_iter:
-            yield ch.tobytes()
+        for gz in _gzip_stream(seg_iter, level=1):
+            yield gz
         yield CRLF  # end of seg body
 
         # closing boundary
