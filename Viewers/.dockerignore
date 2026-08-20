@@ -9,6 +9,11 @@
 
 # Output
 **/dist/
+
+# EXCEPTION: backup/esm mirrors node_modules/, so every path in it contains dist/.
+# Without this the big COPY below copies NOTHING, the build still SUCCEEDS, and every
+# override silently vanishes from the bundle. Do not remove.
+!backup/esm/**
 **/build/
 
 # Dependencies
