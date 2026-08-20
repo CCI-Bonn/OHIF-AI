@@ -1,0 +1,22 @@
+{
+  "_comment": "Copy to fixture.json and fill in UIDs from YOUR Orthanc. fixture.json is gitignored on purpose: it holds DICOM identifiers from a real archive, and its URLs and tuning are machine-specific.",
+
+  "viewerUrl": "http://localhost:1030",
+  "orthancProxy": "http://localhost:1030/pacs",
+
+  "primaryStudyUID": "REPLACE_WITH_YOUR_STUDY_UID",
+  "primarySeriesUID": "REPLACE_WITH_YOUR_SERIES_UID",
+  "primaryOrthancId": "REPLACE_WITH_YOUR_ORTHANC_ID",
+
+  "switchStudyUIDs": [
+    "REPLACE_WITH_YOUR_STUDY_UID",
+    "REPLACE_WITH_A_SECOND_STUDY_UID",
+    "REPLACE_WITH_A_THIRD_STUDY_UID"
+  ],
+
+  "cycles": 30,
+  "refinesPerCycle": 5,
+
+  "_promptPoints": "Normalised canvas coordinates for the scribble/click prompts. These must land INSIDE the anatomy of your chosen series or inference returns an empty mask; re-tune them for your study.",
+  "promptPoints": [[0.45, 0.55], [0.5, 0.6], [0.55, 0.5], [0.48, 0.52], [0.52, 0.58]]
+}
