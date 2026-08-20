@@ -8,6 +8,11 @@ let selectedModel: 'nnInteractive' | 'sam2' | 'medsam2' | 'sam3' = 'nnInteractiv
 let locked = false;
 let inferenceInFlight = false;
 let pendingInferenceRun = false;
+// AI segmentation readiness: gate AI tools until the client volume stream and the
+// server-side fetch/preprocess (initNninter) are both done for the active series.
+let aiVolumeLoaded = false;
+let aiServerReady = false;
+let aiReadinessSeriesUID: string | null = null;
 let promptsVisible = false; // default: hide prompts after each inference; pencil toggle to always-show
 let currentActiveSegment = 1;
 let medgemmaResult: string | null = null;
@@ -124,6 +129,21 @@ export const toolboxState = {
     pendingInferenceRun = false;
     return pending;
   },
+  getAiVolumeLoaded: () => aiVolumeLoaded,
+  setAiVolumeLoaded: (loaded: boolean) => {
+    aiVolumeLoaded = loaded;
+  },
+  getAiServerReady: () => aiServerReady,
+  setAiServerReady: (ready: boolean) => {
+    aiServerReady = ready;
+  },
+  getAiReadinessSeriesUID: () => aiReadinessSeriesUID,
+  resetAiReadiness: (seriesUID: string | null) => {
+    aiVolumeLoaded = false;
+    aiServerReady = false;
+    aiReadinessSeriesUID = seriesUID;
+  },
+  getAiSegmentationReady: () => aiVolumeLoaded && aiServerReady,
   getCurrentActiveSegment: () => currentActiveSegment,
   setCurrentActiveSegment: (segment: number) => {
     currentActiveSegment = segment;

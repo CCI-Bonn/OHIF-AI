@@ -31,6 +31,8 @@ import colorPickerDialog from './utils/colorPickerDialog';
 
 import promptSaveReport from './utils/promptSaveReport';
 import promptLabelAnnotation from './utils/promptLabelAnnotation';
+import { teardownAiReadiness } from './utils/aiReadiness';
+import { stopAiClientDownload, stopAiVolumeWatch } from './utils/aiReadinessVolumeWatch';
 import usePatientInfo from './hooks/usePatientInfo';
 import { PanelStudyBrowserHeader } from './Panels/StudyBrowser/PanelStudyBrowserHeader';
 import * as utils from './utils';
@@ -45,7 +47,10 @@ const defaultExtension: Types.Extensions.Extension = {
    */
   id,
   preRegistration,
-  onModeExit() {
+  onModeExit({ servicesManager }) {
+    teardownAiReadiness(servicesManager);
+    stopAiClientDownload(servicesManager.services.uiNotificationService);
+    stopAiVolumeWatch();
     useViewportGridStore.getState().clearViewportGridState();
     useUIStateStore.getState().clearUIState();
     useDisplaySetSelectorStore.getState().clearDisplaySetSelectorMap();

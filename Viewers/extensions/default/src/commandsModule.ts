@@ -37,6 +37,15 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
+import {
+  noteAiInitStarted,
+  noteAiInitSuccess,
+  noteAiInitError,
+  ensureAiReadyForInference,
+  isAiWarmupError,
+  startAiServerProgressPolling,
+} from './utils/aiReadiness';
+import { watchAiVolumeReadiness, watchAiClientDownload } from './utils/aiReadinessVolumeWatch';
 import { perf, installPerfHandle, setBlockStatsProvider, leakRetain } from './utils';
 import { summarizeBlocks, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, shouldShrinkBlock, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES, BLOCK_SHRINK_FACTOR } from './utils/labelmapBlocks';
 // Separate: LabelmapBlock is a type, and isolatedModules requires type-only imports be marked so
@@ -1561,6 +1570,9 @@ const commandsModule = ({
     },
 
     async sam2() {
+      if (!ensureAiReadyForInference(servicesManager)) {
+        return;
+      }
       const _perfT0 = performance.now();
       if (!beginInferenceRunOrQueue()) {
         return;
@@ -2110,6 +2122,17 @@ const commandsModule = ({
         toolboxState.setPosNeg(false);
       }
 
+      noteAiInitStarted({
+        seriesUID: currentDisplaySets.SeriesInstanceUID,
+        seriesChanged: _seriesChanged,
+        servicesManager,
+      });
+      watchAiVolumeReadiness({ displaySet: currentDisplaySets, servicesManager });
+      const _seriesImageIds = (currentDisplaySets.images ?? currentDisplaySets.instances ?? [])
+        .map(i => i?.imageId)
+        .filter(Boolean);
+      watchAiClientDownload({ imageIds: _seriesImageIds, servicesManager });
+
       let nninterToken = '';
       try {
         nninterToken = await getNninterToken();
@@ -2130,12 +2153,6 @@ const commandsModule = ({
         nninter_token: nninterToken,
       };
 
-      // Show notification only on the first initNninter for a new series.
-      // _seriesChanged is false for all repeat triggers (other MPR panes loading the
-      // same series, viewport-type switches stack↔volume, active-viewport clicks, etc.)
-      // so a single _seriesChanged gate is sufficient — no need to check viewport type.
-      const _showNotification = _seriesChanged;
-
       let data = MonaiLabelClient.constructFormData(params, null);
 
       // Create the axios promise
@@ -2145,15 +2162,10 @@ const commandsModule = ({
           accept: 'application/json, multipart/form-data',
         },
       });
-
-      if (_showNotification) {
-        uiNotificationService.show({
-          title: 'NNInit',
-          message: 'Initializing nninter...',
-          type: 'info',
-          duration: 3000,
-        });
-      }
+      startAiServerProgressPolling({
+        seriesUID: currentDisplaySets.SeriesInstanceUID,
+        servicesManager,
+      });
 
       try {
         const response = await initPromise;
@@ -2162,53 +2174,51 @@ const commandsModule = ({
           if (_initBody.includes('session_expired')) {
             if (_sessionRetry) {
               console.warn('Init nninter: session expired again after reclaim; giving up');
+              noteAiInitError({
+                error: { message: 'nnInteractive session expired and could not be reclaimed' },
+                seriesUID: currentDisplaySets.SeriesInstanceUID,
+                servicesManager,
+                retry: () => actions.initNninter(options),
+                forceHard: true,
+              });
               return response;
             }
             clearNninterToken();
             await getNninterToken();
             return actions.initNninter(options, true);
           }
-          if (_showNotification) {
-            uiNotificationService.show({
-              title: 'NNInit',
-              message: 'Init nninter - Successful',
-              type: 'success',
-              duration: 3000,
-            });
-          }
+          noteAiInitSuccess({
+            seriesUID: currentDisplaySets.SeriesInstanceUID,
+            servicesManager,
+          });
           return response;
         }
       } catch (error) {
-        // The MONAI server returns 502/503/504 while it is still starting up — that's expected,
-        // not a real failure. Surface it as a warning (and don't rethrow as an error) so the user
-        // isn't alarmed by a red error while the server warms up; it re-inits on next use.
-        const status = error?.response?.status;
-        if (status === 502 || status === 503 || status === 504) {
-          console.warn(`Init nninter: MONAI server not ready yet (HTTP ${status}); will retry when used.`);
-          if (_showNotification) {
-            uiNotificationService.show({
-              title: 'NNInit',
-              message: 'MONAI server is still starting up — nnInteractive will be ready shortly.',
-              type: 'warning',
-              duration: 5000,
-            });
-          }
-          return;
+        // The MONAI server returns 502/503/504 while it is still starting up — expected,
+        // not a real failure. noteAiInitError keeps the persistent toast up and schedules
+        // an automatic retry; with the AI tools gated, nothing else could re-trigger init.
+        const isWarmup = isAiWarmupError(error);
+        if (isWarmup) {
+          console.warn(`Init nninter: MONAI server not ready yet (HTTP ${error?.response?.status ?? 'no response'}); retrying automatically.`);
+        } else {
+          console.error('Init nninter error:', error);
         }
-        console.error('Init nninter error:', error);
-        if (_showNotification) {
-          uiNotificationService.show({
-            title: 'NNInit',
-            message: `Init nninter - Failed: ${error.message || 'Unknown error'}`,
-            type: 'error',
-            duration: 5000,
-          });
+        noteAiInitError({
+          error,
+          seriesUID: currentDisplaySets.SeriesInstanceUID,
+          servicesManager,
+          retry: () => actions.initNninter(options),
+        });
+        if (!isWarmup) {
+          throw error;
         }
-        throw error;
       }
 
     },
     async undoNninter() {
+      if (!ensureAiReadyForInference(servicesManager)) {
+        return;
+      }
       if (toolboxState.getLocked()) {
         return;
       }
@@ -2488,6 +2498,9 @@ const commandsModule = ({
     },
 
     async resetNninter(options: {clearMeasurements: boolean} = {clearMeasurements: false}){
+      if (!ensureAiReadyForInference(servicesManager)) {
+        return;
+      }
       if (toolboxState.getLocked()) {
         return;
       }
@@ -3343,6 +3356,9 @@ const commandsModule = ({
       }
     },
     async nninter(textPrompts?: string | string[]) {
+      if (!ensureAiReadyForInference(servicesManager)) {
+        return;
+      }
       const _perfT0 = performance.now();
       if (!beginInferenceRunOrQueue()) {
         return;
@@ -4209,6 +4225,9 @@ const commandsModule = ({
 
     async textPromptSegmentation() {
       if (toolboxState.getLocked()) {
+        return;
+      }
+      if (!ensureAiReadyForInference(servicesManager)) {
         return;
       }
 
