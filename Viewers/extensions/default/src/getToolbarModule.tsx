@@ -1,5 +1,6 @@
 import { ToolbarButton as ToolbarButtonLegacy } from '@ohif/ui';
 import { ToolButton, utils } from '@ohif/ui-next';
+import { evaluateAiSegmentationReady } from './utils/aiReadiness';
 
 import ToolbarLayoutSelectorWithServices from './Toolbar/ToolbarLayoutSelector';
 
@@ -73,6 +74,10 @@ export default function getToolbarModule({ commandsManager, servicesManager }: w
           className: utils.getToggledClassName(isToggled),
         };
       },
+    },
+    {
+      name: 'evaluate.aiSegmentationReady',
+      evaluate: () => evaluateAiSegmentationReady(),
     },
   ];
 }

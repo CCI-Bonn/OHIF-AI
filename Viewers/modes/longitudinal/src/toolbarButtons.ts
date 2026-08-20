@@ -244,7 +244,7 @@ const toolbarButtons: Button[] = [
       label: 'Point',
       tooltip: 'Point [P]',
       commands: toggleToolActiveToolbar,
-      evaluate: 'evaluate.cornerstoneTool',
+      evaluate: ['evaluate.cornerstoneTool', 'evaluate.aiSegmentationReady'],
     },
   },
   {
@@ -444,7 +444,7 @@ const toolbarButtons: Button[] = [
       label: 'BBox',
       tooltip: 'Bounding Box [B]',
       commands: toggleToolActiveToolbar,
-      evaluate: 'evaluate.cornerstoneTool',
+      evaluate: ['evaluate.cornerstoneTool', 'evaluate.aiSegmentationReady'],
     },
   },
   {
@@ -477,7 +477,7 @@ const toolbarButtons: Button[] = [
       label: 'Lasso',
       tooltip: 'Lasso [L]',
       commands: toggleToolActiveToolbar,
-      evaluate: 'evaluate.cornerstoneTool',
+      evaluate: ['evaluate.cornerstoneTool', 'evaluate.aiSegmentationReady'],
     },
   },
   {
@@ -488,7 +488,7 @@ const toolbarButtons: Button[] = [
       label: 'Scribble',
       tooltip: 'Scribble [S]',
       commands: toggleToolActiveToolbar,
-      evaluate: 'evaluate.cornerstoneTool',
+      evaluate: ['evaluate.cornerstoneTool', 'evaluate.aiSegmentationReady'],
     },
   },
   {
@@ -619,6 +619,7 @@ const toolbarButtons: Button[] = [
       label: 'run segmentation',
       tooltip: 'run',
       commands: 'runAiSegmentation',
+      evaluate: 'evaluate.aiSegmentationReady',
     },
   },
   {
@@ -630,6 +631,7 @@ const toolbarButtons: Button[] = [
       label: 'Undo',
       tooltip: 'Undo (Ctrl+Z)',
       commands: 'undoNninter',
+      evaluate: 'evaluate.aiSegmentationReady',
     },
   },
   {
@@ -641,6 +643,7 @@ const toolbarButtons: Button[] = [
       label: 'Text Prompt',
       tooltip: 'VoxTell',
       commands: 'textPromptSegmentation',
+      evaluate: 'evaluate.aiSegmentationReady',
     },
   },
   {
@@ -671,6 +674,7 @@ const toolbarButtons: Button[] = [
       label: 'SAM2',
       tooltip: 'sam2',
       commands: 'sam2',
+      evaluate: 'evaluate.aiSegmentationReady',
     },
   },
   {
@@ -682,6 +686,7 @@ const toolbarButtons: Button[] = [
       label: 'resetNninter',
       tooltip: 'resetNninter',
       commands: 'resetNninter',
+      evaluate: 'evaluate.aiSegmentationReady',
     },
   },
   {
