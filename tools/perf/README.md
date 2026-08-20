@@ -182,3 +182,126 @@ is missing or still contains `REPLACE_WITH` placeholders, rather than proceeding
 
 `promptPoints` are normalised canvas coordinates and must land inside the anatomy of your series;
 if inference returns empty masks, re-tune them first.
+
+## Build speed
+
+Measured results for the `ohif_viewer` container (all times in seconds; raw data in
+`tools/perf/runs/build-bench.tsv`):
+
+| scenario | before | after |
+|---|---|---|
+| no-op rebuild (no changes) | 152 s | 1.2 s |
+| rebuild after a Playwright run | 143 s | 1 s |
+| rebuild after a real source edit | 145 s | 63 s |
+
+The `bundle_sha` column is a fingerprint of the served asset names. For the two unchanged-source
+scenarios (`noop`, `after_playwright`) it held constant at `c41ddc24d5b5f890` across every task,
+proving the build output did not change. The `after_source_edit` scenario intentionally modifies
+source, so its hash necessarily differs between the before and after rows — that is expected; it
+is a TIME-only scenario, not a hash-gate scenario. Do not treat the differing hash as a bug.
+
+Know the gate's blind spot: `bundle_sha` fingerprints asset **filenames**, not their bytes. JS
+chunks are chunkhashed, so any JS content change moves a filename and is caught — but CSS is
+emitted as `[name].bundle.css` with no hash, so a CSS-only output change leaves the fingerprint
+identical and slips through unnoticed.
+
+Re-measure any time with:
+
+```bash
+bash tools/perf/build-bench.sh <label>
+column -t -s $'\t' tools/perf/runs/build-bench.tsv
+```
+
+### What caused the slow builds
+
+The original hypothesis (webpack was doing unnecessary work) was wrong. The real cause was that
+docker-compose bind-mounts the **live Orthanc SQLite database and nginx logs** into paths inside
+the viewer build context:
+
+- `Viewers/platform/app/.recipes/Nginx-Orthanc/volumes/` — Orthanc database (WAL updated continuously)
+- `Viewers/platform/app/.recipes/Nginx-Orthanc/logs/` — nginx access/error logs
+
+Orthanc writes its WAL on every query, so every `docker compose build` saw a changed build context
+and invalidated `COPY ./`, forcing a full webpack rebuild even with zero source changes. Playwright's
+`test-results/.last-run.json` had the same effect. The fix was adding `.dockerignore` entries only —
+the bind-mount lines in `docker-compose.yml` were deliberately left untouched (that file is never
+committed in this project).
+
+Three things make builds fast now, and each can be reverted independently:
+
+**1. `Viewers/.dockerignore` excludes volatile runtime files.**
+Without these entries, the Orthanc WAL and Playwright output invalidate `COPY ./` on every build,
+forcing a full ~100 s webpack rebuild even with zero source changes.
+
+**2. webpack's filesystem cache is persisted via a BuildKit cache mount.**
+`webpack.base.js` always asked for `cache: { type: 'filesystem' }`, but the cache directory lived
+in the builder stage's filesystem layer and was thrown away with it, so it never helped. The
+Dockerfile now mounts that directory as a BuildKit cache so it survives across builds. The mount
+targets webpack's **default** cache location
+(`platform/app/node_modules/.cache/webpack` — webpack walks up from cwd to the nearest
+`package.json`, and lerna runs the build inside `platform/app`). The config deliberately does not
+pin an absolute `cacheDirectory`: `webpack.pwa.js` also backs host-side `yarn dev` / `yarn build`,
+and a container-only path such as `/usr/src/app/...` is not writable on a developer host — webpack
+would degrade to a `Caching failed for pack` warning and silently run with no cache.
+
+Because the overrides are files inside `node_modules`, `webpack.pwa.js` also sets
+`snapshot.unmanagedPaths` for the three override roots. Without it, webpack validates managed
+(`node_modules`) files by package `name@version` instead of content, and an edited override yields
+a stale cache hit with no warning. **Do not delete that block.**
+
+If you ever suspect stale webpack output, clear the cache with:
+
+```bash
+docker builder prune --filter type=exec.cachemount
+```
+
+**3. `Viewers/backup/esm/` mirrors `node_modules/` and is applied with a single COPY.**
+To add a new cornerstone override, put the file at its real `node_modules`-relative path under
+`backup/esm/` — **do not edit the Dockerfile**. Example: to override
+`@cornerstonejs/tools/dist/esm/eventListeners/imageSpacingCalibratedEventListener.js`, place it at
+`Viewers/backup/esm/@cornerstonejs/tools/dist/esm/eventListeners/imageSpacingCalibratedEventListener.js`.
+
+#### Critical warnings for the ESM override tree
+
+- **The `!backup/esm/**` exception in `.dockerignore` must not be removed.** Every mirror path
+  contains `dist/` (e.g. `@cornerstonejs/tools/dist/esm/...`), and `.dockerignore` has a
+  `**/dist/` rule. The `!backup/esm/**` exception re-includes the entire mirror tree. If someone
+  removes that exception, the `COPY ./backup/esm/ /usr/src/app/node_modules/` instruction silently
+  copies **nothing**, the build still succeeds, and every override vanishes from the bundle with
+  no error message. The symptom is subtle behavioral regression, not a build failure.
+
+- **A file placed in `backup/esm/` is active by definition.** There is no way to have a disabled
+  override inside the mirror tree — keep any deliberately-disabled override outside it.
+
+- **Two overrides live OUTSIDE the mirror tree** in sibling directories with their own COPY lines:
+  - `Viewers/backup/dcmjs/dcmjs.es.js`
+  - `Viewers/backup/vtkjs/ImageMarchingSquares.js`
+
+  These have no replacement in `backup/esm/` by design. A reader who searches only `backup/esm/`
+  will find no entry for them and may conclude they are unneeded — they are not. Both have
+  explicit `COPY` lines in the Dockerfile for exactly this reason.
+
+### Verifying that overrides survived a rebuild
+
+```bash
+# Exercise the real deployed bundle end-to-end
+node tools/perf/preflight.js
+
+# Grep the served bundle for known override markers
+docker exec ohif_viewer sh -c 'grep -l "_disableHandler" /var/www/html/*.js'
+docker exec ohif_viewer sh -c 'grep -l "_toolGroupViewportAddedHandler" /var/www/html/*.js'
+```
+
+Both greps must return at least one filename. An empty result means the override was not
+included in the bundle — check the `.dockerignore` exception first.
+
+These two symbols are introduced by the overrides and do **not** exist in the corresponding
+upstream files, so they discriminate. Do not add `_onEvent` to this list: it is present in the
+UNPATCHED upstream `Synchronizer.js` as well, so it matches whether or not the override landed —
+a passing grep would prove nothing.
+
+For a stronger, marker-free check, compare each file under `Viewers/backup/esm/` byte-for-byte
+against the matching `sourcesContent` entry in the shipped `.js.map` files. Note that
+`addLabelmapToElement.js` and `removeLabelmapFromElement.js` are orphaned in the currently
+installed cornerstone version (nothing imports them), so 27 of the 29 overrides is the expected
+full-pass result.
