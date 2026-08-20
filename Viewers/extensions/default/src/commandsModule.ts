@@ -37,7 +37,8 @@ import {
 import { parseMultipart } from './utils/multipart';
 import { callInputDialog } from './utils/callInputDialog';
 import { getNninterToken, clearNninterToken } from './utils/nninterSession';
-import { describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, shouldShrinkBlock, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES, BLOCK_SHRINK_FACTOR } from './utils/labelmapBlocks';
+import { perf, installPerfHandle, setBlockStatsProvider, leakRetain } from './utils';
+import { summarizeBlocks, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, shouldShrinkBlock, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES, BLOCK_SHRINK_FACTOR } from './utils/labelmapBlocks';
 // Separate: LabelmapBlock is a type, and isolatedModules requires type-only imports be marked so
 // the transpiler can erase them without resolving the module.
 import type { LabelmapBlock } from './utils/labelmapBlocks';
@@ -115,6 +116,37 @@ const commandsModule = ({
       setTimeout(() => runAiSegmentationCommand(), 0);
     }
   }
+
+  // Perf telemetry: no-ops unless ?perf=1 / localStorage.ohifPerf=1.
+  // Pass a navigate wrapper that always reads the live history.navigate reference
+  // (React Router wires it in Mode.tsx; passing the wrapper rather than the value
+  // avoids capturing a stale null if installPerfHandle runs before the first render).
+  installPerfHandle(commandsManager, servicesManager, (path: string) => history.navigate?.(path), toolboxState);
+
+  // Block stats come from describeBlocks(), which needs the live labelmap data + series
+  // length that only the segmentation paths hold. We cache the segmentationId and series
+  // length, then read LIVE state at snapshot time so we never report stale block counts.
+  // (cornerstone's SegmentationStateManager.updateState() deep-clones state on every
+  // mutation, so any object captured beforehand is permanently orphaned.)
+  let _lastLabelmapCtx: { segmentationId: string; sourceCount: number } | null = null;
+  setBlockStatsProvider(() => {
+    if (!_lastLabelmapCtx) return { segCount: -1, blockCount: -1, blockSlices: -1 };
+    const liveSeg = csToolsSegmentation.state.getSegmentation(_lastLabelmapCtx.segmentationId);
+    const lm = liveSeg?.representationData?.Labelmap;
+    if (!lm) return { segCount: -1, blockCount: -1, blockSlices: -1 };
+    const blockSummary = summarizeBlocks(describeBlocks(lm, _lastLabelmapCtx.sourceCount));
+    // segCount is the number of segments in live state — distinct from blockCount, which counts
+    // blocks. For a single-layer labelmap (SAM2 overlap=false), multiple segments share one block
+    // so blockCount < segCount. For a multi-block labelmap each segment has its own block so they
+    // may agree, but they are independently derived and can legitimately differ.
+    const segCount = liveSeg?.segments
+      ? Object.keys(liveSeg.segments).filter(k => {
+          const idx = Number(k);
+          return Number.isFinite(idx) && idx > 0;
+        }).length
+      : -1;
+    return { ...blockSummary, segCount };
+  });
 
   // Loop guard for session-expired auto-recovery: if a second recovery is
   // needed within 5s the pool is thrashing (capacity pressure) — stop and
@@ -939,6 +971,7 @@ const commandsModule = ({
     // Block count from the block LIST, not allImageIds.length / N — blocks can be shorter than the
     // series once they are z-cropped, so that division no longer counts them.
     const prevBlockCount = describeBlocks(prevLabelmap, imageIds.length).length;
+    if (perf.enabled) _lastLabelmapCtx = { segmentationId, sourceCount: imageIds.length };
 
     const { blockCount, labelmapRepresentation } = buildMultiBlockLabelmapRepresentation({
       segmentationId,
@@ -1528,6 +1561,7 @@ const commandsModule = ({
     },
 
     async sam2() {
+      const _perfT0 = performance.now();
       if (!beginInferenceRunOrQueue()) {
         return;
       }
@@ -1785,6 +1819,7 @@ const commandsModule = ({
                 activeSegmentation.representationData.Labelmap,
                 imageIds.length
               );
+              if (perf.enabled) _lastLabelmapCtx = { segmentationId, sourceCount: imageIds.length };
               existing = true;
             }
           }
@@ -2033,6 +2068,8 @@ const commandsModule = ({
           });
           const end = Date.now();
           console.log(`Time taken: ${(end - start)/1000} Seconds`);
+          perf.measure('sam2', _perfT0);
+          perf.snapshot('afterSam2');
           return response;
         }
       } catch (error) {
@@ -2226,6 +2263,7 @@ const commandsModule = ({
       const _seriesLen: number =
         (labelmapState?.allReferencedImageIds ?? labelmapState?.referencedImageIds ?? []).length;
       const _undoBlocks = describeBlocks(labelmapState, _seriesLen);
+      if (perf.enabled) _lastLabelmapCtx = { segmentationId, sourceCount: _seriesLen };
       const _undoBlockIdx = blockIndexForSegment(_undoBlocks, segmentNumber);
       // Fall back to z0 = 0 ONLY for the legacy uniform layout, where the layer genuinely spans
       // the whole series. Guessing 0 for a cropped block would clear and rewrite the wrong slices.
@@ -2529,6 +2567,7 @@ const commandsModule = ({
       // would flow into buildMultiBlockLabelmapRepresentation as imageIds: [].
       if (srcIds.length === 0) return;
       const blocks = describeBlocks(lm, srcIds.length);
+      if (perf.enabled) _lastLabelmapCtx = { segmentationId, sourceCount: srcIds.length };
       // Keep at least one block: cornerstone needs a primary labelmap to render at all.
       if (blocks.length <= 1) return;
       const bIdx = blockIndexForSegment(blocks, segmentIndex);
@@ -2622,6 +2661,7 @@ const commandsModule = ({
     },
 
     async resetSegment({ segmentationId, segmentIndex }: { segmentationId: string; segmentIndex: number }) {
+      const _perfT0 = performance.now();
       // Reset zeroes the block IMAGES; land any deferred in-place write first so it can't be
       // re-applied afterwards and resurrect the segment.
       materializePendingImageSync(segmentationId);
@@ -2734,6 +2774,8 @@ const commandsModule = ({
           new CustomEvent(csToolsEnums.Events.SEGMENTATION_DATA_MODIFIED, { detail: { segmentationId } })
         );
       }, 0);
+      perf.measure('segReset', _perfT0);
+      perf.snapshot('afterSegReset');
     },
     async medGemma(
       query: string,
@@ -3301,6 +3343,7 @@ const commandsModule = ({
       }
     },
     async nninter(textPrompts?: string | string[]) {
+      const _perfT0 = performance.now();
       if (!beginInferenceRunOrQueue()) {
         return;
       }
@@ -3545,7 +3588,9 @@ const commandsModule = ({
               clearNninterToken();
               await getNninterToken();
               await actions.initNninter();
-              return actions.nninter(textPrompts);
+              const _recovered = await actions.nninter(textPrompts);
+              perf.measure('nninterRecovered', _perfT0);
+              return _recovered;
             }
             if (!seg.length) {
               throw new Error('seg part not found');
@@ -4106,6 +4151,7 @@ const commandsModule = ({
         }
           
                     
+          leakRetain(merged_derivedImages);
           const derivedImageIds = merged_derivedImages.map(image => image.imageId);
           segments[segmentNumber] = {
             segmentIndex: segmentNumber,
@@ -4149,6 +4195,8 @@ const commandsModule = ({
           for (const _oid of _orphanedImageIds) {
             try { cache.removeImageLoadObject(_oid, { force: true }); } catch { /* already gone */ }
           }
+          perf.measure('nninter', _perfT0);
+          perf.snapshot('afterRefine');
           return response;
         }
       } catch (error) {
