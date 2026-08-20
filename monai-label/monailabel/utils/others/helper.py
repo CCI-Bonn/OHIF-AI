@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import signal
+import threading
 from contextlib import contextmanager
 
 def clean_and_densify_polyline(polyline, max_segment_length=1):
@@ -377,10 +378,20 @@ class TimeoutError(Exception):
 
 @contextmanager
 def timeout_context(seconds):
-    """Context manager for timeout protection using signal.alarm"""
+    """Context manager for timeout protection using signal.alarm.
+
+    SIGALRM handlers can only be installed from the main thread. Infer
+    requests now run in the FastAPI threadpool (so they don't block the
+    event loop), where the alarm is impossible — degrade to a passthrough
+    there instead of raising and killing the interaction.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
     def timeout_handler(signum, frame):
         raise TimeoutError(f"Operation timed out after {seconds} seconds")
-    
+
     old_handler = signal.signal(signal.SIGALRM, timeout_handler)
     signal.alarm(seconds)
     
