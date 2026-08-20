@@ -10,6 +10,7 @@ import logging
 from fastapi import APIRouter
 
 from monailabel.tasks.infer import nninter_session_pool
+from monailabel.utils.others import progress_registry
 
 logger = logging.getLogger(__name__)
 
@@ -31,3 +32,9 @@ def claim_session():
 def release_session(token: str):
     nninter_session_pool.get_pool().release(token)
     return {"released": True}
+
+
+@router.get("/progress", summary="Read-only download/preprocess progress for a series (display only)")
+def get_progress(image: str):
+    entry = progress_registry.get(image)
+    return entry if entry is not None else {"phase": "unknown"}

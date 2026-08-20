@@ -30,6 +30,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.background import BackgroundTasks
 from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 from requests_toolbelt import MultipartEncoder
 
 import pydicom
@@ -44,6 +45,7 @@ from monailabel.endpoints.user.auth import RBAC, User
 from monailabel.interfaces.app import MONAILabelApp
 from monailabel.interfaces.utils.app import app_instance
 from monailabel.utils.others.generic import get_mime_type, remove_file
+from monailabel.utils.others.progress_registry import clear as clear_progress
 from monailabel.utils.others.stream import stream_multipart
 
 from monailabel.datastore.utils.dicom import dicom_web_upload_dcm
@@ -350,4 +352,16 @@ async def api_run_inference(
     output: Optional[ResultType] = None,
     user: User = Depends(RBAC(settings.MONAI_LABEL_AUTH_ROLE_USER)),
 ):
-    return run_inference(background_tasks, model, image, session_id, params, file, label, output)
+    try:
+        # run_inference is fully synchronous (DICOM download, sitk reads, GPU
+        # preprocess). Called directly from this async handler it would run ON
+        # the event loop and stall every other request — including the
+        # read-only progress endpoint whose whole purpose is to answer DURING
+        # this request. Hand it to the threadpool so the loop stays free.
+        return await run_in_threadpool(
+            run_inference, background_tasks, model, image, session_id, params, file, label, output
+        )
+    finally:
+        # Entry is display-only; whatever happened, this request is over.
+        if image:
+            clear_progress(image)

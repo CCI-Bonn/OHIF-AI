@@ -42,6 +42,7 @@ from monailabel.interfaces.utils.transform import dump_data, run_transforms
 from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
+from monailabel.utils.others.progress_registry import set_phase
 
 try:
     from monailabel.utils.others.perf_trace import counters_suffix, leak_enabled
@@ -1554,6 +1555,13 @@ class BasicInferTask(InferTask):
                 if _SERIES_UID_TAG in dcm_img_sample else path_uid
             )
             logger.info(f"Series Instance UID: {seriesInstanceUID}")
+
+            # Download (if any) is done by now; the pixel read + set_image
+            # stretch is what remains. Display-only: never let this fail infer.
+            try:
+                set_phase(seriesInstanceUID, "preparing")
+            except Exception:
+                logger.debug("progress set_phase failed", exc_info=True)
 
             instanceNumber  = dcm_img_sample[0x00200013].value  if 0x00200013 in dcm_img_sample  else None
             instanceNumber2 = dcm_img_sample_2[0x00200013].value if 0x00200013 in dcm_img_sample_2 else None

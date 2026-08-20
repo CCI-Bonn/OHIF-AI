@@ -11,6 +11,9 @@
 
 import logging
 import os
+import shutil
+import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -19,6 +22,7 @@ from pydicom.dataset import Dataset
 from pydicom.filereader import dcmread
 
 from monailabel.utils.others.generic import md5_digest, run_command
+from monailabel.utils.others.progress_registry import clear, set_download_progress
 
 logger = logging.getLogger(__name__)
 
@@ -75,15 +79,50 @@ def dicom_web_download_series(study_id, series_id, save_dir, client: DICOMwebCli
         )
         study_id = str(meta["StudyInstanceUID"].value)
 
-    os.makedirs(save_dir, exist_ok=True)
+    # Progress is advisory/display-only: a registry or metadata failure must
+    # never fail the download itself.
+    try:
+        total = len(client.retrieve_series_metadata(study_id, series_id))
+    except Exception:
+        logger.debug("series metadata count failed; progress total unknown", exc_info=True)
+        total = 0
+
     if not frame_fetch:
-        instances = client.retrieve_series(study_id, series_id)
-        for instance in instances:
-            instance_id = str(instance["SOPInstanceUID"].value)
-            file_name = os.path.join(save_dir, f"{instance_id}.dcm")
-            instance.save_as(file_name)
+        set_download_progress(series_id, 0, total)
+        fetched = 0
+        # Stream into a temp sibling and publish atomically: save_dir must never
+        # exist in a partial state, because the datastore treats any non-empty
+        # dir as a complete cached series (datastore/dicom.py get_image_uri).
+        # The parent chain must exist for mkdtemp, but save_dir itself must not.
+        parent_dir = os.path.dirname(save_dir) or "."
+        os.makedirs(parent_dir, exist_ok=True)
+        tmp_dir = tempfile.mkdtemp(prefix=".download-", dir=parent_dir)
+        try:
+            for instance in client.iter_series(study_id, series_id):
+                instance_id = str(instance["SOPInstanceUID"].value)
+                instance.save_as(os.path.join(tmp_dir, f"{instance_id}.dcm"))
+                fetched += 1
+                set_download_progress(series_id, fetched, total)
+            try:
+                os.rename(tmp_dir, save_dir)
+            except OSError:
+                if os.path.isdir(save_dir) and os.listdir(save_dir):
+                    # a concurrent request already published a complete dir; keep theirs
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                else:
+                    raise
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            clear(series_id)
+            raise
     else:
+        os.makedirs(save_dir, exist_ok=True)
         # TODO:: This logic (combining meta+pixeldata) needs improvement
+        meta_list = client.retrieve_series_metadata(study_id, series_id)
+        total = len(meta_list)
+        progress_lock = threading.Lock()
+        fetched_box = [0]
+
         def save_from_frame(m):
             d = Dataset.from_json(m)
             instance_id = str(d["SOPInstanceUID"].value)
@@ -101,11 +140,18 @@ def dicom_web_download_series(study_id, series_id, save_dir, client: DICOMwebCli
             file_name = os.path.join(save_dir, f"{instance_id}.dcm")
             logger.info(f"++ Saved {os.path.basename(file_name)}")
             d.save_as(file_name)
+            with progress_lock:
+                fetched_box[0] += 1
+                set_download_progress(series_id, fetched_box[0], total)
 
-        meta_list = client.retrieve_series_metadata(study_id, series_id)
         logger.info(f"++ Saving DCM into: {save_dir}")
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="DICOMFetch") as executor:
-            executor.map(save_from_frame, meta_list)
+        try:
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="DICOMFetch") as executor:
+                # list() forces exceptions from workers to surface here
+                list(executor.map(save_from_frame, meta_list))
+        except Exception:
+            clear(series_id)
+            raise
 
     logger.info(f"Time to download: {time.time() - start} (sec)")
 
