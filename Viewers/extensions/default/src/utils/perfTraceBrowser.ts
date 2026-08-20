@@ -122,6 +122,22 @@ const enabled =
   typeof window !== 'undefined' &&
   isPerfEnabled(window.location.search, _storage);
 
+// The transport probe (commandsModule nninter breakdown) reads the POST's
+// PerformanceResourceTiming entry. The default 250-entry buffer overflows on
+// DICOM instance loading (hundreds of fetches per study) and a FULL buffer
+// silently DROPS new entries — so the probe would read nothing exactly in the
+// sessions worth measuring. Raise it and recycle on overflow, perf-gated.
+if (enabled) {
+  try {
+    performance.setResourceTimingBufferSize(10000);
+    performance.addEventListener('resourcetimingbufferfull', () => {
+      performance.clearResourceTimings();
+    });
+  } catch {
+    // Older browsers: probe degrades to -1s via its own guard.
+  }
+}
+
 export const perf: PerfTrace = createPerfTrace(
   enabled
     ? buildCornerstoneDeps({ cache, eventTarget, getRenderingEngines }, () => blockStatsProvider())
