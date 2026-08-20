@@ -9,6 +9,11 @@
 
 # Output
 **/dist/
+
+# EXCEPTION: backup/esm mirrors node_modules/, so every path in it contains dist/.
+# Without this the big COPY below copies NOTHING, the build still SUCCEEDS, and every
+# override silently vanishes from the bundle. Do not remove.
+!backup/esm/**
 **/build/
 
 # Dependencies
@@ -35,3 +40,21 @@ dockerfile
 coverage/
 platform/docs/
 testdata/
+
+# RUNTIME STATE WRITTEN INTO THE BUILD CONTEXT — this is the main cache-buster.
+# docker-compose bind-mounts the LIVE Orthanc database and nginx logs into directories
+# under Viewers/, which is the viewer's build context. Orthanc writes its SQLite WAL
+# continuously, so EVERY build saw a changed context: measured, a true no-op rebuild
+# still took 2m32s with yarn build re-running for 111s and only 9 cached steps.
+platform/app/.recipes/Nginx-Orthanc/volumes/
+platform/app/.recipes/Nginx-Orthanc/logs/
+
+# Playwright output — rewritten on every test run. Secondary, but same effect.
+test-results/
+playwright-report/
+tests/test-results/
+tests/playwright-report/
+# Must be **/junit.xml: .dockerignore patterns anchor at the context root, so a bare
+# "junit.xml" would only exclude Viewers/junit.xml. Jest actually writes it per-package
+# (e.g. platform/core/junit.xml), which would otherwise invalidate COPY ./ on every test run.
+**/junit.xml
