@@ -1,0 +1,5 @@
+runs/
+reports/
+# Holds DICOM UIDs from a real archive plus machine-specific URLs.
+# Copy fixture.example.json to fixture.json and fill in your own.
+fixture.json

@@ -306,3 +306,21 @@ export function segmentBlockRange(
 
   return { z0, sliceStart, sliceEnd, reverse };
 }
+
+/**
+ * Perf telemetry helper. With sparse (z-cropped) blocks the meaningful memory
+ * proxy is the TOTAL SLICE COUNT across blocks, not the block count — a segment
+ * cropped to 30 slices costs far less than one spanning 694.
+ */
+export function summarizeBlocks(
+  blocks: Array<{ imageIds: string[] }> | null | undefined
+): { segCount: number; blockCount: number; blockSlices: number } {
+  if (!Array.isArray(blocks)) {
+    return { segCount: -1, blockCount: -1, blockSlices: -1 };
+  }
+  return {
+    segCount: blocks.length,
+    blockCount: blocks.length,
+    blockSlices: blocks.reduce((a, b) => a + (b.imageIds?.length ?? 0), 0),
+  };
+}
