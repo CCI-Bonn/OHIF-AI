@@ -74,7 +74,14 @@ export const getSegmentationDataForWorker = (segmentationId, segmentIndices) => 
     // block). Structural multi-block detection plus a first-id identity check close both holes;
     // the first-id check also covers the registration window in which imageIds === allImageIds
     // and isMultiBlockLabelmap is still false.
-    const isMultiBlock = isMultiBlockLabelmap(Labelmap) ||
+    //
+    // `blocks` catches the remaining mint: a block-managed AI segmentation that still has only
+    // ONE block (stats fire right after the first segment is created). It is not structurally
+    // multi-block yet, so the volume path would mint a hash volume that nothing ever
+    // supersedes once the second block arrives — a permanent 40MB orphan per segmentation.
+    // Only this project's registration writes `blocks`; stock segmentations keep the volume path.
+    const isMultiBlock = (Array.isArray(Labelmap?.blocks) && Labelmap.blocks.length > 0) ||
+        isMultiBlockLabelmap(Labelmap) ||
         (Array.isArray(segImageIds) &&
             Array.isArray(primaryImageIds) &&
             (segImageIds.length > primaryImageIds.length ||
