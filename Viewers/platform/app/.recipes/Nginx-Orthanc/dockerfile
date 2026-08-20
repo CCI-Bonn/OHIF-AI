@@ -133,7 +133,12 @@ COPY ./backup/vtkjs/ImageMarchingSquares.js /usr/src/app/node_modules/@kitware/v
 ENV APP_CONFIG=config/docker-nginx-orthanc.js
 
 # Build the application with production mode Use Run yarn run build:dev for development
-RUN yarn run build
+# Persist webpack's filesystem cache across builds. Path is platform/app/node_modules/.cache,
+# NOT the repo root: webpack resolves its default cache dir from the NEAREST package.json to
+# the cwd, and lerna runs this build inside platform/app. Mounting the root path would mount
+# a directory webpack never writes, silently losing the speedup.
+RUN --mount=type=cache,target=/usr/src/app/platform/app/node_modules/.cache/webpack,sharing=locked \
+    yarn run build
 
 # # Stage 2: Bundle the built application into a Docker container which runs NGINX using Alpine Linux
 FROM nginx:alpine

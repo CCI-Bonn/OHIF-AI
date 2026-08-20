@@ -214,5 +214,46 @@ module.exports = (env, argv) => {
     ignored: /node_modules\/@cornerstonejs/,
   };
 
+  // webpack.base.js already sets `cache: { type: 'filesystem' }`, but that cache never
+  // survived a Docker build: its directory lived inside the build container's filesystem
+  // layer, which is discarded when the builder stage ends — so every Docker build
+  // recompiled everything (~100s measured). The Dockerfile now mounts the cache directory
+  // (the webpack default, node_modules/.cache/webpack) as a BuildKit cache mount so it
+  // persists across builds. Do NOT set an absolute `cacheDirectory` here: this config also
+  // backs host-side `yarn dev` / `yarn build`, where a container-only path such as
+  // /usr/src/app/... is not writable and webpack silently degrades to `logger.warn(...)`
+  // with no cache at all. buildDependencies keys the cache on this config file, so editing
+  // it busts the cache.
+  mergedConfig.cache = {
+    type: 'filesystem',
+    buildDependencies: {
+      config: [__filename],
+    },
+  };
+
+  // DO NOT DELETE — this is what keeps the persisted cache honest.
+  //
+  // This project overrides vendored library code by overwriting files *inside*
+  // node_modules (see backup/esm/ and the COPY lines in the Nginx-Orthanc dockerfile).
+  // By default webpack treats everything under a node_modules directory as a "managed
+  // path": such files are NOT content-hashed for cache validation, they are validated
+  // only by the owning package's name@version from its package.json. Since an override
+  // changes file contents without changing any package version, webpack would report a
+  // cache HIT on the stale pre-override compiled module. The build exits 0, emits no
+  // warning, and the override is silently missing from the bundle.
+  //
+  // Listing the three override roots under `unmanagedPaths` forces real content hashing
+  // for them. `unmanagedPaths` is checked before `managedPaths` in
+  // FileSystemInfo.checkManaged, so it wins. This mattered only once the cache started
+  // being persisted across builds — before that the bug was latent.
+  mergedConfig.snapshot = {
+    ...mergedConfig.snapshot,
+    unmanagedPaths: [
+      /[\\/]node_modules[\\/]@cornerstonejs[\\/]/,
+      /[\\/]node_modules[\\/]dcmjs[\\/]/,
+      /[\\/]node_modules[\\/]@kitware[\\/]vtk\.js[\\/]/,
+    ],
+  };
+
   return mergedConfig;
 };
