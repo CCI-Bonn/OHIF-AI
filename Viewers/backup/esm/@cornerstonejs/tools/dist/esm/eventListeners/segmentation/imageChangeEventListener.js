@@ -38,6 +38,7 @@ const disable = function (element) {
     element.removeEventListener(Enums.Events.CAMERA_MODIFIED, _imageChangeEventListener);
     if (viewportId) {
         perViewportManualTriggers.delete(viewportId);
+        cancelCapabilityLossTrigger(viewportId);
     }
 };
 // PROJECT OVERRIDE. When a viewport rendering labelmaps through the volume-slice image
@@ -45,10 +46,34 @@ const disable = function (element) {
 // false and upstream's CAMERA_MODIFIED branch returned without triggering anything — the
 // render-plan switch away from the image mapper then happened only whenever some unrelated
 // segmentation event arrived, leaving a stale slice actor on screen until it did. The
-// capability-LOSS transition now fires exactly one segmentation render: the tracked state
-// key doubles as "was in image-mapper mode", and deleting it before triggering makes later
-// oblique camera frames no-ops.
+// capability-LOSS transition now fires exactly one segmentation render. The tracked state
+// key doubles as "was in image-mapper mode".
+//
+// The trigger is DEFERRED until the camera has been quiet for a beat: firing it on the
+// first oblique frame remounts legacy volume actors (with a full labelmap texture upload)
+// in the middle of the crosshair drag, which visibly disrupted the rotation gesture. Every
+// further camera frame while the viewport stays oblique re-arms the timer, so the plan
+// switch lands once, just after the drag pauses.
 const perViewportManualTriggers = new Map();
+const pendingCapabilityLossTimers = new Map();
+const CAPABILITY_LOSS_SETTLE_MS = 250;
+function armCapabilityLossTrigger(viewportId) {
+    const existingTimer = pendingCapabilityLossTimers.get(viewportId);
+    if (existingTimer !== undefined) {
+        clearTimeout(existingTimer);
+    }
+    pendingCapabilityLossTimers.set(viewportId, setTimeout(() => {
+        pendingCapabilityLossTimers.delete(viewportId);
+        triggerSegmentationRender(viewportId);
+    }, CAPABILITY_LOSS_SETTLE_MS));
+}
+function cancelCapabilityLossTrigger(viewportId) {
+    const existingTimer = pendingCapabilityLossTimers.get(viewportId);
+    if (existingTimer !== undefined) {
+        clearTimeout(existingTimer);
+        pendingCapabilityLossTimers.delete(viewportId);
+    }
+}
 function _imageChangeEventListener(evt) {
     const eventData = evt.detail;
     const { viewportId, renderingEngineId } = eventData;
@@ -71,6 +96,7 @@ function _imageChangeEventListener(evt) {
     });
     if (evt.type === Enums.Events.CAMERA_MODIFIED) {
         if (hasVolumeImageMapperRepresentation) {
+            cancelCapabilityLossTrigger(viewportId);
             const nextState = getVolumeViewportLabelmapImageMapperState(viewport);
             const previousState = perViewportManualTriggers.get(viewportId);
             if (previousState === nextState.key) {
@@ -84,7 +110,10 @@ function _imageChangeEventListener(evt) {
         if (!isPlanarNext) {
             if (perViewportManualTriggers.has(viewportId)) {
                 perViewportManualTriggers.delete(viewportId);
-                triggerSegmentationRender(viewportId);
+                armCapabilityLossTrigger(viewportId);
+            }
+            else if (pendingCapabilityLossTimers.has(viewportId)) {
+                armCapabilityLossTrigger(viewportId);
             }
             return;
         }
