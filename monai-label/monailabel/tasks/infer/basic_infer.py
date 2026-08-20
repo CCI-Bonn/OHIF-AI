@@ -43,6 +43,15 @@ from monailabel.transform.cache import CacheTransformDatad
 from monailabel.transform.writer import ClassificationWriter, DetectionWriter, Writer
 from monailabel.utils.others.generic import device_list, device_map, name_to_device
 
+try:
+    from monailabel.utils.others.perf_trace import counters_suffix, leak_enabled
+except Exception:  # optional telemetry must never break the inference server
+    def counters_suffix(session=None):
+        return ""
+
+    def leak_enabled():
+        return False
+
 # Disable Transparent Huge Pages for this (long-lived, ~120GB-VmSize) server
 # process. Profiled root cause of intermittent 12-20s init stalls: the large
 # per-request allocations — the 336MB np.load of the img_np disk cache and
@@ -232,6 +241,15 @@ _boot_warmup_done = threading.Event()
 # Guards the once-per-process MainThread cuDNN warmup. Only ever touched from the
 # inference (MainThread) path, so no lock is needed.
 _mainthread_cudnn_warmed = False
+
+# POSITIVE CONTROL ONLY (MONAI_PERF_LEAK=1). Retains fixed-size ballast per request so
+# the soak analyzer has a known-leaking run to prove it can detect one.
+# Deliberately NOT the session object: a session pins a ~1.3GB interactions tensor, so
+# retaining one per cycle could OOM the GPU server this control is meant to validate.
+# Ballast gives the same detectable rss ramp with a bounded, predictable cost.
+_PERF_LEAK_BALLAST_BYTES = 64 * 1024 * 1024  # 64 MB per retained buffer
+_PERF_LEAK_MAX_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB hard ceiling; never OOM the server
+_PERF_LEAK_STORE = []
 
 
 def _warm_mainthread_cudnn() -> None:
@@ -2484,12 +2502,18 @@ class BasicInferTask(InferTask):
             # Components now sum: img_convert + prompt_prep + model_core + loop_overhead
             # + result_retrieve + pre_dispatch == total_nninter. load is a SIBLING
             # window (DICOM I/O before the nnInter block): load + total_nninter ≈ total_request.
+            if leak_enabled():
+                if len(_PERF_LEAK_STORE) * _PERF_LEAK_BALLAST_BYTES < _PERF_LEAK_MAX_BYTES:
+                    _buf = bytearray(_PERF_LEAK_BALLAST_BYTES)
+                    _buf[0] = len(_PERF_LEAK_STORE) & 0xFF
+                    _buf[-1] = 1
+                    _PERF_LEAK_STORE.append(_buf)
             logger.info(
                 f"[timing] load={server_load_elapsed:.3f}s | img_convert={img_convert_elapsed:.3f}s  "
                 f"prompt_prep={prompt_prep_elapsed:.3f}s  model_core={nninter_core_elapsed:.3f}s  "
                 f"loop_overhead={loop_overhead:.3f}s  result_retrieve={result_elapsed:.3f}s  "
                 f"pre_dispatch={pre_dispatch:.3f}s  total_nninter={nninter_elapsed:.3f}s | "
-                f"total_request={time.time()-begin:.3f}s"
+                f"total_request={time.time()-begin:.3f}s" + counters_suffix(session)
             )
 
             final_result_json["prompt_info"] = result_json
