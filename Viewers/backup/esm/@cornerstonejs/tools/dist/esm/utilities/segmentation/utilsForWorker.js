@@ -67,9 +67,20 @@ export const getSegmentationDataForWorker = (segmentationId, segmentIndices) => 
         indices = [indices, 255];
     }
     const segImageIds = resolveSegImageIds(Labelmap, indices);
-    const isMultiBlock = Array.isArray(segImageIds) &&
-        Array.isArray(primaryImageIds) &&
-        segImageIds.length > primaryImageIds.length;
+    // Length comparison alone is blind to a single-segment query: one block's ids resolve to
+    // the same LENGTH as the primary block's (e.g. 160 > 160 is false), which routed the query
+    // into the reconstructable-volume branch — building a 40MB content-hash volume of the
+    // PRIMARY block (the wrong data entirely when the queried segment lives in a private
+    // block). Structural multi-block detection plus a first-id identity check close both holes;
+    // the first-id check also covers the registration window in which imageIds === allImageIds
+    // and isMultiBlockLabelmap is still false.
+    const isMultiBlock = isMultiBlockLabelmap(Labelmap) ||
+        (Array.isArray(segImageIds) &&
+            Array.isArray(primaryImageIds) &&
+            (segImageIds.length > primaryImageIds.length ||
+                (segImageIds.length > 0 &&
+                    primaryImageIds.length > 0 &&
+                    segImageIds[0] !== primaryImageIds[0])));
     const operationData = {
         segmentationId,
         volumeId: isMultiBlock ? undefined : segVolumeId,

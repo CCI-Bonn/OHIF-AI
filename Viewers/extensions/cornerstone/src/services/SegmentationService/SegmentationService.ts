@@ -1558,6 +1558,24 @@ class SegmentationService extends PubSubService {
       return; // Volume Labelmap on Volume Viewport is natively supported
     }
 
+    // A multi-block (multi-layer) labelmap is already MPR-renderable: the render plan builds
+    // one correctly-positioned volume per layer from the layer's own imageIds. Converting it
+    // here would build an extra 40MB volume of the primary block alone under a fresh uuid,
+    // and the volumeId key that records it is deleted again on the next segmentation update
+    // (the legacy adapter syncs it from the primary stack layer, which has none) — orphaning
+    // that volume in a cache that never evicts volumes.
+    const labelmapData = segmentation.representationData[LABELMAP] as cstTypes.LabelmapSegmentationDataStack & {
+      labelmaps?: Record<string, unknown>;
+      allImageIds?: string[];
+    };
+    const layerCount = Object.keys(labelmapData?.labelmaps ?? {}).length;
+    const isMultiBlock =
+      layerCount > 1 ||
+      (labelmapData?.allImageIds?.length ?? 0) > (labelmapData?.imageIds?.length ?? 0);
+    if (isMultiBlock) {
+      return;
+    }
+
     const frameOfReferenceUID = viewport.getFrameOfReferenceUID();
     const imageIds = getLabelmapImageIds(segmentation.segmentationId);
     const segImage = cache.getImage(imageIds[0]);
