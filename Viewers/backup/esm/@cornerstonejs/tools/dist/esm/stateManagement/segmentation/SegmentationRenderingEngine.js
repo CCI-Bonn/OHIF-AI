@@ -1,4 +1,4 @@
-import { triggerEvent, eventTarget, Enums, getRenderingEngines, getEnabledElementByViewportId, } from '@cornerstonejs/core';
+import { triggerEvent, eventTarget, Enums, getRenderingEngines, getEnabledElementByViewportId, metaData, utilities as csCoreUtils, } from '@cornerstonejs/core';
 import { SegmentationRepresentations, Events as csToolsEvents, } from '../../enums';
 import { getSegmentation } from './getSegmentation';
 import { getSegmentationRepresentations } from './getSegmentationRepresentation';
@@ -7,8 +7,10 @@ import { state } from '../../store/state';
 import PlanarFreehandContourSegmentationTool from '../../tools/annotation/PlanarFreehandContourSegmentationTool';
 import { getToolGroupForViewport } from '../../store/ToolGroupManager';
 import { setAnnotationSelected } from '../../stateManagement/annotation/annotationSelection';
+import { getAllAnnotations } from '../../stateManagement/annotation/annotationState';
 import { addDefaultSegmentationListener } from './segmentationEventManager';
 import { getSegmentationRepresentationDisplay } from './SegmentationRepresentationDisplayRegistry';
+import { buildPromptLoadPlan, makeWorldFromIndex } from './promptLoadPlan';
 const planarContourToolName = PlanarFreehandContourSegmentationTool.toolName;
 class SegmentationRenderingEngine {
     constructor() {
@@ -151,163 +153,7 @@ class SegmentationRenderingEngine {
             const element = viewport.element;
             element.addEventListener(Enums.Events.IMAGE_RENDERED, onSegmentationRender);
             viewport.render();
-            if (
-                window.services?.displaySetService?.getDisplaySetByUID?.(
-                    segmentationDetails[0].segmentationId
-                ) !== undefined &&
-                window.services?.measurementService?.getMeasurements?.().length === 0
-            ) {
-                const displaySet = window.services.displaySetService.getDisplaySetByUID(
-                    segmentationDetails[0].segmentationId
-                );
-                if (
-                    displaySet?.segMetadata?.data?.length > 1 &&
-                    displaySet.segMetadata.data[1].SegmentDescription !== undefined
-                ) {
-                    for (const data of displaySet.segMetadata.data) {
-                        if (data === undefined) {
-                            continue;
-                        }
-                        const prompts = JSON.parse(data.SegmentDescription);
-                        const SegmentNumber = data.SegmentNumber;
-                        const segmentationId = segmentationDetails[0].segmentationId;
-                        const posPoints = prompts.pos_points;
-                        const negPoints = prompts.neg_points;
-                        const pos_boxes = prompts.pos_boxes;
-                        const neg_boxes = prompts.neg_boxes;
-                        const pos_scribbles = prompts.pos_scribbles;
-                        const neg_scribbles = prompts.neg_scribbles;
-                        const pos_lassos = prompts.pos_lassos;
-                        const neg_lassos = prompts.neg_lassos;
-                        const toolGroup = getToolGroupForViewport(viewport.id);
-                        if (posPoints?.length) {
-                            const posPointTool = toolGroup.getToolInstance('Probe2');
-                            if (posPointTool) {
-                                for (const posPos of posPoints) {
-                                    const annotation = posPointTool._addNewAnnotationFromIndex(
-                                        element,
-                                        posPos,
-                                        false,
-                                        SegmentNumber,
-                                        segmentationId
-                                    );
-                                    setAnnotationSelected(annotation.annotationUID);
-                                }
-                            }
-                        }
-                        if (negPoints?.length) {
-                            const negPointTool = toolGroup.getToolInstance('Probe2');
-                            if (negPointTool) {
-                                for (const negPos of negPoints) {
-                                    const annotation = negPointTool._addNewAnnotationFromIndex(
-                                        element,
-                                        negPos,
-                                        true,
-                                        SegmentNumber,
-                                        segmentationId
-                                    );
-                                    setAnnotationSelected(annotation.annotationUID);
-                                }
-                            }
-                        }
-                        if (pos_boxes?.length) {
-                            const bboxTool = toolGroup.getToolInstance('RectangleROI2');
-                            if (bboxTool) {
-                                for (const box of pos_boxes) {
-                                    const annotation = bboxTool._addNewAnnotationFromIndex(
-                                        element,
-                                        box,
-                                        false,
-                                        SegmentNumber,
-                                        segmentationId
-                                    );
-                                    setAnnotationSelected(annotation.annotationUID);
-                                }
-                            }
-                        }
-                        if (neg_boxes?.length) {
-                            const bboxTool = toolGroup.getToolInstance('RectangleROI2');
-                            if (bboxTool) {
-                                for (const box of neg_boxes) {
-                                    const annotation = bboxTool._addNewAnnotationFromIndex(
-                                        element,
-                                        box,
-                                        true,
-                                        SegmentNumber,
-                                        segmentationId
-                                    );
-                                    setAnnotationSelected(annotation.annotationUID);
-                                }
-                            }
-                        }
-                        if (pos_lassos?.length) {
-                            const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI3');
-                            if (freehandTool) {
-                                for (const spline of pos_lassos) {
-                                    const annotation = freehandTool._addNewAnnotationFromIndex(
-                                        element,
-                                        spline,
-                                        true,
-                                        false,
-                                        SegmentNumber,
-                                        segmentationId
-                                    );
-                                    setAnnotationSelected(annotation.annotationUID);
-                                }
-                            }
-                        }
-                        if (neg_lassos?.length) {
-                            const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI3');
-                            if (freehandTool) {
-                                for (const spline of neg_lassos) {
-                                    const annotation = freehandTool._addNewAnnotationFromIndex(
-                                        element,
-                                        spline,
-                                        true,
-                                        true,
-                                        SegmentNumber,
-                                        segmentationId
-                                    );
-                                    setAnnotationSelected(annotation.annotationUID);
-                                }
-                            }
-                        }
-                        if (pos_scribbles?.length) {
-                            const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI2');
-                            if (freehandTool) {
-                                for (const polyline of pos_scribbles) {
-                                    const annotation = freehandTool._addNewAnnotationFromIndex(
-                                        element,
-                                        polyline,
-                                        false,
-                                        false,
-                                        SegmentNumber,
-                                        segmentationId
-                                    );
-                                    setAnnotationSelected(annotation.annotationUID);
-                                }
-                            }
-                        }
-                        if (neg_scribbles?.length) {
-                            const freehandTool = toolGroup.getToolInstance('PlanarFreehandROI2');
-                            if (freehandTool) {
-                                for (const polyline of neg_scribbles) {
-                                    const annotation = freehandTool._addNewAnnotationFromIndex(
-                                        element,
-                                        polyline,
-                                        false,
-                                        true,
-                                        SegmentNumber,
-                                        segmentationId
-                                    );
-                                    setAnnotationSelected(annotation.annotationUID);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
+            repopulatePromptAnnotations(viewport, segmentationDetails[0]?.segmentationId);
         });
     }
     _addPlanarFreeHandToolIfAbsent(viewport) {
@@ -318,6 +164,62 @@ class SegmentationRenderingEngine {
         if (!toolGroup.hasTool(planarContourToolName)) {
             toolGroup.addTool(planarContourToolName);
             toolGroup.setToolPassive(planarContourToolName);
+        }
+    }
+}
+function repopulatePromptAnnotations(viewport, segmentationId) {
+    const services = window.services;
+    if (!segmentationId || !services?.displaySetService || !services?.measurementService) {
+        return;
+    }
+    const displaySet = services.displaySetService.getDisplaySetByUID(segmentationId);
+    const segMetadataData = displaySet?.segMetadata?.data;
+    if (!(segMetadataData?.length > 1) ||
+        !segMetadataData.some((data) => data?.SegmentDescription !== undefined)) {
+        return;
+    }
+    if (services.measurementService.getMeasurements().length !== 0) {
+        return;
+    }
+    if (getAllAnnotations().some((annotation) => annotation.metadata?.segmentationId === segmentationId &&
+        annotation.metadata?.toolLoad === true)) {
+        return;
+    }
+    const referencedDisplaySet = services.displaySetService.getDisplaySetByUID(displaySet.referencedDisplaySetInstanceUID);
+    const imageIds = referencedDisplaySet?.imageIds;
+    if (!imageIds?.length) {
+        return;
+    }
+    const frameOfReferenceUID = metaData.get('instance', imageIds[0])?.FrameOfReferenceUID;
+    if (!frameOfReferenceUID) {
+        return;
+    }
+    const volumeImageIds = typeof viewport.getImageIds === 'function' ? viewport.getImageIds() : undefined;
+    const flipped = Boolean(volumeImageIds?.length) && volumeImageIds[0] !== imageIds[0];
+    const volumeId = typeof viewport.getVolumeId === 'function' ? viewport.getVolumeId() : undefined;
+    const plan = buildPromptLoadPlan(segMetadataData, {
+        segmentationId,
+        frameOfReferenceUID,
+        volumeId,
+        imageIds,
+        flipped,
+        worldFromIndex: makeWorldFromIndex(imageIds, csCoreUtils.imageToWorldCoords),
+    });
+    if (!plan.length) {
+        return;
+    }
+    const toolGroup = getToolGroupForViewport(viewport.id);
+    for (const descriptor of plan) {
+        const tool = toolGroup?.getToolInstance(descriptor.toolName);
+        if (!tool?._addNewAnnotationFromLoad) {
+            continue;
+        }
+        try {
+            const annotation = tool._addNewAnnotationFromLoad(viewport.element, descriptor);
+            setAnnotationSelected(annotation.annotationUID);
+        }
+        catch (error) {
+            console.warn(`Failed to repopulate ${descriptor.toolName} prompt for segment ${descriptor.SegmentNumber}:`, error);
         }
     }
 }

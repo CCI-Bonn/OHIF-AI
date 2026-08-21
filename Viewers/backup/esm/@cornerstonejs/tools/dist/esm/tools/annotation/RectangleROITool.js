@@ -80,27 +80,18 @@ class RectangleROITool extends AnnotationTool {
             triggerAnnotationRenderForViewportIds(viewportIdsToRender);
             return annotation;
         };
-        this._addNewAnnotationFromIndex = (element, idxPos, neg = false, SegmentNumber, segmentationId) => {
+        this._addNewAnnotationFromLoad = (
+            element,
+            { worldPoints, metadata, neg, SegmentNumber, segmentationId }
+        ) => {
             const enabledElement = getEnabledElement(element);
             const { viewport, renderingEngine } = enabledElement;
-            const tl = viewport.getImageData().imageData.indexToWorld(idxPos[0]);
-            const tr = viewport.getImageData().imageData.indexToWorld([
-                idxPos[1][0],
-                idxPos[0][1],
-                idxPos[0][2],
-            ]);
-            const bl = viewport.getImageData().imageData.indexToWorld([
-                idxPos[0][0],
-                idxPos[1][1],
-                idxPos[0][2],
-            ]);
-            const br = viewport.getImageData().imageData.indexToWorld(idxPos[1]);
             const annotation = this.constructor.createAnnotation(
-                { metadata: viewport.getViewReference({ sliceIndex: idxPos[0][2] }) },
+                { metadata },
                 {
                     data: {
                         handles: {
-                            points: [[...tl], [...tr], [...bl], [...br]],
+                            points: worldPoints.map(point => [...point]),
                             textBox: {
                                 hasMoved: false,
                                 worldPosition: [0, 0, 0],
@@ -129,16 +120,7 @@ class RectangleROITool extends AnnotationTool {
                 enabledElement
             );
             addAnnotation(annotation, element);
-            const viewportIdsToRender = getViewportIdsWithToolToRender(element, this.getToolName());
-            this.editData = {
-                annotation,
-                viewportIdsToRender,
-                handleIndex: 3,
-                movingTextBox: false,
-                newAnnotation: true,
-                hasMoved: false,
-            };
-            triggerAnnotationRenderForViewportIds(viewportIdsToRender);
+            triggerAnnotationRenderForViewportIds(getViewportIdsWithToolToRender(element, this.getToolName()));
             return annotation;
         };
 

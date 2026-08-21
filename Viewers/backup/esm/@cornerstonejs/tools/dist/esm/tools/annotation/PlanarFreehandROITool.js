@@ -78,16 +78,16 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
             triggerAnnotationRenderForViewportIds(viewportIdsToRender);
             return annotation;
         };
-        this._addNewAnnotationFromIndex = (element, idxPos, closed = false, neg = false, SegmentNumber, segmentationId) => {
+        this._addNewAnnotationFromLoad = (
+            element,
+            { worldPoints, metadata, neg, SegmentNumber, segmentationId, closed = false }
+        ) => {
             const enabledElement = getEnabledElement(element);
             const { viewport, renderingEngine } = enabledElement;
-            const image = this.getTargetImageData(this.getTargetId(viewport));
-            const { imageData } = image;
-            let boundary = idxPos.map(array => csUtils.transformIndexToWorld(imageData, array));
-            const annotation = (this.constructor).createAnnotation({ metadata: viewport.getViewReference({sliceIndex: idxPos[0][2]}) },{
+            const annotation = (this.constructor).createAnnotation({ metadata },{
                 data: {
                     contour: {
-                        polyline: [...boundary],
+                        polyline: worldPoints.map(point => [...point]),
                         closed: closed,
                     },
                     label: '',
@@ -102,13 +102,7 @@ class PlanarFreehandROITool extends ContourSegmentationBaseTool {
             annotation.metadata.toolLoad = true;
             this._calculateCachedStats(annotation, viewport, renderingEngine, enabledElement);
             this.addAnnotation(annotation, element);
-            const viewportIdsToRender = getViewportIdsWithToolToRender(element, this.getToolName());
-            this.editData = {
-                annotation,
-                viewportIdsToRender,
-                newAnnotation: true,
-            };
-            triggerAnnotationRenderForViewportIds(viewportIdsToRender);
+            triggerAnnotationRenderForViewportIds(getViewportIdsWithToolToRender(element, this.getToolName()));
             return annotation;
         }
         this.handleSelectedCallback = (evt, annotation, handle) => {
