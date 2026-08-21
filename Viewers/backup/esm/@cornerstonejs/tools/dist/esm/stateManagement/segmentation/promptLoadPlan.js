@@ -81,7 +81,7 @@ function parsePrompts(segmentDescription) {
     return prompts;
 }
 function buildMetadata(indexPoints, opts) {
-    const { frameOfReferenceUID, imageIds, worldFromIndex } = opts;
+    const { frameOfReferenceUID, imageIds, worldFromIndex, acquisitionViewPlaneNormal } = opts;
     const worldPoints = indexPoints.map(([i, j, k]) => worldFromIndex(i, j, k));
     const ks = indexPoints.map(([, , k]) => k);
     const kSpread = Math.max(...ks) - Math.min(...ks);
@@ -92,16 +92,22 @@ function buildMetadata(indexPoints, opts) {
     // their own slice; non-planar (MPR-drawn) polylines fall back to the first
     // point's slice and, when the points aren't collinear, carry the fitted
     // plane normal so slice filtering keeps them on their original plane.
+    // Every prompt also gets an explicit viewPlaneNormal: without one, volume
+    // viewports derive it lazily from imagePlaneModule metadata inside the
+    // annotation render loop, and that lookup throwing (e.g. during a hanging
+    // protocol switch) wedges the annotation rendering engine viewer-wide.
+    let viewPlaneNormal;
     if (kSpread < PLANAR_K_EPSILON) {
         const kMid = clamp(Math.round((Math.max(...ks) + Math.min(...ks)) / 2), 0, imageIds.length - 1);
         metadata.referencedImageId = imageIds[kMid];
     }
     else {
         metadata.referencedImageId = imageIds[clamp(Math.round(ks[0]), 0, imageIds.length - 1)];
-        const viewPlaneNormal = fitPolylineNormal(worldPoints);
-        if (viewPlaneNormal) {
-            metadata.viewPlaneNormal = viewPlaneNormal;
-        }
+        viewPlaneNormal = fitPolylineNormal(worldPoints);
+    }
+    viewPlaneNormal = viewPlaneNormal ?? acquisitionViewPlaneNormal;
+    if (viewPlaneNormal) {
+        metadata.viewPlaneNormal = [...viewPlaneNormal];
     }
     return { worldPoints, metadata };
 }
@@ -129,15 +135,14 @@ function buildPromptLoadPlan(segMetadataData, opts) {
                 continue;
             }
             for (const entry of entries) {
-                // cachedStats is what the refine/replay send path reads
-                // (Object.values(measurement.data)[0]); it must stay byte-faithful
-                // to the stored prompt — recomputing it from world coordinates
-                // against whatever slice a viewport happens to show corrupts z.
+                // replay is the byte-faithful stored prompt payload; the send
+                // path prefers it over cachedStats, whose per-viewport recompute
+                // stamps z with whatever slice the viewport happens to show.
                 let indexPoints;
-                let cachedStats;
+                let replay;
                 if (promptType.kind === 'point') {
                     indexPoints = [entry];
-                    cachedStats = { index: entry };
+                    replay = { index: entry };
                 }
                 else if (promptType.kind === 'box') {
                     const [p0, p1] = entry;
@@ -151,11 +156,11 @@ function buildPromptLoadPlan(segMetadataData, opts) {
                         [p0[0], p1[1], k],
                         [p1[0], p1[1], k],
                     ];
-                    cachedStats = { pointsInShape: [{ pointIJK: p0 }, { pointIJK: p1 }] };
+                    replay = { pointsInShape: [{ pointIJK: p0 }, { pointIJK: p1 }] };
                 }
                 else {
                     indexPoints = entry;
-                    cachedStats = promptType.closed ? { boundary: entry } : { scribble: entry };
+                    replay = promptType.closed ? { boundary: entry } : { scribble: entry };
                 }
                 if (!Array.isArray(indexPoints) || !indexPoints.length || !Array.isArray(indexPoints[0])) {
                     continue;
@@ -168,7 +173,7 @@ function buildPromptLoadPlan(segMetadataData, opts) {
                     segmentationId,
                     worldPoints,
                     metadata,
-                    cachedStats,
+                    replay,
                 };
                 if (promptType.kind === 'polyline') {
                     descriptor.closed = promptType.closed;

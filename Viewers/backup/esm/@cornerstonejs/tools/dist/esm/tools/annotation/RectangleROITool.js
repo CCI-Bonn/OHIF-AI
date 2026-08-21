@@ -82,7 +82,7 @@ class RectangleROITool extends AnnotationTool {
         };
         this._addNewAnnotationFromLoad = (
             element,
-            { worldPoints, metadata, neg, SegmentNumber, segmentationId, cachedStats }
+            { worldPoints, metadata, neg, SegmentNumber, segmentationId, replay }
         ) => {
             const annotation = this.constructor.createAnnotation(
                 { metadata },
@@ -101,11 +101,7 @@ class RectangleROITool extends AnnotationTool {
                                 },
                             },
                         },
-                        // Seed the exact stored prompt indices under a key no
-                        // recompute path can resolve: _calculateCachedStats would
-                        // rebuild pointsInShape against whatever slice the viewport
-                        // shows, and the refine payload reads Object.values(...)[0].
-                        cachedStats: { [`promptLoad:${segmentationId}`]: { ...cachedStats } },
+                        cachedStats: {},
                     },
                 }
             );
@@ -113,6 +109,8 @@ class RectangleROITool extends AnnotationTool {
             annotation.metadata.SegmentNumber = SegmentNumber;
             annotation.metadata.segmentationId = segmentationId;
             annotation.metadata.toolLoad = true;
+            // Byte-faithful stored prompt payload; see ProbeTool._addNewAnnotationFromLoad.
+            annotation.metadata.promptReplay = replay;
             annotation.invalidated = false;
             addAnnotation(annotation, element);
             triggerAnnotationRenderForViewportIds(getViewportIdsWithToolToRender(element, this.getToolName()));

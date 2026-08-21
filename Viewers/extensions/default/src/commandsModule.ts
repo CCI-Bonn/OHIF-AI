@@ -112,11 +112,26 @@ const commandsModule = ({
 
   function runAiSegmentationCommand() {
     const selectedModel = toolboxState.getSelectedModel();
+    let run;
     if (selectedModel === 'nnInteractive') {
-      commandsManager.run('nninter');
+      run = commandsManager.run('nninter');
     } else if (selectedModel === 'sam2' || selectedModel === 'medsam2' || selectedModel === 'sam3') {
-      commandsManager.run('sam2');
+      run = commandsManager.run('sam2');
     }
+    // The actions' own try/finally only covers their request phase; a throw in
+    // the earlier prompt-collection phase escapes it and would leave the
+    // inference-in-flight flag wedged — silently disabling all prompting until
+    // a page reload. finishInferenceRun is idempotent, so release it here too.
+    Promise.resolve(run).catch(error => {
+      console.error('AI segmentation run failed:', error);
+      finishInferenceRun();
+      uiNotificationService.show({
+        title: 'Segmentation failed',
+        message: String(error?.message ?? error),
+        type: 'error',
+        duration: 5000,
+      });
+    });
   }
   function finishInferenceRun() {
     toolboxState.setInferenceInFlight(false);
@@ -1682,15 +1697,27 @@ const commandsModule = ({
       const imageIdsSam2: string[] = currentDisplaySets.imageIds ?? [];
       for (const e of currentMeasurements) {
         if (e.referenceSeriesUID !== seriesUID || e.metadata.SegmentNumber !== segmentNumber) continue;
+        // Reloaded prompts carry their original stored payload in metadata.promptReplay;
+        // prefer it over cachedStats, whose per-viewport recompute stamps z with the
+        // viewport's current slice. Guard every read: a prompt whose stats aren't
+        // computed yet must be skipped, not crash the run and wedge the
+        // inference-in-flight flag.
+        const replay = (e.metadata as any)?.promptReplay;
+        const stats: any = Object.values(e.data ?? {})[0] ?? {};
         if (e.toolName === 'Probe2') {
-          (e.metadata.neg ? neg_points : pos_points).push(Object.values(e.data)[0].index);
+          const idx = replay?.index ?? stats.index;
+          if (idx) {
+            (e.metadata.neg ? neg_points : pos_points).push(idx);
+          }
         } else if (e.toolName === 'RectangleROI2' && !e.metadata.neg) {
-          const pts = Object.values(e.data)[0].pointsInShape;
-          const p0 = [...pts.at(0).pointIJK];
-          const p1 = [...pts.at(-1).pointIJK];
-          // Stack viewports: pointsInShape k=0 from 2D imageData; use referencedImageId for correct slice.
-          if (p0[2] === 0) { const refK = imageIdsSam2.indexOf(e.referencedImageId); if (refK > 0) { p0[2] = refK; p1[2] = refK; } }
-          pos_boxes.push([p0, p1]);
+          const pts = replay?.pointsInShape ?? stats.pointsInShape;
+          if (pts?.length) {
+            const p0 = [...pts.at(0).pointIJK];
+            const p1 = [...pts.at(-1).pointIJK];
+            // Stack viewports: pointsInShape k=0 from 2D imageData; use referencedImageId for correct slice.
+            if (p0[2] === 0) { const refK = imageIdsSam2.indexOf(e.referencedImageId); if (refK > 0) { p0[2] = refK; p1[2] = refK; } }
+            pos_boxes.push([p0, p1]);
+          }
         }
       }
 
@@ -3493,21 +3520,33 @@ const commandsModule = ({
       for (const e of currentMeasurements) {
         if (e.referenceSeriesUID !== seriesUID || e.metadata.SegmentNumber !== segmentNumber) continue;
         const isNeg = !!e.metadata.neg;
+        // Reloaded prompts carry their original stored payload in metadata.promptReplay;
+        // prefer it over cachedStats, whose per-viewport recompute stamps z with the
+        // viewport's current slice. Guard every read: a prompt whose stats aren't
+        // computed yet must be skipped, not crash the run and wedge the
+        // inference-in-flight flag.
+        const replay = (e.metadata as any)?.promptReplay;
+        const stats: any = Object.values(e.data ?? {})[0] ?? {};
         if (e.toolName === 'Probe2') {
-          (isNeg ? neg_points : pos_points).push(Object.values(e.data)[0].index);
-          if (!isNeg && !textPrompts) probe2Labels.push(e.label);
+          const idx = replay?.index ?? stats.index;
+          if (idx) {
+            (isNeg ? neg_points : pos_points).push(idx);
+            if (!isNeg && !textPrompts) probe2Labels.push(e.label);
+          }
         } else if (e.toolName === 'RectangleROI2') {
-          const pts = Object.values(e.data)[0].pointsInShape;
-          const p0 = [...pts.at(0).pointIJK];
-          const p1 = [...pts.at(-1).pointIJK];
-          // Stack viewports: pointsInShape k=0 from 2D imageData; use referencedImageId for correct slice.
-          if (p0[2] === 0) { const refK = imageIdsForPrompts.indexOf(e.referencedImageId); if (refK > 0) { p0[2] = refK; p1[2] = refK; } }
-          (isNeg ? neg_boxes : pos_boxes).push([p0, p1]);
+          const pts = replay?.pointsInShape ?? stats.pointsInShape;
+          if (pts?.length) {
+            const p0 = [...pts.at(0).pointIJK];
+            const p1 = [...pts.at(-1).pointIJK];
+            // Stack viewports: pointsInShape k=0 from 2D imageData; use referencedImageId for correct slice.
+            if (p0[2] === 0) { const refK = imageIdsForPrompts.indexOf(e.referencedImageId); if (refK > 0) { p0[2] = refK; p1[2] = refK; } }
+            (isNeg ? neg_boxes : pos_boxes).push([p0, p1]);
+          }
         } else if (e.toolName === 'PlanarFreehandROI3') {
-          const b = Object.values(e.data)[0]?.boundary;
+          const b = replay?.boundary ?? stats.boundary;
           if (b) (isNeg ? neg_lassos : pos_lassos).push(b);
         } else if (e.toolName === 'PlanarFreehandROI2') {
-          const s = Object.values(e.data)[0]?.scribble;
+          const s = replay?.scribble ?? stats.scribble;
           if (s) (isNeg ? neg_scribbles : pos_scribbles).push(s);
         }
       }

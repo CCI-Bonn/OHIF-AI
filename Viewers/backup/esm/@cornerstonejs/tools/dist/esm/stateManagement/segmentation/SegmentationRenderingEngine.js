@@ -194,6 +194,16 @@ function repopulatePromptAnnotations(viewport, segmentationId) {
     if (!frameOfReferenceUID) {
         return;
     }
+    const imagePlaneModule = metaData.get('imagePlaneModule', imageIds[0]);
+    const { rowCosines, columnCosines } = imagePlaneModule || {};
+    if (!rowCosines || !columnCosines) {
+        return;
+    }
+    const acquisitionViewPlaneNormal = [
+        rowCosines[1] * columnCosines[2] - rowCosines[2] * columnCosines[1],
+        rowCosines[2] * columnCosines[0] - rowCosines[0] * columnCosines[2],
+        rowCosines[0] * columnCosines[1] - rowCosines[1] * columnCosines[0],
+    ];
     const volumeImageIds = typeof viewport.getImageIds === 'function' ? viewport.getImageIds() : undefined;
     const flipped = Boolean(volumeImageIds?.length) && volumeImageIds[0] !== imageIds[0];
     const plan = buildPromptLoadPlan(segMetadataData, {
@@ -201,6 +211,7 @@ function repopulatePromptAnnotations(viewport, segmentationId) {
         frameOfReferenceUID,
         imageIds,
         flipped,
+        acquisitionViewPlaneNormal,
         worldFromIndex: makeWorldFromIndex(imageIds, csCoreUtils.imageToWorldCoords),
     });
     if (!plan.length) {
