@@ -47,16 +47,18 @@ class ProbeTool extends AnnotationTool {
         };
         this._addNewAnnotationFromLoad = (
             element,
-            { worldPoints, metadata, neg, SegmentNumber, segmentationId }
+            { worldPoints, metadata, neg, SegmentNumber, segmentationId, cachedStats }
         ) => {
-            const enabledElement = getEnabledElement(element);
-            const { viewport, renderingEngine } = enabledElement;
             const annotation = this.constructor.createAnnotation(
                 { metadata },
                 {
                     data: {
                         handles: { points: [[...worldPoints[0]]] },
-                        cachedStats: { [this.getTargetId(viewport)]: {} },
+                        // Seed the exact stored prompt indices under a key no
+                        // recompute path can resolve: _calculateCachedStats would
+                        // stamp the index with whatever slice the viewport shows,
+                        // and the refine payload reads Object.values(...)[0].
+                        cachedStats: { [`promptLoad:${segmentationId}`]: { ...cachedStats } },
                     },
                 }
             );
@@ -64,7 +66,7 @@ class ProbeTool extends AnnotationTool {
             annotation.metadata.SegmentNumber = SegmentNumber;
             annotation.metadata.segmentationId = segmentationId;
             annotation.metadata.toolLoad = true;
-            this._calculateCachedStats(annotation, renderingEngine, enabledElement);
+            annotation.invalidated = false;
             addAnnotation(annotation, element);
             triggerAnnotationRenderForViewportIds(getViewportIdsWithToolToRender(element, this.getToolName()));
             return annotation;

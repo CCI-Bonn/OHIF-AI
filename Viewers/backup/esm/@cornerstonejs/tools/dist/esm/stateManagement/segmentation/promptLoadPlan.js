@@ -129,9 +129,15 @@ function buildPromptLoadPlan(segMetadataData, opts) {
                 continue;
             }
             for (const entry of entries) {
+                // cachedStats is what the refine/replay send path reads
+                // (Object.values(measurement.data)[0]); it must stay byte-faithful
+                // to the stored prompt — recomputing it from world coordinates
+                // against whatever slice a viewport happens to show corrupts z.
                 let indexPoints;
+                let cachedStats;
                 if (promptType.kind === 'point') {
                     indexPoints = [entry];
+                    cachedStats = { index: entry };
                 }
                 else if (promptType.kind === 'box') {
                     const [p0, p1] = entry;
@@ -145,9 +151,11 @@ function buildPromptLoadPlan(segMetadataData, opts) {
                         [p0[0], p1[1], k],
                         [p1[0], p1[1], k],
                     ];
+                    cachedStats = { pointsInShape: [{ pointIJK: p0 }, { pointIJK: p1 }] };
                 }
                 else {
                     indexPoints = entry;
+                    cachedStats = promptType.closed ? { boundary: entry } : { scribble: entry };
                 }
                 if (!Array.isArray(indexPoints) || !indexPoints.length || !Array.isArray(indexPoints[0])) {
                     continue;
@@ -160,6 +168,7 @@ function buildPromptLoadPlan(segMetadataData, opts) {
                     segmentationId,
                     worldPoints,
                     metadata,
+                    cachedStats,
                 };
                 if (promptType.kind === 'polyline') {
                     descriptor.closed = promptType.closed;
