@@ -196,11 +196,9 @@ function repopulatePromptAnnotations(viewport, segmentationId) {
     }
     const volumeImageIds = typeof viewport.getImageIds === 'function' ? viewport.getImageIds() : undefined;
     const flipped = Boolean(volumeImageIds?.length) && volumeImageIds[0] !== imageIds[0];
-    const volumeId = typeof viewport.getVolumeId === 'function' ? viewport.getVolumeId() : undefined;
     const plan = buildPromptLoadPlan(segMetadataData, {
         segmentationId,
         frameOfReferenceUID,
-        volumeId,
         imageIds,
         flipped,
         worldFromIndex: makeWorldFromIndex(imageIds, csCoreUtils.imageToWorldCoords),

@@ -81,19 +81,23 @@ function parsePrompts(segmentDescription) {
     return prompts;
 }
 function buildMetadata(indexPoints, opts) {
-    const { frameOfReferenceUID, volumeId, imageIds, worldFromIndex } = opts;
+    const { frameOfReferenceUID, imageIds, worldFromIndex } = opts;
     const worldPoints = indexPoints.map(([i, j, k]) => worldFromIndex(i, j, k));
     const ks = indexPoints.map(([, , k]) => k);
     const kSpread = Math.max(...ks) - Math.min(...ks);
     const metadata = { FrameOfReferenceUID: frameOfReferenceUID };
-    if (volumeId !== undefined) {
-        metadata.volumeId = volumeId;
-    }
+    // Every prompt gets a referencedImageId so measurement mapping stays on the
+    // imageId path — the volumeId lookup path throws when the viewport's volume
+    // id does not embed a display set uid. Acquisition-planar prompts reference
+    // their own slice; non-planar (MPR-drawn) polylines fall back to the first
+    // point's slice and, when the points aren't collinear, carry the fitted
+    // plane normal so slice filtering keeps them on their original plane.
     if (kSpread < PLANAR_K_EPSILON) {
         const kMid = clamp(Math.round((Math.max(...ks) + Math.min(...ks)) / 2), 0, imageIds.length - 1);
         metadata.referencedImageId = imageIds[kMid];
     }
     else {
+        metadata.referencedImageId = imageIds[clamp(Math.round(ks[0]), 0, imageIds.length - 1)];
         const viewPlaneNormal = fitPolylineNormal(worldPoints);
         if (viewPlaneNormal) {
             metadata.viewPlaneNormal = viewPlaneNormal;
