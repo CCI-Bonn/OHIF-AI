@@ -47,7 +47,7 @@ import {
 } from './utils/aiReadiness';
 import { watchAiVolumeReadiness, watchAiClientDownload } from './utils/aiReadinessVolumeWatch';
 import { perf, installPerfHandle, setBlockStatsProvider, leakRetain } from './utils';
-import { summarizeBlocks, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, shouldShrinkBlock, sourceRangeForWorking, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES, BLOCK_SHRINK_FACTOR } from './utils/labelmapBlocks';
+import { summarizeBlocks, describeBlocks, blockIndexForSegment, replaceBlockAt, appendBlock, flattenBlocks, flipIndex, withoutBlockAt, blockContains, clampRange, snapRangeToGrid, shouldShrinkBlock, sourceRangeForWorking, writeMaskSliceInPlace, MIN_BLOCK_SLICES, BLOCK_GRID_SLICES, BLOCK_SHRINK_FACTOR } from './utils/labelmapBlocks';
 // Separate: LabelmapBlock is a type, and isolatedModules requires type-only imports be marked so
 // the transpiler can erase them without resolving the module.
 import type { LabelmapBlock } from './utils/labelmapBlocks';
@@ -2381,7 +2381,7 @@ const commandsModule = ({
 
         let _hasCropGeom = false;
         let _segZ0 = 0, _segZ1 = 0, _cropY = 0, _cropX = 0, _y0 = 0, _x0 = 0, _fullX = 0;
-        if (predFull.length === 3 && predCrop.length === 3 && predCrop.every(v => v > 0)) {
+        if (predFull?.length === 3 && predCrop?.length === 3 && predCrop?.every(v => v > 0)) {
           const [, , fullX] = predFull;
           const [cropZ, cropY, cropX] = predCrop;
           const [z0, y0, x0] = predOffset;
@@ -3652,7 +3652,7 @@ const commandsModule = ({
             let _segZ0 = 0, _segZ1 = Number.MAX_SAFE_INTEGER;
             let _cropY = 0, _cropX = 0, _y0 = 0, _x0 = 0, _fullX = 0, _fullY = 0;
             let _hasCropGeom = false;
-            if (predFull.length === 3 && predCrop.length === 3) {
+            if (predFull?.length === 3 && predCrop?.length === 3) {
               const [, fullY, fullX] = predFull;   // predFull = [fullZ, fullY, fullX]
               const [cropZ, cropY, cropX] = predCrop;
               const [z0, y0, x0] = predOffset;
@@ -3927,13 +3927,14 @@ const commandsModule = ({
               // the full series on the next refine — so convert with the SERIES length.
               if (wrote) z_range.push(flipIndex(w, _imgLen0, flipped));
             } else if (new_arrayBuffer) {
-              // Legacy full-slice path. Only reached without crop geometry, where the block spans
-              // the whole series, so ai === w.
+              // Full-slice path: no crop geometry (VoxTell returns the whole volume), so the block
+              // spans the whole series and ai === w. MUST write into the existing buffer — see
+              // writeMaskSliceInPlace for why installing a new array via setScalarData rendered in
+              // the stack viewport but not in MPR.
               const scalarData = voxelManager.getScalarData();
               const sliceLen = scalarData.length;
-              const sliceData = new_arrayBuffer.slice(w * sliceLen, (w + 1) * sliceLen);
-              if (sliceData.some(v => v === 1)) {
-                voxelManager.setScalarData(sliceData.map(v => v === 1 ? segmentNumber : v));
+              const sliceBytes = new_arrayBuffer.subarray(w * sliceLen, (w + 1) * sliceLen);
+              if (writeMaskSliceInPlace(scalarData, sliceBytes, segmentNumber)) {
                 z_range.push(flipIndex(w, _imgLen0, flipped));
               }
             }
