@@ -195,6 +195,33 @@ export function flipIndex(i: number, count: number, flipped: boolean): number {
   return flipped ? count - 1 - i : i;
 }
 
+/**
+ * Write a full-slice 0/1 mask into a labelmap slice buffer IN PLACE, returning whether any voxel
+ * was set. `dst` must be the array returned by the image's `voxelManager.getScalarData()`.
+ *
+ * In place is load-bearing, not a micro-optimisation: cornerstone's image voxel manager closes over
+ * the array it was created with for `_get`/`_set` (so `getAtIndex`/`getAtIJK`), and `setScalarData`
+ * only swaps the `scalarData` property. The stack viewport and the volume texture upload read
+ * `getScalarData()`, but the MPR slice mapper used for multi-layer labelmaps reads `getAtIJK` — so a
+ * writer that installs a NEW array shows in the stack viewport and is invisible in MPR. That was the
+ * VoxTell symptom (full-volume mask, no crop geometry, so it takes this path).
+ */
+export function writeMaskSliceInPlace(
+  dst: { length: number; [i: number]: number },
+  src: ArrayLike<number>,
+  segmentNumber: number
+): boolean {
+  let wrote = false;
+  const n = Math.min(dst.length, src.length);
+  for (let j = 0; j < n; j++) {
+    if (src[j] === 1) {
+      dst[j] = segmentNumber;
+      wrote = true;
+    }
+  }
+  return wrote;
+}
+
 /** Does this block cover the whole working range [w0, w1)? */
 export function blockContains(block: LabelmapBlock, w0: number, w1: number): boolean {
   return w0 >= block.z0 && w1 <= block.z0 + block.imageIds.length;
