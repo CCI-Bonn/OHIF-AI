@@ -636,6 +636,13 @@ const commandsModule = ({
 
       for (const actorEntry of (vp?.getActors?.() ?? [])) {
         const inputData = actorEntry?.actor?.getMapper?.()?.getInputData?.();
+        // Once a labelmap has 2+ layers cornerstone renders MPR panes through its slice image-mapper
+        // plan, whose actors hold a per-slice COPY (dims [w,h,1]) extracted from the volume — writing
+        // into that copy updates nothing durable, yet looked like success here and skipped the
+        // remount, leaving the volume, the block images and the 3D surface stale. Only a real
+        // volume buffer (depth > 1) is an in-place target.
+        const inputDims = inputData?.getDimensions?.();
+        if (!inputDims || inputDims[2] <= 1) continue;
         const scalars = inputData?.getPointData?.()?.getScalars?.();
         const data = scalars?.getData?.();
         if (!(data instanceof Uint8Array)) continue;   // labelmap volumes only; never the CT
@@ -1018,6 +1025,10 @@ const commandsModule = ({
       const updatedRepresentationData = { ...existingRepresentationData };
       const SURFACE = csToolsEnums.SegmentationRepresentations.Surface;
       if (updatedRepresentationData[SURFACE]) {
+        // Dropping the Surface data makes the 3D viewport re-extract every segment's mesh from the
+        // block IMAGES on its next render — so a refine that was written only into the MPR volume
+        // (deferred image sync) must land in the images first, or the 3D view lags one refine behind.
+        materializePendingImageSync(segmentationId);
         delete updatedRepresentationData[SURFACE];
       }
 
